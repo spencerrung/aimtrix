@@ -1,0 +1,10 @@
+{
+  "id": "dev.aimtrix.aqua-starter",
+  "name": "Aqua Starter",
+  "stickers": [
+    { "id": "hey", "name": "Aqua hello", "src": "/stickers/aqua/hey.svg" },
+    { "id": "brb", "name": "BRB bubble", "src": "/stickers/aqua/brb.svg" },
+    { "id": "heart", "name": "Candy heart", "src": "/stickers/aqua/heart.svg" },
+    { "id": "lol", "name": "Laughing bubble", "src": "/stickers/aqua/lol.svg" }
+  ]
+}

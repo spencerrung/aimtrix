@@ -1,0 +1,13 @@
+services:
+  aimtrix:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config/config.example.json:/usr/share/nginx/html/config.json:ro
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped

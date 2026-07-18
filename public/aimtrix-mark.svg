@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Aimtrix">
+  <defs>
+    <linearGradient id="shell" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#bce5ff"/>
+      <stop offset="0.5" stop-color="#54a9e8"/>
+      <stop offset="1" stop-color="#1769ad"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#shell)" stroke="#0a4c86" stroke-width="3" d="M9 9h46a6 6 0 0 1 6 6v28a6 6 0 0 1-6 6H34L20 59l3-10H9a6 6 0 0 1-6-6V15a6 6 0 0 1 6-6Z"/>
+  <path fill="#fff" d="m18 40 10-23h8l10 23h-8l-2-5H27l-2 5h-7Zm11-11h5l-2.5-7-2.5 7Z"/>
+</svg>

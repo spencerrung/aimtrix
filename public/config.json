@@ -1,0 +1,20 @@
+{
+  "brandName": "Aimtrix",
+  "defaultHomeserver": {
+    "serverName": "matrix.org",
+    "baseUrl": "https://matrix-client.matrix.org"
+  },
+  "allowCustomHomeservers": true,
+  "defaultTheme": "aqua",
+  "features": {
+    "demoMode": true,
+    "calls": false,
+    "gifs": false,
+    "stickers": true
+  },
+  "media": {
+    "maxUploadBytes": 52428800,
+    "autoplayAnimations": true
+  },
+  "stickerPacks": []
+}

@@ -1,0 +1,17 @@
+{
+  "name": "Aimtrix",
+  "short_name": "Aimtrix",
+  "description": "A nostalgic, modern Matrix client.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#dce9f3",
+  "theme_color": "#72aee6",
+  "icons": [
+    {
+      "src": "/aimtrix-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
