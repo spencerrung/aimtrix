@@ -1,6 +1,6 @@
 # The Vite artifacts are architecture-independent, so build them once on the
 # native Buildx platform. Only nginx is resolved for each target architecture.
-FROM --platform=$BUILDPLATFORM node:22-alpine AS web-builder
+FROM --platform=$BUILDPLATFORM node:26-alpine AS web-builder
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts && npm rebuild rolldown
