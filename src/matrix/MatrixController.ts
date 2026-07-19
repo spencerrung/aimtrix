@@ -157,6 +157,7 @@ export class MatrixController {
   private profilePersonalizationSaveTimer?: number;
   private readonly spaceHierarchies = new Map<string, SpaceHierarchyRoomData[]>();
   private readonly spaceHierarchyRequests = new Map<string, Promise<void>>();
+  private readonly lastReadReceiptByRoom = new Map<string, string>();
   private rootSpaceOrderOverride?: string[];
   private notificationPreferences = {
     desktopNotifications: false,
@@ -1564,7 +1565,14 @@ export class MatrixController {
     const client = this.client;
     const room = client?.getRoom(roomId);
     const lastEvent = room?.getLiveTimeline().getEvents().at(-1) ?? null;
-    if (!client || !room || !lastEvent) return;
+    const lastEventId = lastEvent?.getId() ?? null;
+    if (!client || !room || !lastEvent || !lastEventId) return;
+    // Sent receipts echo back through sync and re-render the workspace, which
+    // re-invokes mark-room-read callers. Stay idempotent so that cycle is a
+    // no-op instead of a request loop.
+    const currentReceiptId = room.getReadReceiptForUserId(client.getSafeUserId(), true)?.eventId;
+    if (currentReceiptId === lastEventId || this.lastReadReceiptByRoom.get(roomId) === lastEventId) return;
+    this.lastReadReceiptByRoom.set(roomId, lastEventId);
     await client.sendReadReceipt(lastEvent);
   }
 
@@ -1749,6 +1757,7 @@ export class MatrixController {
     this.personalizationSaveTimer = undefined;
     this.spaceHierarchies.clear();
     this.spaceHierarchyRequests.clear();
+    this.lastReadReceiptByRoom.clear();
     this.rootSpaceOrderOverride = undefined;
     this.signOnTonePlayed = false;
     this.liveEncryptedMessages.clear();
