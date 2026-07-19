@@ -296,4 +296,45 @@ describe('MatrixController protocol integration', () => {
 
     expect(setRoomMutePushRule).toHaveBeenCalledWith('global', '!quiet:test', true);
   });
+
+  it('sends a read receipt only once per latest event', async () => {
+    const lastEvent = { getId: () => '$latest:test' };
+    const room = {
+      getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
+      getReadReceiptForUserId: vi.fn().mockReturnValue(null),
+    };
+    const client = {
+      getRoom: vi.fn().mockReturnValue(room),
+      getSafeUserId: () => '@me:test',
+      sendReadReceipt: vi.fn().mockResolvedValue({}),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>);
+
+    await controller.markRoomRead('!room:test');
+    await controller.markRoomRead('!room:test');
+    await controller.markRoomRead('!room:test');
+
+    expect(client.sendReadReceipt).toHaveBeenCalledTimes(1);
+    expect(client.sendReadReceipt).toHaveBeenCalledWith(lastEvent);
+  });
+
+  it('skips the receipt when the server already has us at the latest event', async () => {
+    const lastEvent = { getId: () => '$latest:test' };
+    const room = {
+      getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
+      getReadReceiptForUserId: vi.fn().mockReturnValue({ eventId: '$latest:test' }),
+    };
+    const client = {
+      getRoom: vi.fn().mockReturnValue(room),
+      getSafeUserId: () => '@me:test',
+      sendReadReceipt: vi.fn().mockResolvedValue({}),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>);
+
+    await controller.markRoomRead('!room:test');
+
+    expect(client.sendReadReceipt).not.toHaveBeenCalled();
+  });
 });
