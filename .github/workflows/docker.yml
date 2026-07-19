@@ -51,7 +51,7 @@ jobs:
           sbom: true
 
       - name: Scan published image
-        uses: aquasecurity/trivy-action@0.33.1
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/aimtrix:${{ steps.meta.outputs.version }}
           format: table
