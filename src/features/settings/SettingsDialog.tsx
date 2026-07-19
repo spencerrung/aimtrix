@@ -1,6 +1,7 @@
 import {
   Check,
   LogOut,
+  Paintbrush,
   Palette,
   ShieldCheck,
   SlidersHorizontal,
@@ -39,13 +40,14 @@ interface SettingsDialogProps {
   onThemeChange: (theme: ThemeName) => void;
   onPreferencesChange: (preferences: UserPreferences) => void;
   onSaveProfile?: (update: ProfileUpdate) => Promise<void>;
+  onOpenProfilePage: () => void;
   matrixActions?: MatrixSettingsActions;
   onSignOut: () => void;
   onClose: () => void;
 }
 
 const themeOptions: Array<{ id: ThemeName; label: string; detail: string }> = [
-  { id: 'aqua', label: 'Aqua', detail: 'Bright Tiger-era glass' },
+  { id: 'aqua', label: 'Aqua', detail: 'Tiger-era glass + Aero skies' },
   { id: 'graphite', label: 'Graphite', detail: 'Calm brushed neutral' },
   { id: 'midnight', label: 'Midnight', detail: 'Late-night buddy list' },
 ];
@@ -66,6 +68,7 @@ export function SettingsDialog({
   onThemeChange,
   onPreferencesChange,
   onSaveProfile,
+  onOpenProfilePage,
   matrixActions,
   onSignOut,
   onClose,
@@ -132,7 +135,7 @@ export function SettingsDialog({
               className={section === 'profile' ? 'is-active' : ''}
               onClick={() => setSection('profile')}
             >
-              <UserRound size={16} /> Profile & away message
+              <UserRound size={16} /> Profile & status note
             </button>
             <button
               type="button"
@@ -172,9 +175,9 @@ export function SettingsDialog({
                   </div>
                 </div>
 
-                <div className="settings-section-heading">
-                  <h2>Profile and away message</h2>
-                  <p>This uses your standard Matrix display name and presence status.</p>
+                <div className="settings-section-heading settings-section-heading--with-action">
+                  <div><h2>Profile and status note</h2><p>Standard Matrix display name and presence—visible in any client to people who share a room with you.</p></div>
+                  <button className="aqua-button profile-page-shortcut" type="button" onClick={onOpenProfilePage}><Paintbrush size={14} /> Decorate profile page</button>
                 </div>
                 {!canEditProfile ? <p className="settings-demo-note">Profile editing is disabled in demo mode.</p> : null}
                 <label className="settings-field">
@@ -202,7 +205,7 @@ export function SettingsDialog({
                   ))}
                 </fieldset>
                 <label className="settings-field">
-                  <span>Away message</span>
+                  <span>Status note <small>shown under your name in buddy lists</small></span>
                   <input
                     value={statusMessage}
                     maxLength={140}
@@ -211,6 +214,7 @@ export function SettingsDialog({
                     onChange={(event) => setStatusMessage(event.target.value)}
                   />
                 </label>
+                <p className="settings-hint">Buddies see this under your name—even while you're online—in Aimtrix, Element, and other Matrix clients. It clears while you're offline. For anything private, use the note on your profile page instead.</p>
                 {error ? <p className="settings-error" role="alert">{error}</p> : null}
                 <div className="settings-save-row">
                   {saved ? <span><Check size={14} /> Saved to Matrix</span> : null}

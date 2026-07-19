@@ -19,7 +19,11 @@ import type {
 } from 'matrix-js-sdk/lib/webrtc/call.js';
 import type { RuntimeConfig } from '../config/runtimeConfig';
 import { parseUserPreferences, type UserPreferences } from '../settings/preferences';
-import { buildWorkspaceSnapshot } from './buildWorkspaceSnapshot';
+import {
+  parseProfilePersonalization,
+  type ProfilePersonalization,
+} from '../settings/profilePersonalization';
+import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { resolveHomeserver } from './discovery';
 import {
   clearStoredSession,
@@ -29,6 +33,17 @@ import {
   type StoredMatrixSession,
 } from './sessionStore';
 import type { EncryptedMediaInfo } from './mediaContext';
+import type { SpaceHierarchyRoomData } from './spaceHierarchy';
+import {
+  DIRECT_BACKGROUNDS_EVENT,
+  ROOM_BACKGROUND_EVENT,
+  parseDirectBackgrounds,
+  serializeDirectBackgrounds,
+  serializeRoomBackground,
+  thresholdForBackgroundPermission,
+  type RoomBackground,
+  type RoomBackgroundPermission,
+} from './roomBackgrounds';
 import type {
   DeviceRemovalResult,
   DeviceVerificationChallenge,
@@ -38,6 +53,7 @@ import type {
   CallSummary,
   ConnectionState,
   PresenceState,
+  SpaceSummary,
   WorkspaceSnapshot,
 } from './viewModels';
 
@@ -59,6 +75,8 @@ type Subscriber = () => void;
 type MatrixSdk = typeof import('matrix-js-sdk');
 const SSO_PENDING_KEY = 'aimtrix.sso-pending.v1';
 const PERSONALIZATION_EVENT = 'dev.alucard.aimtrix.preferences.v1';
+const PROFILE_PERSONALIZATION_EVENT = 'dev.alucard.aimtrix.profile.v1';
+const SPACE_ORDER_EVENT = 'dev.alucard.aimtrix.space_order.v1';
 
 let matrixSdkPromise: Promise<MatrixSdk> | undefined;
 
@@ -118,10 +136,16 @@ export class MatrixController {
   private initialized = false;
   private publishFrame?: number;
   private connection: ConnectionState = 'connecting';
+  private readonly snapshotCache = createWorkspaceSnapshotCache();
   private readonly mediaRequests = new Map<string, Promise<string | undefined>>();
   private readonly mediaObjectUrls = new Set<string>();
   private readonly pendingDeviceAuth = new Map<string, string>();
-  private readonly stickerUploads = new Map<string, Promise<string>>();
+  private readonly stickerUploads = new Map<string, Promise<{
+    url?: string;
+    file?: Record<string, unknown>;
+    mimetype: string;
+    size: number;
+  }>>();
   private activeCall?: MatrixCall;
   private callSummary?: CallSummary;
   private callDevices = { microphoneId: '', cameraId: '' };
@@ -129,6 +153,11 @@ export class MatrixController {
   private inMemoryRecoveryKey?: Uint8Array<ArrayBuffer>;
   private personalizationLoaded = false;
   private personalizationSaveTimer?: number;
+  private profilePersonalizationLoaded = false;
+  private profilePersonalizationSaveTimer?: number;
+  private readonly spaceHierarchies = new Map<string, SpaceHierarchyRoomData[]>();
+  private readonly spaceHierarchyRequests = new Map<string, Promise<void>>();
+  private rootSpaceOrderOverride?: string[];
   private notificationPreferences = {
     desktopNotifications: false,
     notificationSounds: true,
@@ -155,6 +184,11 @@ export class MatrixController {
   private setSnapshot(snapshot: MatrixControllerSnapshot): void {
     this.snapshot = snapshot;
     for (const subscriber of this.subscribers) subscriber();
+  }
+
+  private bumpRoomVersion(roomId?: string): void {
+    if (!roomId) return;
+    this.snapshotCache.roomVersions.set(roomId, (this.snapshotCache.roomVersions.get(roomId) ?? 0) + 1);
   }
 
   public async initialize(): Promise<void> {
@@ -372,7 +406,11 @@ export class MatrixController {
     const client = this.client;
     const accessToken = client?.getAccessToken();
     if (!client || !accessToken) return undefined;
-    const useOriginal = Boolean(encryptedFile || (mimeType && !mimeType.startsWith('image/')));
+    const useOriginal = Boolean(
+      encryptedFile ||
+      mimeType === 'image/svg+xml' ||
+      (mimeType && !mimeType.startsWith('image/')),
+    );
     const url = useOriginal
       ? client.mxcUrlToHttp(source, undefined, undefined, undefined, false, true, true)
       : client.mxcUrlToHttp(source, size, size, 'crop', false, true, true);
@@ -613,17 +651,31 @@ export class MatrixController {
   public async uploadProfileAvatar(file: File): Promise<void> {
     const client = this.client;
     if (!client) throw new Error('Matrix is not connected.');
-    if (!file.type.startsWith('image/') || file.size > 10 * 1024 * 1024) {
-      throw new Error('Choose an image smaller than 10 MiB.');
+    const contentUri = await this.uploadProfileImage(file);
+    await client.setAvatarUrl(contentUri);
+    this.scheduleWorkspacePublish();
+  }
+
+  public async uploadProfileBanner(file: File): Promise<string> {
+    return this.uploadProfileImage(file);
+  }
+
+  public async uploadRoomBackground(file: File): Promise<string> {
+    return this.uploadProfileImage(file);
+  }
+
+  private async uploadProfileImage(file: File): Promise<string> {
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    if (!['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(file.type) || file.size > 10 * 1024 * 1024) {
+      throw new Error('Choose a PNG, JPEG, WebP, or GIF smaller than 10 MiB.');
     }
     const uploaded = await client.uploadContent(file, {
       name: file.name,
       type: file.type,
       includeFilename: false,
     });
-    await client.setAvatarUrl(uploaded.content_uri);
-    this.clearMediaCache();
-    this.scheduleWorkspacePublish();
+    return uploaded.content_uri;
   }
 
   public async restoreRecovery(recoveryKey: string): Promise<number> {
@@ -699,6 +751,267 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
+  public async loadSpaceHierarchy(spaceId: string): Promise<void> {
+    const client = this.client;
+    if (!client || spaceId === 'home' || this.spaceHierarchies.has(spaceId)) return;
+    const existing = this.spaceHierarchyRequests.get(spaceId);
+    if (existing) return existing;
+
+    const request = (async () => {
+      const hierarchyRooms = new Map<string, SpaceHierarchyRoomData>();
+      const seenTokens = new Set<string>();
+      let fromToken: string | undefined;
+      do {
+        const response = await client.getRoomHierarchy(spaceId, 100, 20, false, fromToken);
+        for (const room of response.rooms) {
+          const children = room.children_state
+            .filter((event) => {
+              const via = event.content?.via;
+              return (
+                event.type === 'm.space.child' &&
+                Boolean(event.state_key) &&
+                Array.isArray(via) &&
+                via.some((server) => typeof server === 'string' && server.length > 0)
+              );
+            })
+            .sort((left, right) => {
+              const leftOrder =
+                typeof left.content.order === 'string' && /^[\x20-\x7E]{1,50}$/.test(left.content.order)
+                  ? left.content.order
+                  : undefined;
+              const rightOrder =
+                typeof right.content.order === 'string' && /^[\x20-\x7E]{1,50}$/.test(right.content.order)
+                  ? right.content.order
+                  : undefined;
+              if (leftOrder && rightOrder) {
+                return leftOrder.localeCompare(rightOrder) || left.origin_server_ts - right.origin_server_ts;
+              }
+              if (leftOrder) return -1;
+              if (rightOrder) return 1;
+              return left.origin_server_ts - right.origin_server_ts;
+            })
+            .flatMap((event) => event.state_key ? [event.state_key] : []);
+          hierarchyRooms.set(room.room_id, {
+            id: room.room_id,
+            name: room.name || room.canonical_alias || room.room_id,
+            avatarUrl: room.avatar_url,
+            topic: room.topic,
+            roomType: room.room_type,
+            membership: client.getRoom(room.room_id)?.getMyMembership() ?? 'leave',
+            childIds: children,
+          });
+        }
+        const nextToken = response.next_batch;
+        if (!nextToken || seenTokens.has(nextToken)) break;
+        seenTokens.add(nextToken);
+        fromToken = nextToken;
+      } while (fromToken);
+      if (this.client !== client) return;
+      this.spaceHierarchies.set(spaceId, [...hierarchyRooms.values()]);
+      this.scheduleWorkspacePublish();
+    })().finally(() => {
+      this.spaceHierarchyRequests.delete(spaceId);
+    });
+
+    this.spaceHierarchyRequests.set(spaceId, request);
+    return request;
+  }
+
+  private spaceViaServers(roomId: string): string[] {
+    const serverName = roomId.includes(':') ? roomId.slice(roomId.indexOf(':') + 1) : undefined;
+    return [...new Set([serverName, this.activeSession?.serverName].filter((value): value is string => Boolean(value)))];
+  }
+
+  private async writeSpaceChildOrder(
+    spaceId: string,
+    childIds: string[],
+    movedChildId?: string,
+    movedContent?: Record<string, unknown>,
+  ): Promise<void> {
+    const client = this.client;
+    const sdk = this.sdk;
+    const space = client?.getRoom(spaceId);
+    if (!client || !sdk || !space) throw new Error('The Matrix space is not available.');
+    for (const [index, childId] of childIds.entries()) {
+      const existing = space.currentState
+        .getStateEvents(sdk.EventType.SpaceChild, childId)
+        ?.getContent<Record<string, unknown>>();
+      const base = existing && Array.isArray(existing.via)
+        ? existing
+        : childId === movedChildId && movedContent
+          ? movedContent
+          : {};
+      const via = Array.isArray(base.via)
+        ? base.via.filter((server): server is string => typeof server === 'string' && server.length > 0)
+        : this.spaceViaServers(childId);
+      await client.sendStateEvent(
+        spaceId,
+        sdk.EventType.SpaceChild,
+        { ...base, via: via.length ? via : this.spaceViaServers(spaceId), order: String(index).padStart(6, '0') },
+        childId,
+      );
+    }
+  }
+
+  public async reorganizeSpaceChildren(update: {
+    childId: string;
+    sourceSpaceId: string;
+    targetSpaceId: string;
+    sourceChildIds: string[];
+    targetChildIds: string[];
+  }): Promise<void> {
+    const client = this.client;
+    const sdk = this.sdk;
+    if (!client || !sdk) throw new Error('Matrix is not connected.');
+    const source = client.getRoom(update.sourceSpaceId);
+    const target = client.getRoom(update.targetSpaceId);
+    const userId = client.getSafeUserId();
+    if (!source || source.getType() !== 'm.space' || !target || target.getType() !== 'm.space') {
+      throw new Error('Both the source and destination must be joined Matrix spaces.');
+    }
+    if (
+      !source.currentState.maySendStateEvent(sdk.EventType.SpaceChild, userId) ||
+      !target.currentState.maySendStateEvent(sdk.EventType.SpaceChild, userId)
+    ) {
+      throw new Error('You do not have permission to reorganize one of those spaces.');
+    }
+    const validList = (values: string[]) =>
+      values.length <= 1000 &&
+      values.every((value) => typeof value === 'string' && value.length > 0) &&
+      new Set(values).size === values.length;
+    if (
+      !validList(update.sourceChildIds) ||
+      !validList(update.targetChildIds) ||
+      !update.targetChildIds.includes(update.childId) ||
+      (update.sourceSpaceId !== update.targetSpaceId && update.sourceChildIds.includes(update.childId))
+    ) {
+      throw new Error('The requested space order is invalid.');
+    }
+
+    const hierarchyMarksChildAsSpace = [...this.spaceHierarchies.values()]
+      .flat()
+      .some((room) => room.id === update.childId && room.roomType === 'm.space');
+    if (client.getRoom(update.childId)?.getType() === 'm.space' || hierarchyMarksChildAsSpace) {
+      const currentWorkspace = buildWorkspaceSnapshot(
+        client,
+        this.connection,
+        [...this.spaceHierarchies.values()].flat(),
+        this.readRootSpaceOrder(),
+      );
+      const movedSpace = currentWorkspace.spaces.find((space) => space.id === update.childId);
+      const containsSpace = (space: SpaceSummary, targetId: string, seen = new Set<string>()): boolean => {
+        if (seen.has(space.id)) return false;
+        seen.add(space.id);
+        return space.childSpaceIds.some((childId) => {
+          if (childId === targetId) return true;
+          const child = currentWorkspace.spaces.find((candidate) => candidate.id === childId);
+          return child ? containsSpace(child, targetId, seen) : false;
+        });
+      };
+      if (
+        update.childId === update.targetSpaceId ||
+        (movedSpace && containsSpace(movedSpace, update.targetSpaceId))
+      ) {
+        throw new Error('A space cannot be moved into itself or one of its descendants.');
+      }
+    }
+
+    const movedEvent = source.currentState.getStateEvents(sdk.EventType.SpaceChild, update.childId);
+    const movedContent = movedEvent?.getContent<Record<string, unknown>>() ?? {
+      via: this.spaceViaServers(update.childId),
+    };
+
+    if (update.sourceSpaceId === update.targetSpaceId) {
+      await this.writeSpaceChildOrder(update.sourceSpaceId, update.targetChildIds);
+    } else {
+      await this.writeSpaceChildOrder(
+        update.targetSpaceId,
+        update.targetChildIds,
+        update.childId,
+        movedContent,
+      );
+      await this.writeSpaceChildOrder(update.sourceSpaceId, update.sourceChildIds);
+      await client.sendStateEvent(
+        update.sourceSpaceId,
+        sdk.EventType.SpaceChild,
+        {},
+        update.childId,
+      );
+
+      const movedRoom = client.getRoom(update.childId);
+      if (
+        movedRoom?.getType() === 'm.space' &&
+        movedRoom.currentState.maySendStateEvent(sdk.EventType.SpaceParent, userId)
+      ) {
+        try {
+          await client.sendStateEvent(
+            update.childId,
+            sdk.EventType.SpaceParent,
+            {},
+            update.sourceSpaceId,
+          );
+        } catch {
+          // The authoritative parent child relation succeeded; some spaces restrict child-side state.
+        }
+        try {
+          await client.sendStateEvent(
+            update.childId,
+            sdk.EventType.SpaceParent,
+            { via: this.spaceViaServers(update.targetSpaceId) },
+            update.targetSpaceId,
+          );
+        } catch {
+          // The parent-side relation still makes the moved subspace navigable.
+        }
+      }
+    }
+    this.spaceHierarchies.clear();
+    this.scheduleWorkspacePublish();
+  }
+
+  private readRootSpaceOrder(): string[] {
+    if (this.rootSpaceOrderOverride) return this.rootSpaceOrderOverride;
+    const event = (
+      this.client as unknown as { getAccountData: (type: string) => MatrixEvent | undefined }
+    )?.getAccountData(SPACE_ORDER_EVENT);
+    const order = event?.getContent<{ order?: unknown }>().order;
+    return Array.isArray(order)
+      ? order.filter((spaceId): spaceId is string => typeof spaceId === 'string')
+      : [];
+  }
+
+  public async reorderRootSpaces(spaceIds: string[]): Promise<void> {
+    const client = this.client;
+    if (!client || new Set(spaceIds).size !== spaceIds.length) {
+      throw new Error('The requested top-level space order is invalid.');
+    }
+    const joinedRoots = buildWorkspaceSnapshot(
+      client,
+      this.connection,
+      [...this.spaceHierarchies.values()].flat(),
+      this.readRootSpaceOrder(),
+    ).spaces.filter(
+      (space) => space.kind === 'matrix' && space.membership === 'join' && space.parentSpaceIds.length === 0,
+    );
+    if (
+      spaceIds.length !== joinedRoots.length ||
+      spaceIds.some((spaceId) => !joinedRoots.some((space) => space.id === spaceId))
+    ) {
+      throw new Error('Only joined top-level spaces can be reordered.');
+    }
+    this.rootSpaceOrderOverride = [...spaceIds];
+    const accountClient = client as unknown as {
+      setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
+    };
+    try {
+      await accountClient.setAccountData(SPACE_ORDER_EVENT, { order: spaceIds });
+      this.scheduleWorkspacePublish();
+    } catch (error) {
+      this.rootSpaceOrderOverride = undefined;
+      throw error;
+    }
+  }
+
   public async loadRoomHistory(roomId: string): Promise<void> {
     const client = this.client;
     const room = client?.getRoom(roomId);
@@ -736,6 +1049,30 @@ export class MatrixController {
         setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
       };
       void accountClient.setAccountData(PERSONALIZATION_EVENT, portable).catch(() => undefined);
+    }, 500);
+  }
+
+  public loadProfilePersonalization(): ProfilePersonalization | undefined {
+    const event = (
+      this.client as unknown as { getAccountData: (type: string) => MatrixEvent | undefined }
+    )?.getAccountData(PROFILE_PERSONALIZATION_EVENT);
+    this.profilePersonalizationLoaded = true;
+    return event ? parseProfilePersonalization(event.getContent()) : undefined;
+  }
+
+  public saveProfilePersonalization(personalization: ProfilePersonalization): void {
+    if (!this.client || !this.profilePersonalizationLoaded) return;
+    if (this.profilePersonalizationSaveTimer !== undefined) {
+      window.clearTimeout(this.profilePersonalizationSaveTimer);
+    }
+    this.profilePersonalizationSaveTimer = window.setTimeout(() => {
+      const client = this.client;
+      if (!client) return;
+      const accountClient = client as unknown as {
+        setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
+      };
+      const portable = parseProfilePersonalization(personalization) as unknown as Record<string, unknown>;
+      void accountClient.setAccountData(PROFILE_PERSONALIZATION_EVENT, portable).catch(() => undefined);
     }, 500);
   }
 
@@ -842,6 +1179,79 @@ export class MatrixController {
       roomId,
       this.sdk.EventType.RoomAvatar,
       { url: uploaded.content_uri, info: { mimetype: file.type, size: file.size } },
+      '',
+    );
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setRoomBackground(
+    roomId: string,
+    background: RoomBackground,
+    personal: boolean,
+  ): Promise<void> {
+    const client = this.client;
+    if (!client || !this.sdk) throw new Error('Matrix is not connected.');
+    if (personal) {
+      const accountClient = client as unknown as {
+        getAccountData: (type: string) => MatrixEvent | undefined;
+        setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
+      };
+      const backgrounds = parseDirectBackgrounds(
+        accountClient.getAccountData(DIRECT_BACKGROUNDS_EVENT)?.getContent(),
+      );
+      const serialized = serializeRoomBackground(background);
+      if (serialized.preset === 'none' && !serialized.mxc_url) delete backgrounds[roomId];
+      else backgrounds[roomId] = background;
+      await accountClient.setAccountData(
+        DIRECT_BACKGROUNDS_EVENT,
+        serializeDirectBackgrounds(backgrounds),
+      );
+    } else {
+      const room = client.getRoom(roomId);
+      const userId = client.getSafeUserId();
+      if (!room?.currentState.maySendStateEvent(ROOM_BACKGROUND_EVENT, userId)) {
+        throw new Error('Your room role cannot change the shared background.');
+      }
+      const stateClient = client as unknown as {
+        sendStateEvent: (roomId: string, type: string, content: Record<string, string | boolean>, stateKey: string) => Promise<unknown>;
+      };
+      await stateClient.sendStateEvent(
+        roomId,
+        ROOM_BACKGROUND_EVENT,
+        serializeRoomBackground(background),
+        '',
+      );
+    }
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setRoomBackgroundPolicy(
+    roomId: string,
+    permission: RoomBackgroundPermission,
+  ): Promise<void> {
+    const client = this.client;
+    const sdk = this.sdk;
+    if (!client || !sdk) throw new Error('Matrix is not connected.');
+    const room = client.getRoom(roomId);
+    const userId = client.getSafeUserId();
+    if (!room?.currentState.maySendStateEvent(sdk.EventType.RoomPowerLevels, userId)) {
+      throw new Error('Only a room administrator can change backdrop permissions.');
+    }
+    const powerEvent = room.currentState.getStateEvents(sdk.EventType.RoomPowerLevels, '');
+    const content = powerEvent?.getContent<Record<string, unknown>>() ?? {};
+    const events = content.events && typeof content.events === 'object' && !Array.isArray(content.events)
+      ? content.events as Record<string, unknown>
+      : {};
+    await client.sendStateEvent(
+      roomId,
+      sdk.EventType.RoomPowerLevels,
+      {
+        ...content,
+        events: {
+          ...events,
+          [ROOM_BACKGROUND_EVENT]: thresholdForBackgroundPermission(permission),
+        },
+      },
       '',
     );
     this.scheduleWorkspacePublish();
@@ -1085,33 +1495,57 @@ export class MatrixController {
     const client = this.client;
     const sdk = this.sdk;
     if (!client || !sdk) throw new Error('Matrix is not connected.');
-    const cacheKey = `${this.activeSession?.userId}|${sticker.id}|${sticker.src}`;
+    const room = client.getRoom(roomId);
+    if (!room) throw new Error('Room is not available.');
+    const encrypt = room.hasEncryptionStateEvent();
+    const cacheKey = `${this.activeSession?.userId}|${roomId}|${encrypt ? 'encrypted' : 'plain'}|${sticker.id}|${sticker.src}`;
     let uploaded = this.stickerUploads.get(cacheKey);
     if (!uploaded) {
       uploaded = (async () => {
         const response = await fetch(sticker.src);
         if (!response.ok) throw new Error('Sticker asset could not be loaded.');
         const blob = await response.blob();
+        const mimetype = blob.type || 'image/svg+xml';
+        if (encrypt) {
+          const { encryptAttachment } = await import('matrix-encrypt-attachment');
+          const encrypted = await encryptAttachment(await blob.arrayBuffer());
+          const result = await client.uploadContent(new Blob([encrypted.data]), {
+            type: 'application/octet-stream',
+            includeFilename: false,
+          });
+          return {
+            mimetype,
+            size: blob.size,
+            file: {
+              ...encrypted.info,
+              hashes: encrypted.info.hashes ?? {},
+              url: result.content_uri,
+            },
+          };
+        }
         const result = await client.uploadContent(blob, {
           name: `${sticker.id}.svg`,
-          type: blob.type || 'image/svg+xml',
+          type: mimetype,
           includeFilename: false,
         });
-        return result.content_uri;
+        return { mimetype, size: blob.size, url: result.content_uri };
       })();
       this.stickerUploads.set(cacheKey, uploaded);
     }
     try {
-      const url = await uploaded;
-      await client.sendEvent(roomId, sdk.EventType.Sticker, {
+      const asset = await uploaded;
+      const eventClient = client as unknown as {
+        sendEvent: (roomId: string, type: string, content: Record<string, unknown>) => Promise<unknown>;
+      };
+      await eventClient.sendEvent(roomId, sdk.EventType.Sticker, {
         body: sticker.name,
         info: {
-          mimetype: 'image/svg+xml',
-          size: 0,
+          mimetype: asset.mimetype,
+          size: asset.size,
           w: 180,
           h: 180,
         },
-        url,
+        ...(asset.file ? { file: asset.file } : { url: asset.url }),
       });
       this.scheduleWorkspacePublish();
     } catch (error) {
@@ -1228,6 +1662,7 @@ export class MatrixController {
       throw new Error('Encryption is not ready for this room.');
     }
     await client.sendTextMessage(roomId, message);
+    if (this.notificationPreferences.notificationSounds) this.playSendTone();
     this.scheduleWorkspacePublish();
   }
 
@@ -1235,17 +1670,11 @@ export class MatrixController {
     await this.stopCurrentClient();
     const names = databaseNames(session);
     const sdk = await loadMatrixSdk();
-    const store = new sdk.IndexedDBStore({
-      indexedDB: window.indexedDB,
-      localStorage: window.localStorage,
-      dbName: names.sync,
-    });
     const client = sdk.createClient({
       baseUrl: session.baseUrl,
       accessToken: session.accessToken,
       userId: session.userId,
       deviceId: session.deviceId,
-      store,
       timelineSupport: true,
       cryptoCallbacks: {
         getSecretStorageKey: async ({ keys }) => {
@@ -1285,7 +1714,6 @@ export class MatrixController {
     this.attachClientListeners();
 
     try {
-      await store.startup();
       await client.initRustCrypto({
         useIndexedDB: true,
         cryptoDatabasePrefix: names.crypto,
@@ -1293,12 +1721,11 @@ export class MatrixController {
       await client.startClient({
         initialSyncLimit: 30,
         lazyLoadMembers: true,
-        pendingEventOrdering: sdk.PendingEventOrdering.Detached,
+        pendingEventOrdering: sdk.PendingEventOrdering.Chronological,
       });
     } catch (error) {
       this.detachClientListeners();
       client.stopClient();
-      await store.destroy();
       this.client = undefined;
       this.activeSession = undefined;
       throw error;
@@ -1314,19 +1741,20 @@ export class MatrixController {
     const client = this.client;
     this.detachClientListeners();
     client.stopClient();
-    const store = client.store as { save?: (force?: boolean) => Promise<void>; destroy?: () => Promise<void> };
-    try {
-      await store.save?.(true);
-      await store.destroy?.();
-    } catch {
-      // A closed sync cache is optional; the homeserver remains authoritative.
-    }
     this.client = undefined;
     this.activeSession = undefined;
     this.inMemoryRecoveryKey = undefined;
     this.personalizationLoaded = false;
     if (this.personalizationSaveTimer !== undefined) window.clearTimeout(this.personalizationSaveTimer);
     this.personalizationSaveTimer = undefined;
+    this.spaceHierarchies.clear();
+    this.spaceHierarchyRequests.clear();
+    this.rootSpaceOrderOverride = undefined;
+    this.signOnTonePlayed = false;
+    this.liveEncryptedMessages.clear();
+    this.snapshotCache.roomVersions.clear();
+    this.snapshotCache.messages.clear();
+    this.snapshotCache.members.clear();
     this.clearMediaCache();
   }
 
@@ -1391,11 +1819,17 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
+  private signOnTonePlayed = false;
+
   private readonly handleSync = (syncState: SyncState): void => {
     switch (syncState) {
       case 'PREPARED':
       case 'SYNCING':
         this.connection = 'online';
+        if (!this.signOnTonePlayed) {
+          this.signOnTonePlayed = true;
+          if (this.notificationPreferences.notificationSounds) this.playSignOnTone();
+        }
         this.scheduleWorkspacePublish();
         break;
       case 'CATCHUP':
@@ -1418,40 +1852,114 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
+    this.bumpRoomVersion(room?.roomId ?? event.getRoomId());
     if (!toStartOfTimeline) this.scheduleWorkspacePublish();
-    if (
-      !data?.liveEvent ||
-      !room ||
-      event.getSender() === this.client?.getUserId() ||
-      event.getType() !== 'm.room.message'
-    ) {
+    if (!data?.liveEvent || !room || event.getSender() === this.client?.getUserId()) return;
+    if (event.getType() === 'm.room.encrypted') {
+      const eventId = event.getId();
+      if (eventId) {
+        if (this.liveEncryptedMessages.size > 300) {
+          const oldest = this.liveEncryptedMessages.values().next().value;
+          if (oldest) this.liveEncryptedMessages.delete(oldest);
+        }
+        this.liveEncryptedMessages.add(eventId);
+      }
       return;
     }
-    const content = event.getContent<{ body?: string }>();
-    const body = typeof content.body === 'string' ? content.body : 'New Matrix message';
+    this.notifyForMessage(event, room);
+  };
+
+  private readonly liveEncryptedMessages = new Set<string>();
+
+  private notifyForMessage(event: MatrixEvent, room: Room): void {
+    if (event.getType() !== 'm.room.message') return;
+    const muted = this.client
+      ?.getRoomPushRule('global', room.roomId)
+      ?.actions.some((action) => action === 'dont_notify');
+    if (muted) return;
+    if (this.notificationPreferences.notificationSounds && this.connection === 'online') {
+      this.playMessageTone();
+    }
     if (
       this.notificationPreferences.desktopNotifications &&
       document.hidden &&
       'Notification' in window &&
       Notification.permission === 'granted'
     ) {
+      const content = event.getContent<{ body?: string }>();
+      const body = typeof content.body === 'string' ? content.body : 'New Matrix message';
       const notification = new Notification(room.name || 'Aimtrix', {
         body: body.slice(0, 240),
         tag: room.roomId,
       });
       notification.onclick = () => window.focus();
     }
-    if (this.notificationPreferences.notificationSounds) this.playMessageTone();
-  };
+  }
+
+  private audioContext?: AudioContext;
+
+  private ensureAudioContext(): AudioContext | undefined {
+    try {
+      this.audioContext ??= new window.AudioContext();
+      if (this.audioContext.state === 'suspended') void this.audioContext.resume();
+      return this.audioContext;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private playTone(
+    notes: Array<{ frequency: number; start: number; duration: number }>,
+    volumeScale: number,
+  ): void {
+    const context = this.ensureAudioContext();
+    if (!context) return;
+    try {
+      const now = context.currentTime;
+      const peak = Math.max(0.0001, this.notificationPreferences.soundVolume * volumeScale);
+      for (const note of notes) {
+        const oscillator = context.createOscillator();
+        const gain = context.createGain();
+        const start = now + note.start;
+        const end = start + note.duration;
+        oscillator.type = 'triangle';
+        oscillator.frequency.setValueAtTime(note.frequency, start);
+        gain.gain.setValueAtTime(0.0001, start);
+        gain.gain.exponentialRampToValueAtTime(peak, start + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0001, end);
+        oscillator.connect(gain);
+        gain.connect(context.destination);
+        oscillator.start(start);
+        oscillator.stop(end + 0.02);
+      }
+    } catch {
+      // Audio is optional and browsers may block it until a user gesture.
+    }
+  }
+
+  private lastMessageToneAt = 0;
 
   private playMessageTone(): void {
+    const now = Date.now();
+    if (now - this.lastMessageToneAt < 600) return;
+    this.lastMessageToneAt = now;
+    this.playTone(
+      [
+        { frequency: 1174.66, start: 0, duration: 0.07 },
+        { frequency: 987.77, start: 0.075, duration: 0.11 },
+      ],
+      0.16,
+    );
+  }
+
+  private playSignOnTone(): void {
+    const context = this.ensureAudioContext();
+    if (!context) return;
     try {
-      const AudioContextClass = window.AudioContext;
-      const context = new AudioContextClass();
+      const now = context.currentTime;
       const gain = context.createGain();
       const first = context.createOscillator();
       const second = context.createOscillator();
-      const now = context.currentTime;
       gain.gain.setValueAtTime(0.0001, now);
       gain.gain.exponentialRampToValueAtTime(
         Math.max(0.0001, this.notificationPreferences.soundVolume * 0.12),
@@ -1467,20 +1975,65 @@ export class MatrixController {
       second.start(now + 0.06);
       first.stop(now + 0.16);
       second.stop(now + 0.24);
-      second.onended = () => void context.close();
     } catch {
       // Audio is optional and browsers may block it until a user gesture.
     }
   }
 
-  private readonly handleDecrypted = (): void => {
+  private playSendTone(): void {
+    this.playTone(
+      [
+        { frequency: 987.77, start: 0, duration: 0.05 },
+        { frequency: 1318.51, start: 0.05, duration: 0.08 },
+      ],
+      0.1,
+    );
+  }
+
+  public previewMessageTone(): void {
+    this.lastMessageToneAt = 0;
+    this.playMessageTone();
+  }
+
+  private readonly handleDecrypted = (event: MatrixEvent): void => {
+    const roomId = event.getRoomId();
+    this.bumpRoomVersion(roomId);
+    this.scheduleWorkspacePublish();
+    const eventId = event.getId();
+    if (eventId && roomId && this.liveEncryptedMessages.delete(eventId)) {
+      const room = this.client?.getRoom(roomId);
+      if (room) this.notifyForMessage(event, room);
+    }
+  };
+
+  private readonly handleReceipt = (_event: MatrixEvent, room?: Room): void => {
+    this.bumpRoomVersion(room?.roomId);
+    this.scheduleWorkspacePublish();
+  };
+
+  private readonly handleLocalEcho = (event: MatrixEvent, room?: Room): void => {
+    this.bumpRoomVersion(room?.roomId ?? event.getRoomId());
+    this.scheduleWorkspacePublish();
+  };
+
+  private readonly handleRoomState = (event: MatrixEvent): void => {
+    this.bumpRoomVersion(event.getRoomId());
+    this.scheduleWorkspacePublish();
+  };
+
+  private readonly handleAccountData = (): void => {
     this.scheduleWorkspacePublish();
   };
 
   private attachClientListeners(): void {
     if (!this.client || !this.sdk) return;
     this.client.on(this.sdk.ClientEvent.Sync, this.handleSync);
+    this.client.on(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.on(this.sdk.RoomEvent.Timeline, this.handleTimeline);
+    this.client.on(this.sdk.RoomEvent.Receipt, this.handleReceipt);
+    this.client.on(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
+    this.client.on(this.sdk.RoomStateEvent.Events, this.handleRoomState);
+    this.client.on(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.on(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
     this.client.on('Call.incoming' as any, this.handleIncomingCall as any);
   }
@@ -1488,7 +2041,12 @@ export class MatrixController {
   private detachClientListeners(): void {
     if (!this.client || !this.sdk) return;
     this.client.removeListener(this.sdk.ClientEvent.Sync, this.handleSync);
+    this.client.removeListener(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.removeListener(this.sdk.RoomEvent.Timeline, this.handleTimeline);
+    this.client.removeListener(this.sdk.RoomEvent.Receipt, this.handleReceipt);
+    this.client.removeListener(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
+    this.client.removeListener(this.sdk.RoomStateEvent.Events, this.handleRoomState);
+    this.client.removeListener(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.removeListener(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
     this.client.removeListener('Call.incoming' as any, this.handleIncomingCall as any);
     if (this.publishFrame !== undefined) cancelAnimationFrame(this.publishFrame);
@@ -1501,7 +2059,13 @@ export class MatrixController {
       this.publishFrame = undefined;
       if (!this.client) return;
       try {
-        const workspace = buildWorkspaceSnapshot(this.client, this.connection);
+        const workspace = buildWorkspaceSnapshot(
+          this.client,
+          this.connection,
+          [...this.spaceHierarchies.values()].flat(),
+          this.readRootSpaceOrder(),
+          this.snapshotCache,
+        );
         this.setSnapshot({
           status: 'ready',
           workspace: { ...workspace, call: this.callSummary },

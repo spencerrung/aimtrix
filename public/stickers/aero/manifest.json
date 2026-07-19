@@ -1,0 +1,11 @@
+{
+  "name": "Aero Days",
+  "description": "Original sunny Frutiger Aero-inspired stickers by Aimtrix.",
+  "stickers": [
+    { "id": "aero-sun", "name": "Good Morning", "src": "/stickers/aero/sun.svg" },
+    { "id": "aero-bubble", "name": "Bubble Buddy", "src": "/stickers/aero/bubble.svg" },
+    { "id": "aero-wave", "name": "Making Waves", "src": "/stickers/aero/wave.svg" },
+    { "id": "aero-sprout", "name": "New Idea", "src": "/stickers/aero/sprout.svg" },
+    { "id": "aero-rainbow", "name": "After the Rain", "src": "/stickers/aero/rainbow.svg" }
+  ]
+}

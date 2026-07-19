@@ -1,0 +1,11 @@
+{
+  "name": "Web Garden",
+  "description": "Original optimistic web-garden stickers by Aimtrix.",
+  "stickers": [
+    { "id": "garden-flower", "name": "Flower Power", "src": "/stickers/garden/flower.svg" },
+    { "id": "garden-ladybug", "name": "Little Visitor", "src": "/stickers/garden/ladybug.svg" },
+    { "id": "garden-globe", "name": "World Wide Web", "src": "/stickers/garden/globe.svg" },
+    { "id": "garden-mail", "name": "You've Got Mail", "src": "/stickers/garden/mail.svg" },
+    { "id": "garden-star", "name": "Favorite", "src": "/stickers/garden/star.svg" }
+  ]
+}

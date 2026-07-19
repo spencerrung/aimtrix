@@ -16,6 +16,11 @@ import {
   saveUserPreferences,
   type UserPreferences,
 } from './settings/preferences';
+import {
+  loadProfilePersonalization,
+  saveProfilePersonalization,
+  type ProfilePersonalization,
+} from './settings/profilePersonalization';
 
 const THEME_KEY = 'aimtrix.theme';
 
@@ -37,6 +42,9 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
   );
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme(config.defaultTheme));
   const [preferences, setPreferences] = useState<UserPreferences>(() => loadUserPreferences());
+  const [profilePersonalization, setProfilePersonalization] = useState<ProfilePersonalization>(
+    () => loadProfilePersonalization(),
+  );
   const matrixSettingsActions = useMemo(
     () => ({
       load: () => controller.loadSettings(),
@@ -54,6 +62,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         controller.changePassword(currentPassword, newPassword, logoutOtherDevices),
       deactivateAccount: (password: string, erase: boolean) =>
         controller.deactivateAccount(password, erase),
+      previewMessageSound: () => controller.previewMessageTone(),
     }),
     [controller],
   );
@@ -100,6 +109,20 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
   }, [controller, snapshot.status]);
 
   useEffect(() => {
+    saveProfilePersonalization(profilePersonalization);
+    if (snapshot.status === 'ready') {
+      controller.saveProfilePersonalization(profilePersonalization);
+    }
+  }, [controller, profilePersonalization, snapshot.status]);
+
+  useEffect(() => {
+    if (snapshot.status !== 'ready') return;
+    const remote = controller.loadProfilePersonalization();
+    if (remote) queueMicrotask(() => setProfilePersonalization(remote));
+    else controller.saveProfilePersonalization(loadProfilePersonalization());
+  }, [controller, snapshot.status]);
+
+  useEffect(() => {
     if (!demo) void controller.initialize();
   }, [controller, demo]);
 
@@ -110,8 +133,10 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         config={config}
         theme={theme}
         preferences={preferences}
+        profilePersonalization={profilePersonalization}
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
+        onProfilePersonalizationChange={setProfilePersonalization}
         onSignOut={() => setDemo(false)}
       />
     );
@@ -151,12 +176,18 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         config={config}
         theme={theme}
         preferences={preferences}
+        profilePersonalization={profilePersonalization}
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
+        onProfilePersonalizationChange={setProfilePersonalization}
+        onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
         onSendMessage={(roomId, body) => controller.sendMessage(roomId, body)}
         onRoomSelected={(roomId) => controller.loadRoomHistory(roomId)}
+        onSpaceSelected={(spaceId) => controller.loadSpaceHierarchy(spaceId)}
+        onReorganizeSpaceChildren={(update) => controller.reorganizeSpaceChildren(update)}
+        onReorderRootSpaces={(spaceIds) => controller.reorderRootSpaces(spaceIds)}
         onSendReply={(roomId, body, target) => controller.sendReply(roomId, body, target)}
         onEditMessage={(roomId, eventId, body) => controller.editMessage(roomId, eventId, body)}
         onRedactMessage={(roomId, eventId) => controller.redactMessage(roomId, eventId)}
@@ -184,6 +215,9 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         onScreenshare={(enabled) => controller.setScreensharing(enabled)}
         onUpdateRoom={(roomId, update) => controller.updateRoomDetails(roomId, update)}
         onUpdateRoomAvatar={(roomId, file) => controller.updateRoomAvatar(roomId, file)}
+        onUploadRoomBackground={(file) => controller.uploadRoomBackground(file)}
+        onSetRoomBackground={(roomId, background, personal) => controller.setRoomBackground(roomId, background, personal)}
+        onSetRoomBackgroundPolicy={(roomId, permission) => controller.setRoomBackgroundPolicy(roomId, permission)}
         onEnableRoomEncryption={(roomId) => controller.enableRoomEncryption(roomId)}
         onSetRoomMuted={(roomId, muted) => controller.setRoomMuted(roomId, muted)}
         onInviteToRoom={(roomId, userId) => controller.inviteToRoom(roomId, userId)}

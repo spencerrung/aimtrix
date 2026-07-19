@@ -1,12 +1,12 @@
 # Aimtrix
 
-Aimtrix is an original, self-hostable Matrix client that combines the compact Aqua character of 2005–2007 Mac chat applications with modern messaging behavior.
+Aimtrix is an original, self-hostable Matrix client that combines the compact Aqua character of 2005–2007 Mac chat applications, an optimistic Frutiger Aero atmosphere, and modern messaging behavior.
 
 The project is web-first, statically deployable, and intended to work with ordinary Matrix homeservers without an Aimtrix-specific backend.
 
 ## Status
 
-Aimtrix is a working pre-1.0 client. It includes password and SSO login, persistent encrypted sync, recovery and device verification, replies/edits/reactions, encrypted attachments, searchable emoji, standard stickers, optional GIF search, room creation/directory/moderation controls, notifications, PWA installation, and feature-gated direct Matrix voice/video calls.
+Aimtrix is a working pre-1.0 client. It includes password and SSO login, persistent encrypted sync, recovery and device verification, replies/edits/reactions, read-position avatars, encrypted attachments, searchable emoji, standard stickers, original lazy-loaded sticker packs, private decorated profile pages, readable room/space/DM backdrops with power-level-backed Decorator roles, nested spaces, room organization, optional GIF search, room creation/directory/moderation controls, notifications, PWA installation, and feature-gated direct Matrix voice/video calls.
 
 The remaining compatibility and scale work is tracked honestly in [TODO.md](TODO.md), particularly group MatrixRTC/LiveKit calling, threads, full server-side message search, richer push-rule editing, and broader live-homeserver interoperability coverage.
 

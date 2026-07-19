@@ -64,7 +64,23 @@ GIF search stays hidden unless both `features.gifs` is true and `gifProvider.sea
 
 The provider and media CDN must allow browser CORS. Aimtrix downloads a selection and uploads it to Matrix, including attachment encryption in encrypted rooms. Do not place a private provider key in `config.json`; use a restricted public browser key or an operator-managed search gateway.
 
-Additional sticker packs can be installed with `stickerPacks`, each containing a display `name` and HTTPS `manifestUrl`. A manifest uses the same `{ "stickers": [{ "id", "name", "src" }] }` shape as the bundled Aqua pack. Treat configured manifests as trusted content.
+Aimtrix bundles the original Aqua Starter, Aero Days, and Web Garden packs. Operators can add immutable packs with `stickerPacks`, each containing a display `name` and same-origin or HTTPS `manifestUrl`. Users can also register personal manifests from the profile decorator; those registrations sync only in private Aimtrix account data.
+
+A pack manifest uses this bounded format:
+
+```json
+{
+  "name": "My original pack",
+  "description": "Optional author note",
+  "stickers": [
+    { "id": "wave", "name": "Hello wave", "src": "./wave.svg" }
+  ]
+}
+```
+
+Aimtrix accepts at most 48 valid, uniquely identified items per pack. Sticker sources may be relative to the manifest, same-origin, HTTPS, or authenticated `mxc://` media; unsafe protocols and malformed items are discarded. Manifests are fetched without credentials and only when a user opens that pack. The manifest host must permit browser CORS.
+
+Configured and personally registered manifests are an artwork trust boundary: they can cause a browser to request images from their declared HTTPS origins and may reveal the user's IP address to those hosts. Install packs only from trusted authors. Packs should contain original or properly licensed art; do not redistribute third-party chat artwork without permission.
 
 ## Kubernetes shape
 
@@ -87,7 +103,9 @@ volumeMounts:
     readOnly: true
 ```
 
-No Synapse PVC changes are required to deploy the client. GIFs, stickers, and attachments consume homeserver media storage when sent. Operators should set Synapse media retention, quotas, and upload limits appropriate to their storage.
+No Synapse PVC changes are required to deploy the client. GIFs, stickers, attachments, profile banners, and custom conversation backdrops consume homeserver media storage when uploaded. Operators should set Synapse media retention, quotas, and upload limits appropriate to their storage. Backdrop media and namespaced room/account state are not E2EE and should be treated as non-sensitive decoration.
+
+Aimtrix's shared backdrop permission selector writes a threshold for `dev.alucard.aimtrix.room_background.v1` into standard `m.room.power_levels`. Threshold 25 is presented as the Decorator role, 50 remains Moderator, and room administrators retain their existing level. Power levels apply to every event and moderation action at or below that number, not only Aimtrix decoration. Administrators should inspect custom room thresholds before assigning Decorator. Space backdrops are state on the space itself and do not grant space members additional authority in child rooms.
 
 ## Calling
 

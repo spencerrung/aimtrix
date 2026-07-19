@@ -1,4 +1,5 @@
 import type { EncryptedMediaInfo } from './mediaContext';
+import type { RoomBackground, RoomBackgroundPolicy } from './roomBackgrounds';
 
 export type PresenceState = 'online' | 'away' | 'busy' | 'offline';
 export type RoomKind = 'direct' | 'room' | 'space';
@@ -18,7 +19,27 @@ export interface SpaceSummary {
   avatarUrl?: string;
   initials: string;
   color: string;
+  kind: 'home' | 'directs' | 'matrix';
+  membership: 'join' | 'invite' | 'leave';
+  canManage: boolean;
+  ownPowerLevel?: number;
+  background?: RoomBackground;
+  backgroundPolicy?: RoomBackgroundPolicy;
+  childIds: string[];
+  directRoomIds: string[];
+  childSpaceIds: string[];
+  parentSpaceIds: string[];
   roomIds: string[];
+  unreadCount: number;
+  highlighted: boolean;
+}
+
+export interface SpaceRoomPreview {
+  id: string;
+  name: string;
+  avatarUrl?: string;
+  topic?: string;
+  membership: 'join' | 'invite' | 'leave';
 }
 
 export interface RoomSummary {
@@ -39,7 +60,15 @@ export interface RoomSummary {
   ownPowerLevel?: number;
   typingUsers?: string[];
   muted?: boolean;
+  background?: RoomBackground;
+  backgroundPolicy?: RoomBackgroundPolicy;
   updatedAt: number;
+}
+
+export interface ReadReceiptSummary {
+  id: string;
+  displayName: string;
+  avatarUrl?: string;
 }
 
 export interface MessageSummary {
@@ -70,6 +99,7 @@ export interface MessageSummary {
   mimeType?: string;
   mediaKind?: 'image' | 'video' | 'audio' | 'file';
   pinned?: boolean;
+  readBy?: ReadReceiptSummary[];
 }
 
 export interface MemberSummary {
@@ -100,6 +130,7 @@ export interface WorkspaceSnapshot {
   connection: ConnectionState;
   user: UserSummary;
   spaces: SpaceSummary[];
+  spaceRoomPreviews: Record<string, SpaceRoomPreview>;
   rooms: RoomSummary[];
   messagesByRoom: Record<string, MessageSummary[]>;
   membersByRoom: Record<string, MemberSummary[]>;

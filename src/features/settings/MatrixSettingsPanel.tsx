@@ -5,6 +5,7 @@ import {
   Check,
   KeyRound,
   Laptop,
+  Play,
   RefreshCw,
   ShieldCheck,
   Trash2,
@@ -31,6 +32,7 @@ export interface MatrixSettingsActions {
   restoreRecovery: (recoveryKey: string) => Promise<number>;
   changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) => Promise<void>;
   deactivateAccount: (password: string, erase: boolean) => Promise<void>;
+  previewMessageSound?: () => void;
 }
 
 interface MatrixSettingsPanelProps {
@@ -377,6 +379,9 @@ export function MatrixSettingsPanel({
             <label className="settings-toggle-row"><span><strong>Desktop notifications</strong><small>Notify when Aimtrix is in the background.</small></span><input type="checkbox" checked={preferences.desktopNotifications} onChange={(event) => void requestNotifications(event.target.checked)} /></label>
             <label className="settings-toggle-row"><span><strong>Message sounds</strong><small>Play an original Aimtrix tone for new messages.</small></span><input type="checkbox" checked={preferences.notificationSounds} onChange={(event) => updatePreferences({ notificationSounds: event.target.checked })} /></label>
             <label className="settings-range-row"><Volume2 size={15} /><span>Sound volume</span><input type="range" min="0" max="1" step="0.05" value={preferences.soundVolume} onChange={(event) => updatePreferences({ soundVolume: Number(event.target.value) })} /></label>
+            {actions?.previewMessageSound ? (
+              <button className="text-button sound-preview-button" type="button" onClick={() => actions.previewMessageSound?.()}><Play size={13} /> Preview message sound</button>
+            ) : null}
             <label className="settings-toggle-row"><span><strong>Send read receipts</strong><small>Let rooms know when you have read messages.</small></span><input type="checkbox" checked={preferences.sendReadReceipts} onChange={(event) => updatePreferences({ sendReadReceipts: event.target.checked })} /></label>
             <label className="settings-toggle-row"><span><strong>Send typing notifications</strong><small>Show other people while you are composing.</small></span><input type="checkbox" checked={preferences.sendTypingNotifications} onChange={(event) => updatePreferences({ sendTypingNotifications: event.target.checked })} /></label>
           </section>
