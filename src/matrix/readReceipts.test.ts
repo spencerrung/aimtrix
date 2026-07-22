@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveReadReceiptTargets } from './readReceipts';
+import { resolveReadReceiptTarget, resolveReadReceiptTargets } from './readReceipts';
 
 describe('read receipt placement', () => {
   it('places a receipt on the latest rendered message at or before a timeline event', () => {
@@ -14,6 +14,14 @@ describe('read receipt placement', () => {
 
     expect(targets.get('$message-one')).toEqual(['@mara:test']);
     expect(targets.get('$message-two')).toEqual(['@pixel:test']);
+  });
+
+  it('resolves the current user position when the receipt points to a non-message event', () => {
+    expect(resolveReadReceiptTarget(
+      ['$message-one', '$reaction', '$message-two'],
+      ['$message-one', '$message-two'],
+      '$reaction',
+    )).toBe('$message-one');
   });
 
   it('ignores missing receipts, deduplicates readers, and bounds crowded rows', () => {

@@ -302,6 +302,8 @@ describe('MatrixController protocol integration', () => {
     const room = {
       getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue(null),
+      getRoomUnreadNotificationCount: vi.fn().mockReturnValue(3),
+      setUnreadNotificationCount: vi.fn(),
     };
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
@@ -319,11 +321,86 @@ describe('MatrixController protocol integration', () => {
     expect(client.sendReadReceipt).toHaveBeenCalledWith(lastEvent);
   });
 
+  it('ignores newer thread replies when advancing the main timeline receipt', async () => {
+    const mainEvent = { getId: () => '$main:test' };
+    const threadEvent = { getId: () => '$thread:test', threadRootId: '$root:test' };
+    const room = {
+      getLiveTimeline: () => ({ getEvents: () => [mainEvent, threadEvent] }),
+      getReadReceiptForUserId: vi.fn().mockReturnValue(null),
+      getRoomUnreadNotificationCount: vi.fn().mockReturnValue(2),
+      setUnreadNotificationCount: vi.fn(),
+    };
+    const client = {
+      getRoom: vi.fn().mockReturnValue(room),
+      getSafeUserId: () => '@me:test',
+      sendReadReceipt: vi.fn().mockResolvedValue({}),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>, {
+      inMainTimelineForReceipt: (event: { threadRootId?: string }) => !event.threadRootId,
+    });
+
+    await controller.markRoomRead('!room:test');
+
+    expect(client.sendReadReceipt).toHaveBeenCalledWith(mainEvent);
+  });
+
+  it('clears unread counts locally before the receipt round trip finishes', async () => {
+    const lastEvent = { getId: () => '$latest:test' };
+    const room = {
+      getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
+      getReadReceiptForUserId: vi.fn().mockReturnValue(null),
+      getRoomUnreadNotificationCount: vi.fn().mockReturnValue(3),
+      setUnreadNotificationCount: vi.fn(),
+    };
+    const client = {
+      getRoom: vi.fn().mockReturnValue(room),
+      getSafeUserId: () => '@me:test',
+      sendReadReceipt: vi.fn().mockResolvedValue({}),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>);
+
+    const receipt = controller.markRoomRead('!room:test');
+
+    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('total', 0);
+    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('highlight', 0);
+    await receipt;
+  });
+
+  it('restores unread counts and allows retry when sending the receipt fails', async () => {
+    const lastEvent = { getId: () => '$latest:test' };
+    const room = {
+      getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
+      getReadReceiptForUserId: vi.fn().mockReturnValue(null),
+      getRoomUnreadNotificationCount: vi.fn((type: string) => type === 'total' ? 5 : 2),
+      setUnreadNotificationCount: vi.fn(),
+    };
+    const client = {
+      getRoom: vi.fn().mockReturnValue(room),
+      getSafeUserId: () => '@me:test',
+      sendReadReceipt: vi.fn()
+        .mockRejectedValueOnce(new Error('offline'))
+        .mockResolvedValueOnce({}),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>);
+
+    await expect(controller.markRoomRead('!room:test')).rejects.toThrow('offline');
+    await controller.markRoomRead('!room:test');
+
+    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('total', 5);
+    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('highlight', 2);
+    expect(client.sendReadReceipt).toHaveBeenCalledTimes(2);
+  });
+
   it('skips the receipt when the server already has us at the latest event', async () => {
     const lastEvent = { getId: () => '$latest:test' };
     const room = {
       getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue({ eventId: '$latest:test' }),
+      getRoomUnreadNotificationCount: vi.fn().mockReturnValue(3),
+      setUnreadNotificationCount: vi.fn(),
     };
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
