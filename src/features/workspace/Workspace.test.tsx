@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultRuntimeConfig } from '../../config/runtimeConfig';
 import { demoWorkspace } from '../../demo/demoWorkspace';
 import {
@@ -11,33 +11,82 @@ import {
   type ProfilePersonalization,
 } from '../../settings/profilePersonalization';
 import { Workspace } from './Workspace';
+function installResizeObserver() {
+  const observers = new Set<ResizeObserverCallback>();
+  class ResizeObserverMock {
+    private readonly callback: ResizeObserverCallback;
+
+    public constructor(callback: ResizeObserverCallback) {
+      this.callback = callback;
+      observers.add(callback);
+    }
+
+    public observe() {}
+    public unobserve() {}
+    public disconnect() {
+      observers.delete(this.callback);
+    }
+  }
+  vi.stubGlobal('ResizeObserver', ResizeObserverMock);
+  return () => {
+    for (const callback of observers) callback([], {} as ResizeObserver);
+  };
+}
+
+function rect(top: number): DOMRect {
+  return {
+    bottom: top,
+    height: 0,
+    left: 0,
+    right: 0,
+    top,
+    width: 0,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  };
+}
+
 
 function renderWorkspace(
   overrides: {
     onPreferencesChange?: (preferences: UserPreferences) => void;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
+    onMarkRoomRead?: (roomId: string) => Promise<void>;
+    workspace?: typeof demoWorkspace;
   } = {},
 ) {
   const onPreferencesChange =
     overrides.onPreferencesChange ?? vi.fn<(preferences: UserPreferences) => void>();
-  const result = render(
+  const view = (workspace: typeof demoWorkspace) => (
     <Workspace
-      workspace={demoWorkspace}
+      workspace={workspace}
       config={defaultRuntimeConfig}
       theme="aqua"
       preferences={defaultUserPreferences}
       onThemeChange={vi.fn()}
       onPreferencesChange={onPreferencesChange}
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
+      onMarkRoomRead={overrides.onMarkRoomRead}
       onSignOut={vi.fn()}
-    />,
+    />
   );
-  return { ...result, onPreferencesChange };
+  const result = render(view(overrides.workspace ?? demoWorkspace));
+  return {
+    ...result,
+    onPreferencesChange,
+    rerenderWorkspace: (workspace: typeof demoWorkspace) => result.rerender(view(workspace)),
+  };
 }
 
 describe('Workspace demo', () => {
   beforeEach(() => {
     localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it('sends a local demo message through the real composer interaction', () => {
@@ -58,6 +107,239 @@ describe('Workspace demo', () => {
     expect(screen.getByLabelText('Read by Aimie')).toBeInTheDocument();
     expect(screen.getByLabelText('Read by PixelGhost')).toBeInTheDocument();
     expect(container.querySelectorAll('.read-indicator')).toHaveLength(3);
+  });
+
+  it('marks and positions the unread boundary when returning to a room', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    renderWorkspace();
+
+    expect(screen.getByRole('separator', { name: '3 unread messages below' })).toHaveTextContent('3 unread messages');
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'center' });
+  });
+
+  it('trusts a latest-message receipt over a stale unread count', () => {
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.readUpToMessageId = 'm5';
+    room.unreadCount = 7;
+    room.timelineUnreadCount = 7;
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(840);
+
+    renderWorkspace({ workspace });
+
+    expect(screen.queryByRole('separator', { name: /unread/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Messages' }).scrollTop).toBe(840);
+    scrollHeight.mockRestore();
+  });
+
+  it('counts unread messages from a loaded receipt instead of the notification count', () => {
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.readUpToMessageId = 'm2';
+    room.unreadCount = 1;
+    room.timelineUnreadCount = 1;
+
+    renderWorkspace({ workspace });
+
+    expect(screen.getByRole('separator', { name: '3 unread messages below' })).toBeInTheDocument();
+  });
+
+  it('keeps the unread boundary centered when initial history is prepended', () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const initialWorkspace = structuredClone(demoWorkspace);
+    initialWorkspace.mode = 'matrix';
+    const initialRoom = initialWorkspace.rooms.find((room) => room.id === 'welcome');
+    if (!initialRoom) throw new Error('Welcome Lounge fixture is missing');
+    initialRoom.readUpToMessageId = undefined;
+    initialWorkspace.messagesByRoom.welcome = initialWorkspace.messagesByRoom.welcome.slice(-2);
+    const { rerenderWorkspace } = renderWorkspace({ workspace: initialWorkspace });
+
+    expect(screen.getByRole('separator', { name: '3 unread messages below' }).nextElementSibling).toHaveTextContent('Encryption is on');
+
+    const loadedWorkspace = structuredClone(demoWorkspace);
+    loadedWorkspace.mode = 'matrix';
+    const loadedRoom = loadedWorkspace.rooms.find((room) => room.id === 'welcome');
+    if (!loadedRoom) throw new Error('Welcome Lounge fixture is missing');
+    loadedRoom.readUpToMessageId = undefined;
+    rerenderWorkspace(loadedWorkspace);
+
+    expect(screen.getByRole('separator', { name: '3 unread messages below' }).nextElementSibling).toHaveTextContent('carefully polishes');
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears loaded-message search before positioning a newly selected room', () => {
+    renderWorkspace();
+    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), {
+      target: { value: 'not in Mara' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
+
+    expect(screen.queryByPlaceholderText('Search loaded messages')).not.toBeInTheDocument();
+    expect(screen.getByRole('separator', { name: '1 unread message below' })).toBeInTheDocument();
+  });
+
+  it('lands at the latest message when the room has no unread messages', () => {
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(840);
+
+    renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+
+    expect(screen.queryByRole('separator', { name: /unread/ })).not.toBeInTheDocument();
+    expect(timeline.scrollTop).toBe(840);
+    scrollHeight.mockRestore();
+  });
+
+  it('returns to the latest message after an optimistic local read update', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.mode = 'matrix';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const scrollHeight = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(840);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
+
+    expect(screen.getByRole('separator', { name: '3 unread messages below' })).toBeInTheDocument();
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome'));
+
+    const readWorkspace = structuredClone(workspace);
+    const readRoom = readWorkspace.rooms.find((room) => room.id === 'welcome');
+    if (!readRoom) throw new Error('Welcome Lounge fixture is missing');
+    readRoom.unreadCount = 0;
+    readRoom.timelineUnreadCount = 0;
+    readRoom.readUpToMessageId = 'm5';
+    rerenderWorkspace(readWorkspace);
+
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+
+    expect(screen.queryByRole('separator', { name: /unread/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Messages' }).scrollTop).toBe(840);
+    scrollHeight.mockRestore();
+  });
+
+  it('stays at the latest message when rendered rows change height', () => {
+    const notifyResize = installResizeObserver();
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    let height = 840;
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => height);
+
+    renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    expect(timeline.scrollTop).toBe(840);
+
+    height = 1120;
+    notifyResize();
+
+    expect(timeline.scrollTop).toBe(1120);
+  });
+
+  it('keeps the unread boundary anchored when rendered rows change height', () => {
+    const notifyResize = installResizeObserver();
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    let markerTop = 320;
+    vi.spyOn(Element.prototype, 'getBoundingClientRect').mockImplementation(function (this: Element) {
+      if (this.classList.contains('timeline')) return rect(100);
+      if (this.classList.contains('unread-divider')) return rect(markerTop);
+      return rect(0);
+    });
+
+    renderWorkspace();
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    markerTop = 395;
+    notifyResize();
+
+    expect(timeline.scrollTop).toBe(75);
+  });
+
+  it('does not follow row growth after the user scrolls away', async () => {
+    const notifyResize = installResizeObserver();
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    let height = 840;
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => height);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+
+    renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+
+    height = 1120;
+    notifyResize();
+
+    expect(timeline.scrollTop).toBe(400);
+  });
+
+  it('marks newer messages read only after a detached viewport returns to the bottom', async () => {
+    installResizeObserver();
+    const workspace = structuredClone(demoWorkspace);
+    workspace.mode = 'matrix';
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    let height = 840;
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockImplementation(() => height);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
+
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+
+    const updatedWorkspace = structuredClone(workspace);
+    updatedWorkspace.messagesByRoom.welcome.push({
+      id: 'm6',
+      roomId: 'welcome',
+      senderId: '@mara:example.com',
+      senderName: 'Mara',
+      body: 'One more message',
+      timestamp: Date.now(),
+      kind: 'text',
+      isOwn: false,
+    });
+    height = 1000;
+    rerenderWorkspace(updatedWorkspace);
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+
+    timeline.scrollTop = 800;
+    fireEvent.scroll(timeline);
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(2));
   });
 
   it('opens a quick emoji tray and inserts the selected emoji', () => {

@@ -25,7 +25,7 @@ A checked item has a working implementation and a graceful failure/unsupported s
 ### Messaging, media, rooms, and spaces
 
 - [x] Responsive full-viewport shell, dedicated DM scope, nested Matrix space navigation, drag/keyboard room and subspace organization, top-level space ordering, presence, aggregated unread/highlight counts, and authenticated avatars.
-- [x] Initial history plus continuous upward scrollback with a bounded 250-event rendered timeline.
+- [x] Initial history, Discord-like unread-boundary/latest-message resume, and continuous upward scrollback with a bounded 250-event rendered timeline.
 - [x] Text, notices, emotes, replies, edits, redaction, reactions, pins, typing state, and read-receipt sending.
 - [x] Image/video/audio/file rendering and authenticated encrypted-attachment decryption.
 - [x] Encrypted/unencrypted uploads with limits, progress, cancellation, and retry.

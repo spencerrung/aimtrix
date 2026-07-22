@@ -6,7 +6,7 @@ import {
   parseDirectBackgrounds,
   parseRoomBackground,
 } from './roomBackgrounds';
-import { resolveReadReceiptTargets } from './readReceipts';
+import { resolveReadReceiptTarget, resolveReadReceiptTargets } from './readReceipts';
 import {
   resolveSpaceRelations,
   type SpaceHierarchyRoomData,
@@ -531,7 +531,18 @@ export function buildWorkspaceSnapshot(
     const directMember = isDirect ? otherDirectMember(room, userId) : undefined;
     const latest = messages.at(-1);
     const unreadCount = room.getUnreadNotificationCount('total' as NotificationCountType);
+    const timelineUnreadCount = room.getRoomUnreadNotificationCount(
+      'total' as NotificationCountType,
+    );
     const highlightCount = room.getUnreadNotificationCount('highlight' as NotificationCountType);
+    const readUpToEventId = timelineUnreadCount > 0 ? room.getEventReadUpTo(userId) : null;
+    const readUpToMessageId = readUpToEventId
+      ? resolveReadReceiptTarget(
+          room.getLiveTimeline().getEvents().flatMap((event) => event.getId() ?? []),
+          messages.map((message) => message.id),
+          readUpToEventId,
+        )
+      : undefined;
     const ownPowerLevel = room.getMember(userId)?.powerLevel ?? 0;
     const powerLevelEvent = room.currentState.getStateEvents(matrixEventType.powerLevels, '');
     const powerLevelContent = powerLevelEvent?.getContent<{
@@ -576,6 +587,8 @@ export function buildWorkspaceSnapshot(
         : roomTopic(room),
       lastMessage: latest?.body ?? roomTopic(room) ?? 'No messages yet',
       unreadCount,
+      timelineUnreadCount,
+      readUpToMessageId,
       highlighted: highlightCount > 0,
       encrypted: room.hasEncryptionStateEvent(),
       topic: roomTopic(room),

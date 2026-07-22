@@ -22,7 +22,10 @@ function fakeEvent(
   } as unknown as MatrixEvent;
 }
 
-function fakeClient(events: MatrixEvent[]): MatrixClient {
+function fakeClient(
+  events: MatrixEvent[],
+  options: { unreadCount?: number; timelineUnreadCount?: number; readUpToEventId?: string } = {},
+): MatrixClient {
   const room = {
     roomId: '!room:test',
     name: 'Sticker Room',
@@ -32,7 +35,10 @@ function fakeClient(events: MatrixEvent[]): MatrixClient {
     getMember: vi.fn().mockReturnValue(undefined),
     getMembers: () => [],
     getJoinedMembers: () => [],
-    getUnreadNotificationCount: () => 0,
+    getUnreadNotificationCount: (type: string) => type === 'total' ? options.unreadCount ?? 0 : 0,
+    getRoomUnreadNotificationCount: (type: string) =>
+      type === 'total' ? options.timelineUnreadCount ?? options.unreadCount ?? 0 : 0,
+    getEventReadUpTo: () => options.readUpToEventId ?? null,
     getLastActiveTimestamp: () => 0,
     getDefaultRoomName: () => 'Sticker Room',
     getMxcAvatarUrl: () => undefined,
@@ -95,6 +101,38 @@ describe('buildWorkspaceSnapshot stickers', () => {
     });
     expect((message.encryptedFile as unknown as { url?: string })?.url).toBe('mxc://test/encrypted-sticker');
     expect(message.encryptedFile?.key.k).toBe('key');
+  });
+});
+
+describe('buildWorkspaceSnapshot read position', () => {
+  it('maps the current user receipt to the preceding rendered message', () => {
+    const client = fakeClient(
+      [
+        fakeEvent('m.room.message', { msgtype: 'm.text', body: 'read' }, '$read:test'),
+        fakeEvent('m.reaction', {}, '$reaction:test'),
+        fakeEvent('m.room.message', { msgtype: 'm.text', body: 'unread' }, '$unread:test'),
+      ],
+      { unreadCount: 1, readUpToEventId: '$reaction:test' },
+    );
+
+    const snapshot = buildWorkspaceSnapshot(client, 'online');
+
+    expect(snapshot.rooms[0].readUpToMessageId).toBe('$read:test');
+  });
+
+  it('does not place aggregate thread-only unreads on the main timeline', () => {
+    const client = fakeClient(
+      [fakeEvent('m.room.message', { msgtype: 'm.text', body: 'read' }, '$read:test')],
+      { unreadCount: 4, timelineUnreadCount: 0, readUpToEventId: '$read:test' },
+    );
+
+    const snapshot = buildWorkspaceSnapshot(client, 'online');
+
+    expect(snapshot.rooms[0]).toMatchObject({
+      unreadCount: 4,
+      timelineUnreadCount: 0,
+      readUpToMessageId: undefined,
+    });
   });
 });
 

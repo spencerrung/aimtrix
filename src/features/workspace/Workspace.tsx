@@ -39,6 +39,7 @@ import {
   X,
 } from 'lucide-react';
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -1262,6 +1263,51 @@ const TimelineMessage = memo(function TimelineMessage({
   );
 });
 
+interface EntryUnreadMarker {
+  roomId: string;
+  count: number;
+  firstUnreadMessageId?: string;
+  loadedFirstMessageId?: string;
+  resolvedFromReceipt: boolean;
+}
+
+function resolveEntryUnreadMarker(
+  room: RoomSummary | undefined,
+  messages: MessageSummary[],
+  unreadCountOverride?: number,
+): EntryUnreadMarker | undefined {
+  if (!room) return undefined;
+  const count = unreadCountOverride ?? room.timelineUnreadCount ?? room.unreadCount;
+  if (count <= 0) return undefined;
+  if (!messages.length) {
+    return { roomId: room.id, count, resolvedFromReceipt: false };
+  }
+  const readIndex = room.readUpToMessageId
+    ? messages.findIndex((message) => message.id === room.readUpToMessageId)
+    : -1;
+  if (readIndex >= 0) {
+    const firstUnreadIndex = readIndex + 1;
+    if (firstUnreadIndex >= messages.length) return undefined;
+    return {
+      roomId: room.id,
+      count: messages.length - firstUnreadIndex,
+      firstUnreadMessageId: messages[firstUnreadIndex].id,
+      loadedFirstMessageId: messages[0].id,
+      resolvedFromReceipt: true,
+    };
+  }
+  const firstUnreadIndex = Math.max(0, messages.length - count);
+  return {
+    roomId: room.id,
+    count,
+    firstUnreadMessageId: messages[firstUnreadIndex]?.id,
+    loadedFirstMessageId: messages[0]?.id,
+    resolvedFromReceipt: false,
+  };
+}
+
+type TimelineViewportMode = 'unread' | 'bottom' | 'detached';
+
 function Conversation({
   room,
   messages,
@@ -1288,6 +1334,7 @@ function Conversation({
   onCancelUpload,
   onRetryUpload,
   onLoadMore,
+  onReadLatest,
   gifEndpoint,
   stickerPacks,
   onSendGif,
@@ -1321,6 +1368,7 @@ function Conversation({
   onCancelUpload: () => void;
   onRetryUpload: () => void;
   onLoadMore: () => Promise<void>;
+  onReadLatest?: () => Promise<void>;
   gifEndpoint?: string;
   stickerPacks: Array<{ name: string; manifestUrl: string }>;
   onSendGif: (gif: GifChoice) => void;
@@ -1330,10 +1378,17 @@ function Conversation({
   autoplayMedia: boolean;
 }) {
   const timeline = useRef<HTMLElement>(null);
+  const timelineContent = useRef<HTMLDivElement>(null);
   const loadingHistory = useRef(false);
-  const stickToBottom = useRef(true);
-  const scrollPositions = useRef(new Map<string, number>());
+  const historyRequestToken = useRef(0);
+  const viewportMode = useRef<TimelineViewportMode>('bottom');
+  const positionedUnreadMarker = useRef<string | undefined>(undefined);
+  const unreadAnchorTop = useRef<number | undefined>(undefined);
+  const programmaticTimelineScroll = useRef(false);
+  const programmaticScrollGeneration = useRef(0);
+  const previousTimelineMessages = useRef<MessageSummary[] | undefined>(undefined);
   const previousRoomId = useRef<string | undefined>(undefined);
+  const reportedRead = useRef<{ roomId: string; eventId: string } | undefined>(undefined);
   const catalogRequested = useRef(false);
   const [colonIndex, setColonIndex] = useState(0);
   const [colonDismissed, setColonDismissed] = useState<string>();
@@ -1369,6 +1424,50 @@ function Conversation({
         `${message.senderName} ${message.body}`.toLowerCase().includes(messageQuery.trim().toLowerCase()),
       )
     : messages;
+  const [entryUnreadState, setEntryUnreadState] = useState<{
+    roomId?: string;
+    marker?: EntryUnreadMarker;
+  }>(() => ({
+    roomId: room?.id,
+    marker: resolveEntryUnreadMarker(room, messages),
+  }));
+  if (entryUnreadState.roomId !== room?.id) {
+    setEntryUnreadState({
+      roomId: room?.id,
+      marker: resolveEntryUnreadMarker(room, messages),
+    });
+    if (searchOpen) setSearchOpen(false);
+    if (messageQuery) setMessageQuery('');
+  } else if (
+    entryUnreadState.marker &&
+    (!entryUnreadState.marker.firstUnreadMessageId || !entryUnreadState.marker.resolvedFromReceipt)
+  ) {
+    const refinedMarker = resolveEntryUnreadMarker(
+      room,
+      messages,
+      entryUnreadState.marker.count,
+    );
+    const historyPrepended = entryUnreadState.marker.loadedFirstMessageId
+      ? messages.findIndex(
+          (message) => message.id === entryUnreadState.marker?.loadedFirstMessageId,
+        ) > 0
+      : false;
+    if (
+      refinedMarker &&
+      (
+        (!entryUnreadState.marker.firstUnreadMessageId && refinedMarker.firstUnreadMessageId) ||
+        (!entryUnreadState.marker.resolvedFromReceipt && refinedMarker.resolvedFromReceipt) ||
+        (
+          !entryUnreadState.marker.resolvedFromReceipt &&
+          historyPrepended &&
+          refinedMarker.firstUnreadMessageId !== entryUnreadState.marker.firstUnreadMessageId
+        )
+      )
+    ) {
+      setEntryUnreadState({ roomId: room?.id, marker: refinedMarker });
+    }
+  }
+  const activeEntryUnreadMarker = entryUnreadState.marker;
   const fallbackEmojis = ['😀', '😂', '🥹', '😍', '😎', '🤔', '😭', '😡', '👍', '👀', '✨', '💙', '🎉', '🔥', '🫧', '☕', '💾', '🌈'];
   const visibleEmojis = (emojiCatalog.length
     ? emojiCatalog
@@ -1412,24 +1511,154 @@ function Conversation({
     }
   };
 
+  const runProgrammaticScroll = useCallback((scroll: () => void) => {
+    const generation = programmaticScrollGeneration.current + 1;
+    programmaticScrollGeneration.current = generation;
+    programmaticTimelineScroll.current = true;
+    scroll();
+    requestAnimationFrame(() => {
+      if (programmaticScrollGeneration.current === generation) {
+        programmaticTimelineScroll.current = false;
+      }
+    });
+  }, []);
+
+  const restoreTimelineViewport = useCallback(() => {
+    const element = timeline.current;
+    if (!element) return;
+    if (viewportMode.current === 'bottom') {
+      runProgrammaticScroll(() => {
+        element.scrollTop = element.scrollHeight;
+      });
+      return;
+    }
+    if (viewportMode.current !== 'unread' || unreadAnchorTop.current === undefined) return;
+    const marker = element.querySelector<HTMLElement>('.unread-divider');
+    if (!marker) return;
+    const currentTop = marker.getBoundingClientRect().top - element.getBoundingClientRect().top;
+    const delta = currentTop - unreadAnchorTop.current;
+    if (Math.abs(delta) < 0.5) return;
+    runProgrammaticScroll(() => {
+      element.scrollTop += delta;
+    });
+  }, [runProgrammaticScroll]);
+
   useLayoutEffect(() => {
     const element = timeline.current;
     if (!element) return;
-    if (previousRoomId.current !== room?.id) {
+    const roomChanged = previousRoomId.current !== room?.id;
+    if (roomChanged) {
       previousRoomId.current = room?.id;
-      const saved = room?.id ? scrollPositions.current.get(room.id) : undefined;
-      element.scrollTop = saved ?? element.scrollHeight;
-      stickToBottom.current =
-        saved === undefined || element.scrollHeight - saved - element.clientHeight < 180;
-    } else if (stickToBottom.current) {
-      element.scrollTop = element.scrollHeight;
+      positionedUnreadMarker.current = undefined;
+      unreadAnchorTop.current = undefined;
+      viewportMode.current = activeEntryUnreadMarker ? 'unread' : 'bottom';
+      previousTimelineMessages.current = undefined;
+      historyRequestToken.current += 1;
+      loadingHistory.current = false;
     }
-  }, [room?.id, messages.length]);
+    const marker = element.querySelector<HTMLElement>('.unread-divider');
+    const messagesChanged = previousTimelineMessages.current !== messages;
+    const needsFallbackReposition = typeof ResizeObserver === 'undefined' && messagesChanged;
+    if (
+      marker &&
+      activeEntryUnreadMarker?.firstUnreadMessageId &&
+      viewportMode.current === 'unread' &&
+      (
+        positionedUnreadMarker.current !== activeEntryUnreadMarker.firstUnreadMessageId ||
+        needsFallbackReposition
+      )
+    ) {
+      runProgrammaticScroll(() => {
+        if (typeof marker.scrollIntoView === 'function') {
+          marker.scrollIntoView({ block: 'center' });
+        } else {
+          element.scrollTop = marker.offsetTop;
+        }
+      });
+      positionedUnreadMarker.current = activeEntryUnreadMarker.firstUnreadMessageId;
+      unreadAnchorTop.current =
+        marker.getBoundingClientRect().top - element.getBoundingClientRect().top;
+    } else if (!activeEntryUnreadMarker && (roomChanged || viewportMode.current === 'bottom')) {
+      viewportMode.current = 'bottom';
+      runProgrammaticScroll(() => {
+        element.scrollTop = element.scrollHeight;
+      });
+    }
+    previousTimelineMessages.current = messages;
+  }, [
+    activeEntryUnreadMarker,
+    messages,
+    room?.id,
+    runProgrammaticScroll,
+  ]);
+
+  useLayoutEffect(() => {
+    const content = timelineContent.current;
+    if (!content || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(restoreTimelineViewport);
+    observer.observe(content);
+    return () => observer.disconnect();
+  }, [restoreTimelineViewport, room?.id]);
+
+  const latestMessageId = messages.at(-1)?.id;
+  const activeRoomId = room?.id;
+  const reportLatestRead = useCallback(() => {
+    if (!activeRoomId || !latestMessageId || !onReadLatest) return;
+    if (
+      reportedRead.current?.roomId === activeRoomId &&
+      reportedRead.current.eventId === latestMessageId
+    ) {
+      return;
+    }
+    const requested = { roomId: activeRoomId, eventId: latestMessageId };
+    reportedRead.current = requested;
+    void onReadLatest().catch(() => {
+      if (
+        reportedRead.current?.roomId === requested.roomId &&
+        reportedRead.current.eventId === requested.eventId
+      ) {
+        reportedRead.current = undefined;
+      }
+    });
+  }, [activeRoomId, latestMessageId, onReadLatest]);
+
+  useEffect(() => {
+    const roomChanged = reportedRead.current?.roomId !== activeRoomId;
+    if (roomChanged || viewportMode.current === 'bottom') reportLatestRead();
+  }, [activeRoomId, latestMessageId, reportLatestRead]);
 
   const handleMediaLoad = useCallback(() => {
+    restoreTimelineViewport();
+  }, [restoreTimelineViewport]);
+
+  const handleTimelineScroll = useCallback(() => {
     const element = timeline.current;
-    if (element && stickToBottom.current) element.scrollTop = element.scrollHeight;
-  }, []);
+    if (!element || programmaticTimelineScroll.current) return;
+    const atBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
+    viewportMode.current = atBottom ? 'bottom' : 'detached';
+    unreadAnchorTop.current = undefined;
+    if (atBottom) reportLatestRead();
+    if (element.scrollTop > 80 || loadingHistory.current) return;
+    loadingHistory.current = true;
+    const previousHeight = element.scrollHeight;
+    const roomAtStart = room?.id;
+    const requestToken = historyRequestToken.current + 1;
+    historyRequestToken.current = requestToken;
+    void onLoadMore().finally(() => {
+      requestAnimationFrame(() => {
+        if (
+          timeline.current &&
+          previousRoomId.current === roomAtStart &&
+          historyRequestToken.current === requestToken &&
+          viewportMode.current === 'detached'
+        ) {
+          timeline.current.scrollTop += timeline.current.scrollHeight - previousHeight;
+        }
+        if (historyRequestToken.current === requestToken) loadingHistory.current = false;
+      });
+    });
+  }, [onLoadMore, reportLatestRead, room?.id]);
 
   const anyTrayOpen = gifOpen || stickerOpen || emojiOpen;
 
@@ -1612,57 +1841,58 @@ function Conversation({
         </label>
       ) : null}
 
-      <section ref={timeline} className="timeline" aria-label="Messages" aria-live="polite" onScroll={() => {
-        const element = timeline.current;
-        if (!element) return;
-        stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < 180;
-        if (room?.id) scrollPositions.current.set(room.id, element.scrollTop);
-        if (element.scrollTop > 80 || loadingHistory.current) return;
-        loadingHistory.current = true;
-        const previousHeight = element.scrollHeight;
-        const roomAtStart = room?.id;
-        void onLoadMore().finally(() => {
-          requestAnimationFrame(() => {
-            if (timeline.current && previousRoomId.current === roomAtStart) {
-              timeline.current.scrollTop += timeline.current.scrollHeight - previousHeight;
-            }
-            loadingHistory.current = false;
-          });
-        });
-      }}>
-        <div className="conversation-intro">
-          <Avatar
-            name={room.name}
-            src={room.avatarUrl}
-            color={colorForId(room.id)}
-            presence={room.presence}
-            size="large"
-          />
-          <h1>{room.name}</h1>
-          <p>{room.statusMessage || `This is the beginning of ${room.name}. Say hello.`}</p>
-          {room.encrypted ? (
-            <span className="intro-encryption"><Lock size={12} /> Messages in this room are encrypted.</span>
-          ) : null}
-        </div>
-        {visibleMessages.length ? (
-          visibleMessages.map((message) => (
-            <TimelineMessage
-              message={message}
-              dataSaver={dataSaver}
-              autoplayMedia={autoplayMedia}
-              key={message.id}
-              onReply={onStartReply}
-              onEdit={onStartEdit}
-              onDelete={onDeleteMessage}
-              onPin={onTogglePin}
-              canPin={Boolean(room.canManage)}
-              onReact={onReact}
-              onMediaLoad={handleMediaLoad}
+      <section
+        ref={timeline}
+        className="timeline"
+        aria-label="Messages"
+        aria-live="polite"
+        onScroll={handleTimelineScroll}
+      >
+        <div ref={timelineContent} className="timeline-content">
+          <div className="conversation-intro">
+            <Avatar
+              name={room.name}
+              src={room.avatarUrl}
+              color={colorForId(room.id)}
+              presence={room.presence}
+              size="large"
             />
-          ))
-        ) : (
-          <div className="timeline-empty"><Sparkles size={20} /> {messageQuery ? 'No loaded messages match.' : 'No messages here yet.'}</div>
-        )}
+            <h1>{room.name}</h1>
+            <p>{room.statusMessage || `This is the beginning of ${room.name}. Say hello.`}</p>
+            {room.encrypted ? (
+              <span className="intro-encryption"><Lock size={12} /> Messages in this room are encrypted.</span>
+            ) : null}
+          </div>
+          {visibleMessages.length ? (
+            visibleMessages.map((message) => (
+              <Fragment key={message.id}>
+                {activeEntryUnreadMarker?.firstUnreadMessageId === message.id ? (
+                  <div
+                    className="unread-divider"
+                    role="separator"
+                    aria-label={`${activeEntryUnreadMarker.count} unread ${activeEntryUnreadMarker.count === 1 ? 'message' : 'messages'} below`}
+                  >
+                    <span>{activeEntryUnreadMarker.count} unread {activeEntryUnreadMarker.count === 1 ? 'message' : 'messages'}</span>
+                  </div>
+                ) : null}
+                <TimelineMessage
+                  message={message}
+                  dataSaver={dataSaver}
+                  autoplayMedia={autoplayMedia}
+                  onReply={onStartReply}
+                  onEdit={onStartEdit}
+                  onDelete={onDeleteMessage}
+                  onPin={onTogglePin}
+                  canPin={Boolean(room.canManage)}
+                  onReact={onReact}
+                  onMediaLoad={handleMediaLoad}
+                />
+              </Fragment>
+            ))
+          ) : (
+            <div className="timeline-empty"><Sparkles size={20} /> {messageQuery ? 'No loaded messages match.' : 'No messages here yet.'}</div>
+          )}
+        </div>
       </section>
 
       <div className="typing-strip" aria-live="polite">
@@ -2527,14 +2757,16 @@ export function Workspace({
     });
   }, [effectiveRoomId, loadEarlier, onRoomSelected, workspace.mode]);
 
-  useEffect(() => {
+  const markEffectiveRoomRead = useCallback((): Promise<void> => {
     if (
-      workspace.mode === 'matrix' &&
-      effectiveRoomId &&
-      preferences.sendReadReceipts
+      workspace.mode !== 'matrix' ||
+      !effectiveRoomId ||
+      !preferences.sendReadReceipts ||
+      !onMarkRoomRead
     ) {
-      void onMarkRoomRead?.(effectiveRoomId);
+      return Promise.resolve();
     }
+    return onMarkRoomRead(effectiveRoomId);
   }, [effectiveRoomId, onMarkRoomRead, preferences.sendReadReceipts, workspace.mode]);
 
   const unreadTotal = useMemo(
@@ -2552,8 +2784,7 @@ export function Workspace({
     setNotice(undefined);
     setReplyTarget(undefined);
     setEditingMessage(undefined);
-    if (preferences.sendReadReceipts) void onMarkRoomRead?.(roomId);
-  }, [preferences.sendReadReceipts, onMarkRoomRead]);
+  }, []);
 
   useEffect(() => {
     try {
@@ -2921,6 +3152,7 @@ export function Workspace({
                 await loadEarlier(effectiveRoomId);
               }
             }}
+            onReadLatest={markEffectiveRoomRead}
             gifEndpoint={config.features.gifs ? config.gifProvider?.searchEndpoint : undefined}
             stickerPacks={availableStickerPacks}
             onSendGif={(gif) => void sendGif(gif)}

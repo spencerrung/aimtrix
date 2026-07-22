@@ -53,6 +53,8 @@ export interface RoomSummary {
   statusMessage?: string;
   lastMessage: string;
   unreadCount: number;
+  timelineUnreadCount?: number;
+  readUpToMessageId?: string;
   highlighted: boolean;
   encrypted: boolean;
   topic?: string;

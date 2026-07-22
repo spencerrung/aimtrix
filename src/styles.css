@@ -515,6 +515,9 @@
   .conversation-intro h1 { margin: 10px 0 3px; font-size: 1.45rem; letter-spacing: -0.035em; }
   .conversation-intro p { margin: 0; color: var(--text-soft); font-size: 0.78rem; }
   .conversation-intro .intro-encryption { display: inline-flex; align-items: center; gap: 4px; margin-top: 9px; color: #4f8254; font-size: 0.64rem; }
+  .unread-divider { display: flex; align-items: center; gap: 9px; margin: 10px 6px 1px; color: var(--blue-deep); font-size: 0.65rem; font-weight: 700; }
+  .unread-divider::before, .unread-divider::after { height: 1px; flex: 1; content: ""; background: color-mix(in srgb, var(--blue) 58%, var(--border-soft)); }
+  .unread-divider span { padding: 3px 8px; border: 1px solid color-mix(in srgb, var(--blue) 44%, var(--border)); border-radius: 999px; background: color-mix(in srgb, var(--blue-soft) 76%, var(--surface-raised)); }
   .timeline-message { position: relative; display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; padding: 11px 6px 7px; }
   .timeline-message + .timeline-message { border-top: 1px solid color-mix(in srgb, var(--border-soft) 48%, transparent); }
   .timeline-message:hover { background: color-mix(in srgb, var(--surface-soft) 70%, transparent); }

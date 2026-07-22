@@ -1,6 +1,7 @@
 import type {
   MatrixClient,
   MatrixEvent,
+  NotificationCountType,
   Room,
   SyncState,
 } from 'matrix-js-sdk';
@@ -1564,16 +1565,61 @@ export class MatrixController {
   public async markRoomRead(roomId: string): Promise<void> {
     const client = this.client;
     const room = client?.getRoom(roomId);
-    const lastEvent = room?.getLiveTimeline().getEvents().at(-1) ?? null;
+    const timelineEvents = room?.getLiveTimeline().getEvents() ?? [];
+    const inMainTimeline = this.sdk?.inMainTimelineForReceipt;
+    let lastEvent: MatrixEvent | undefined;
+    if (inMainTimeline) {
+      for (let index = timelineEvents.length - 1; index >= 0; index -= 1) {
+        const candidate = timelineEvents[index];
+        if (inMainTimeline(candidate)) {
+          lastEvent = candidate;
+          break;
+        }
+      }
+    } else {
+      lastEvent = timelineEvents.at(-1);
+    }
     const lastEventId = lastEvent?.getId() ?? null;
     if (!client || !room || !lastEvent || !lastEventId) return;
-    // Sent receipts echo back through sync and re-render the workspace, which
-    // re-invokes mark-room-read callers. Stay idempotent so that cycle is a
-    // no-op instead of a request loop.
+    const previousTotal = room.getRoomUnreadNotificationCount(
+      'total' as NotificationCountType,
+    );
+    const previousHighlight = room.getRoomUnreadNotificationCount(
+      'highlight' as NotificationCountType,
+    );
     const currentReceiptId = room.getReadReceiptForUserId(client.getSafeUserId(), true)?.eventId;
-    if (currentReceiptId === lastEventId || this.lastReadReceiptByRoom.get(roomId) === lastEventId) return;
+    const alreadyRead =
+      currentReceiptId === lastEventId || this.lastReadReceiptByRoom.get(roomId) === lastEventId;
+    if (previousTotal > 0 || previousHighlight > 0) {
+      room.setUnreadNotificationCount('total' as NotificationCountType, 0);
+      room.setUnreadNotificationCount('highlight' as NotificationCountType, 0);
+      this.bumpRoomVersion(roomId);
+      this.scheduleWorkspacePublish();
+    }
+    if (alreadyRead) return;
+
     this.lastReadReceiptByRoom.set(roomId, lastEventId);
-    await client.sendReadReceipt(lastEvent);
+    try {
+      await client.sendReadReceipt(lastEvent);
+    } catch (error) {
+      if (this.lastReadReceiptByRoom.get(roomId) === lastEventId) {
+        this.lastReadReceiptByRoom.delete(roomId);
+        const currentLastEventId = room.getLiveTimeline().getEvents().at(-1)?.getId();
+        if (currentLastEventId === lastEventId) {
+          room.setUnreadNotificationCount(
+            'total' as NotificationCountType,
+            previousTotal,
+          );
+          room.setUnreadNotificationCount(
+            'highlight' as NotificationCountType,
+            previousHighlight,
+          );
+          this.bumpRoomVersion(roomId);
+          this.scheduleWorkspacePublish();
+        }
+      }
+      throw error;
+    }
   }
 
   public async sendReply(
