@@ -19,7 +19,7 @@
   "dependencies": {
     "lucide-react": "^1.25.0",
     "matrix-encrypt-attachment": "^1.0.3",
-    "matrix-js-sdk": "^41.9.0",
+    "matrix-js-sdk": "^42.0.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7"
   },
