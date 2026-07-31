@@ -39,7 +39,7 @@ test('workspace navigation, drawer, and personalization are functional', async (
 test('desktop workspace panels resize, collapse, and restore', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'mobile', 'Mobile uses the existing one-surface navigation flow.');
   const buddyDrawer = page.locator('.buddy-panel');
-  const buddyResize = page.getByRole('separator', { name: 'Resize buddy and room drawer' });
+  const buddyResize = page.getByRole('separator', { name: 'Resize rooms and conversation' });
   const bounds = await buddyResize.boundingBox();
   if (!bounds) throw new Error('Buddy resize handle is not visible.');
   await page.mouse.move(bounds.x + 4, bounds.y + bounds.height / 2);
@@ -47,12 +47,12 @@ test('desktop workspace panels resize, collapse, and restore', async ({ page }, 
   await page.mouse.move(bounds.x - 400, bounds.y + bounds.height / 2);
   await page.mouse.up();
   await expect(buddyDrawer).toBeHidden();
-  await page.getByRole('button', { name: 'Rooms' }).click();
+  await page.getByRole('button', { name: 'Expand rooms' }).click();
   await expect(buddyDrawer).toBeVisible();
 
   await page.getByRole('button', { name: 'Collapse conversation' }).click();
   await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeHidden();
-  await page.getByRole('button', { name: 'Conversation' }).click();
+  await page.getByRole('button', { name: 'Expand conversation' }).click();
   await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
 
   await page.getByRole('button', { name: /2 replies/ }).click();

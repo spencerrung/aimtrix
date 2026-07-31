@@ -5,7 +5,6 @@ import {
   Ban,
   Check,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   Copy,
   DoorOpen,
@@ -3381,7 +3380,7 @@ export function Workspace({
             onSelect={selectSpace}
             onReorder={onReorderRootSpaces}
           /> : null}
-          {!collapsedPanels.spaces ? <div className="workspace-panel-resize" role="separator" aria-label="Resize conversations" aria-orientation="vertical" aria-valuemin={52} aria-valuemax={180} aria-valuenow={Math.round(panelWidths.spaces)} tabIndex={0} onPointerDown={(event) => startPanelResize('spaces', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('spaces', panelWidths.spaces - 12); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('spaces', panelWidths.spaces + 12); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('spaces', 52); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('spaces', 180); } }} /> : null}
+          {!collapsedPanels.spaces ? <div className="workspace-panel-resize workspace-panel-resize--spaces" role="separator" aria-label="Resize conversations" aria-orientation="vertical" aria-valuemin={52} aria-valuemax={180} aria-valuenow={Math.round(panelWidths.spaces)} tabIndex={0} onPointerDown={(event) => startPanelResize('spaces', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('spaces', panelWidths.spaces - 12); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('spaces', panelWidths.spaces + 12); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('spaces', 52); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('spaces', 180); } }} /> : null}
           {!collapsedPanels.buddies ? <BuddyPanel
             workspace={scopedWorkspace}
             selectedRoomId={effectiveRoomId}
@@ -3400,7 +3399,7 @@ export function Workspace({
             onRejectInvite={onRejectInvite}
             onReorganize={onReorganizeSpaceChildren}
           /> : null}
-          {!collapsedPanels.buddies ? <div className="workspace-panel-resize" role="separator" aria-label="Resize buddy and room drawer" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
+          {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           <Conversation
             room={selectedRoom}
             messages={messages}
@@ -3508,9 +3507,9 @@ export function Workspace({
             />
           ) : null}
           <div className="workspace-panel-restores" role="group" aria-label="Expand collapsed panels">
-            {collapsedPanels.spaces ? <button type="button" onClick={() => setPanelCollapsed('spaces', false)}><ChevronRight size={15} /> Conversations</button> : null}
-            {collapsedPanels.buddies ? <button type="button" onClick={() => setPanelCollapsed('buddies', false)}><ChevronRight size={15} /> Rooms</button> : null}
-            {collapsedPanels.conversation ? <button type="button" onClick={() => setPanelCollapsed('conversation', false)}><ChevronLeft size={15} /> Conversation</button> : null}
+            {collapsedPanels.spaces ? <button type="button" aria-label="Expand conversations" title="Expand conversations" onClick={() => setPanelCollapsed('spaces', false)}><Folder size={16} /></button> : null}
+            {collapsedPanels.buddies ? <button type="button" aria-label="Expand rooms" title="Expand rooms" onClick={() => setPanelCollapsed('buddies', false)}><Users size={16} /></button> : null}
+            {collapsedPanels.conversation ? <button type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={16} /></button> : null}
           </div>
         </div>
 
