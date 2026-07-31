@@ -53,10 +53,6 @@ test('desktop workspace panels resize, collapse, and restore', async ({ page }, 
   const conversationBounds = await page.getByRole('main', { name: /Welcome Lounge/ }).boundingBox();
   expect(Math.abs((buddyBounds?.y ?? 0) - (conversationBounds?.y ?? 0))).toBeLessThan(2);
 
-  const conversationResize = page.getByRole('separator', { name: 'Resize conversation' });
-  const conversationWidth = Number(await conversationResize.getAttribute('aria-valuenow'));
-  await conversationResize.press('ArrowLeft');
-  await expect.poll(async () => Number(await conversationResize.getAttribute('aria-valuenow'))).toBeLessThan(conversationWidth);
   await page.getByRole('button', { name: 'Collapse conversation' }).click();
   await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeHidden();
   await page.getByRole('button', { name: 'Expand conversation' }).click();

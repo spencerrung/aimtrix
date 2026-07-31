@@ -1427,7 +1427,6 @@ function Conversation({
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
-  const conversationSurface = useRef<HTMLElement>(null);
   const loadingHistory = useRef(false);
   const historyRequestToken = useRef(0);
   const viewportMode = useRef<TimelineViewportMode>('bottom');
@@ -1452,15 +1451,6 @@ function Conversation({
     }
   });
   const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
-  const [conversationWidth, setConversationWidth] = useState<number | undefined>(() => {
-    try {
-      const stored = Number(localStorage.getItem('aimtrix.conversation-width.v1'));
-      return Number.isFinite(stored) && stored >= 360 ? stored : undefined;
-    } catch {
-      return undefined;
-    }
-  });
-  const conversationResizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
   const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
   const fileInput = useRef<HTMLInputElement>(null);
   const mainComposer = useRef<HTMLTextAreaElement>(null);
@@ -1883,45 +1873,6 @@ function Conversation({
     }
   };
 
-  const setConversationPanelWidth = (width: number) => {
-    const next = Math.max(360, Math.min(width, Math.max(360, window.innerWidth - 120)));
-    setConversationWidth(next);
-    try { localStorage.setItem('aimtrix.conversation-width.v1', String(next)); } catch { /* best-effort */ }
-  };
-
-  const startConversationResize = (event: PointerEvent<HTMLDivElement>) => {
-    conversationResizeStart.current = {
-      x: event.clientX,
-      width: conversationSurface.current?.getBoundingClientRect().width ?? 720,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const resizeConversation = (event: PointerEvent<HTMLDivElement>) => {
-    const start = conversationResizeStart.current;
-    if (!start) return;
-    const width = start.width + event.clientX - start.x;
-    if (width < 312) {
-      onCollapseConversation();
-      return;
-    }
-    setConversationPanelWidth(width);
-  };
-
-  const stopConversationResize = (event?: PointerEvent<HTMLDivElement>) => {
-    const start = conversationResizeStart.current;
-    if (start && event && start.width + event.clientX - start.x < 312) onCollapseConversation();
-    conversationResizeStart.current = undefined;
-  };
-
-  const handleConversationResizeKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    const current = conversationWidth ?? conversationSurface.current?.getBoundingClientRect().width ?? 720;
-    if (event.key === 'ArrowLeft') { event.preventDefault(); setConversationPanelWidth(current - 24); }
-    if (event.key === 'ArrowRight') { event.preventDefault(); setConversationPanelWidth(current + 24); }
-    if (event.key === 'Home') { event.preventDefault(); setConversationPanelWidth(360); }
-    if (event.key === 'End') { event.preventDefault(); setConversationPanelWidth(window.innerWidth - 120); }
-  };
-
   if (!room) {
     return (
       <main className="conversation conversation--empty">
@@ -1934,12 +1885,10 @@ function Conversation({
 
   return (
     <main
-      ref={conversationSurface}
       className={`conversation${hasRoomBackground ? ` conversation--backdrop room-backdrop--${room.background?.preset ?? 'none'}${roomBackgroundSource ? ' has-custom-backdrop' : ''}` : ''}`}
-      style={{ ...roomBackgroundStyle, width: conversationWidth ? `${conversationWidth}px` : undefined }}
+      style={roomBackgroundStyle}
       aria-label={`Conversation with ${room.name}`}
     >
-      <div className="conversation__resize-edge" role="separator" aria-label="Resize conversation" aria-orientation="vertical" aria-valuemin={360} aria-valuemax={Math.max(360, window.innerWidth - 120)} aria-valuenow={Math.round(conversationWidth ?? 720)} tabIndex={0} onPointerDown={startConversationResize} onPointerMove={resizeConversation} onPointerUp={stopConversationResize} onPointerCancel={stopConversationResize} onKeyDown={handleConversationResizeKeyDown} />
       <header className="conversation-header">
         <IconButton label="Back to buddy list" onClick={onBack}>
           <ArrowLeft className="mobile-back" size={18} />
@@ -2852,16 +2801,15 @@ export function Workspace({
   });
   const [panelWidths, setPanelWidths] = useState(() => {
     try {
-      const stored = JSON.parse(localStorage.getItem('aimtrix.workspace-panel-widths.v1') || '{}') as Partial<{ buddies: number; conversation: number }>;
+      const stored = JSON.parse(localStorage.getItem('aimtrix.workspace-panel-widths.v1') || '{}') as Partial<{ buddies: number }>;
       return {
         buddies: typeof stored.buddies === 'number' ? Math.max(220, Math.min(stored.buddies, 520)) : 300,
-        conversation: typeof stored.conversation === 'number' ? Math.max(360, Math.min(stored.conversation, 1100)) : 720,
       };
     } catch {
-      return { buddies: 300, conversation: 720 };
+      return { buddies: 300 };
     }
   });
-  const panelResizeStart = useRef<{ panel: 'buddies' | 'conversation'; x: number; width: number } | undefined>(undefined);
+  const panelResizeStart = useRef<{ panel: 'buddies'; x: number; width: number } | undefined>(undefined);
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
@@ -3358,14 +3306,14 @@ export function Workspace({
     });
   };
 
-  const startPanelResize = (panel: 'buddies' | 'conversation', event: PointerEvent<HTMLDivElement>) => {
+  const startPanelResize = (panel: 'buddies', event: PointerEvent<HTMLDivElement>) => {
     panelResizeStart.current = { panel, x: event.clientX, width: panelWidths[panel] };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const setPanelWidth = (panel: 'buddies' | 'conversation', width: number) => {
-    const minimum = panel === 'buddies' ? 220 : 360;
-    const maximum = panel === 'buddies' ? 520 : 1100;
+  const setPanelWidth = (panel: 'buddies', width: number) => {
+    const minimum = 220;
+    const maximum = 520;
     const next = Math.max(minimum, Math.min(maximum, width));
     setPanelCollapsed(panel, false);
     setPanelWidths((current) => {
@@ -3378,8 +3326,8 @@ export function Workspace({
   const resizePanel = (event: PointerEvent<HTMLDivElement>) => {
     const start = panelResizeStart.current;
     if (!start) return;
-    const minimum = start.panel === 'buddies' ? 220 : 360;
-    const maximum = start.panel === 'buddies' ? 520 : 1100;
+    const minimum = 220;
+    const maximum = 520;
     const width = Math.max(0, Math.min(maximum, start.width + event.clientX - start.x));
     if (width < minimum - 48) {
       setPanelCollapsed(start.panel, true);
@@ -3391,7 +3339,7 @@ export function Workspace({
   const stopPanelResize = (event?: PointerEvent<HTMLDivElement>) => {
     const start = panelResizeStart.current;
     if (start && event) {
-      const minimum = start.panel === 'buddies' ? 220 : 360;
+      const minimum = 220;
       if (start.width + event.clientX - start.x < minimum - 48) setPanelCollapsed(start.panel, true);
     }
     panelResizeStart.current = undefined;
