@@ -1,5 +1,7 @@
 # Aimtrix
 
+![Aimtrix in Midnight theme — a self-hosted Matrix workspace with rooms, messages, and an open thread](docs/images/aimtrix-midnight-demo.png)
+
 Aimtrix is an original, self-hostable Matrix client that combines the compact Aqua character of 2005–2007 Mac chat applications, an optimistic Frutiger Aero atmosphere, and modern messaging behavior.
 
 The project is web-first, statically deployable, and intended to work with ordinary Matrix homeservers without an Aimtrix-specific backend.
