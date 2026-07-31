@@ -198,7 +198,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         }
         onSendTyping={(roomId, typing) => controller.sendTyping(roomId, typing)}
         onSendSticker={(roomId, sticker) => controller.sendSticker(roomId, sticker)}
-        onUploadAttachment={(roomId, file, onProgress) => controller.uploadAttachment(roomId, file, onProgress)}
+        onUploadAttachment={(roomId, file, onProgress, threadRootId) => controller.uploadAttachment(roomId, file, onProgress, threadRootId)}
         onCancelUpload={() => controller.cancelUpload()}
         onSendGif={(roomId, gif) => controller.sendGif(roomId, gif)}
         onMarkRoomRead={(roomId) => controller.markRoomRead(roomId)}
