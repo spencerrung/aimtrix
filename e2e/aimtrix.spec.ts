@@ -124,7 +124,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(page.getByRole('img', { name: 'Bubble Buddy' })).toBeVisible();
 });
 
-test('thread summaries open a focused conversation and reply through the thread root', async ({ page }, testInfo) => {
+test('thread summaries open a resizable conversation with its own composer', async ({ page }, testInfo) => {
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
@@ -132,8 +132,16 @@ test('thread summaries open a focused conversation and reply through the thread 
   const thread = page.getByRole('complementary', { name: 'Thread' });
   await expect(thread).toBeVisible();
   await expect(thread.getByText('That is exactly the energy.')).toBeVisible();
-  await thread.getByRole('button', { name: 'Reply to this thread' }).click();
-  await expect(page.getByText('Replying to Spencer')).toBeVisible();
+  const threadComposer = thread.getByLabel('Message thread');
+  await threadComposer.fill('Thread browser test message');
+  await expect(page.getByLabel('Message Welcome Lounge')).toHaveValue('');
+  await thread.getByRole('button', { name: 'Send thread reply' }).click();
+  await expect(thread.getByText('Thread browser test message')).toBeVisible();
+  if (testInfo.project.name === 'desktop') {
+    const before = await thread.boundingBox();
+    await thread.getByRole('separator', { name: 'Resize thread panel' }).press('End');
+    await expect.poll(async () => (await thread.boundingBox())?.width).toBeGreaterThan(before?.width ?? 0);
+  }
   await thread.getByRole('button', { name: 'Close thread' }).click();
   await expect(thread).toBeHidden();
 });
