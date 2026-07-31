@@ -53,6 +53,7 @@ function renderWorkspace(
     onPreferencesChange?: (preferences: UserPreferences) => void;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
+    onSendMessage?: (roomId: string, body: string) => Promise<void>;
     workspace?: typeof demoWorkspace;
   } = {},
 ) {
@@ -68,6 +69,7 @@ function renderWorkspace(
       onPreferencesChange={onPreferencesChange}
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onMarkRoomRead={overrides.onMarkRoomRead}
+      onSendMessage={overrides.onSendMessage}
       onSignOut={vi.fn()}
     />
   );
@@ -98,6 +100,22 @@ describe('Workspace demo', () => {
 
     expect(screen.getByText('A shiny new demo message')).toBeInTheDocument();
     expect(composer).toHaveValue('');
+  });
+
+  it('restores main composer focus after a delayed Matrix send settles', async () => {
+    let resolveSend: (() => void) | undefined;
+    const onSendMessage = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve; }));
+    const matrixWorkspace = { ...demoWorkspace, mode: 'matrix' as const };
+    renderWorkspace({ workspace: matrixWorkspace, onSendMessage });
+
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    composer.focus();
+    fireEvent.change(composer, { target: { value: 'Wait for the network' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(onSendMessage).toHaveBeenCalledWith('welcome', 'Wait for the network');
+
+    resolveSend?.();
+    await waitFor(() => expect(composer).toHaveFocus());
   });
 
   it('shows compact read-position avatars on the last message each buddy read', () => {
