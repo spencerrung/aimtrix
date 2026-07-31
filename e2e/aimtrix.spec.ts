@@ -36,6 +36,42 @@ test('workspace navigation, drawer, and personalization are functional', async (
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'grape');
 });
 
+test('desktop workspace panels resize, collapse, and restore', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === 'mobile', 'Mobile uses the existing one-surface navigation flow.');
+  const buddyDrawer = page.locator('.buddy-panel');
+  const buddyResize = page.getByRole('separator', { name: 'Resize rooms and conversation' });
+  const bounds = await buddyResize.boundingBox();
+  if (!bounds) throw new Error('Buddy resize handle is not visible.');
+  await page.mouse.move(bounds.x + 4, bounds.y + bounds.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x - 400, bounds.y + bounds.height / 2);
+  await page.mouse.up();
+  await expect(buddyDrawer).toBeHidden();
+  await page.getByRole('button', { name: 'Expand rooms' }).click();
+  await expect(buddyDrawer).toBeVisible();
+  const buddyBounds = await buddyDrawer.boundingBox();
+  const conversationBounds = await page.getByRole('main', { name: /Welcome Lounge/ }).boundingBox();
+  expect(Math.abs((buddyBounds?.y ?? 0) - (conversationBounds?.y ?? 0))).toBeLessThan(2);
+
+  const detailsResize = page.getByRole('separator', { name: 'Resize conversation and details' });
+  if (!await detailsResize.isVisible()) await page.getByRole('button', { name: 'Toggle room details' }).click();
+  const chatBeforeDetailsResize = await page.getByRole('main', { name: /Welcome Lounge/ }).boundingBox();
+  await detailsResize.press('ArrowRight');
+  await expect.poll(async () => (await page.getByRole('main', { name: /Welcome Lounge/ }).boundingBox())?.width).toBeGreaterThan(chatBeforeDetailsResize?.width ?? 0);
+
+  await page.getByRole('button', { name: 'Collapse conversation' }).click();
+  await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeHidden();
+  await page.getByRole('button', { name: 'Expand conversation' }).click();
+  await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
+
+  await page.getByRole('button', { name: /2 replies/ }).click();
+  const thread = page.getByRole('complementary', { name: 'Thread' });
+  await thread.getByRole('button', { name: 'Collapse thread' }).click();
+  await expect(thread).toBeHidden();
+  await page.getByRole('button', { name: 'Expand thread' }).click();
+  await expect(thread).toBeVisible();
+});
+
 test('space arrange mode supports drag reordering and moving into a subspace', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'mobile', 'Native drag interaction is covered on desktop; mobile uses the same up/down and destination controls.');
   const spaces = page.getByRole('navigation', { name: 'Spaces' });
