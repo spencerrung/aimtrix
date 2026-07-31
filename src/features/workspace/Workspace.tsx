@@ -52,6 +52,7 @@ import {
   type DragEvent,
   type FormEvent,
   type KeyboardEvent,
+  type PointerEvent,
   type ReactNode,
 } from 'react';
 import { Avatar } from '../../components/Avatar';
@@ -1334,7 +1335,9 @@ function Conversation({
   activeThread,
   threadRoot,
   draft,
+  threadDraft,
   sending,
+  threadSending,
   notice,
   uploadInProgress,
   failedUploadName,
@@ -1342,7 +1345,9 @@ function Conversation({
   editingMessage,
   onBack,
   onDraftChange,
+  onThreadDraftChange,
   onSubmit,
+  onThreadSubmit,
   onToggleDetails,
   onOpenBackground,
   onStartReply,
@@ -1373,7 +1378,9 @@ function Conversation({
   activeThread?: ThreadSummary;
   threadRoot?: MessageSummary;
   draft: string;
+  threadDraft: string;
   sending: boolean;
+  threadSending: boolean;
   notice?: string;
   uploadInProgress: boolean;
   failedUploadName?: string;
@@ -1381,7 +1388,9 @@ function Conversation({
   editingMessage?: MessageSummary;
   onBack: () => void;
   onDraftChange: (draft: string) => void;
+  onThreadDraftChange: (draft: string) => void;
   onSubmit: () => void;
+  onThreadSubmit: () => void;
   onToggleDetails: () => void;
   onOpenBackground: () => void;
   onStartReply: (message: MessageSummary) => void;
@@ -1424,6 +1433,15 @@ function Conversation({
   const [colonDismissed, setColonDismissed] = useState<string>();
   const [composerCaret, setComposerCaret] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [threadPanelWidth, setThreadPanelWidth] = useState(() => {
+    try {
+      const stored = Number(localStorage.getItem('aimtrix.thread-panel-width.v1'));
+      return Number.isFinite(stored) ? Math.max(300, Math.min(stored, 680)) : 390;
+    } catch {
+      return 390;
+    }
+  });
+  const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
   const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
   const fileInput = useRef<HTMLInputElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
@@ -1702,7 +1720,7 @@ function Conversation({
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') closeTrays();
     };
-    const onPointerDown = (event: PointerEvent) => {
+    const onPointerDown = (event: globalThis.PointerEvent) => {
       if (
         event.target instanceof Element &&
         event.target.closest('.emoji-tray, .sticker-tray, .gif-picker, .composer')
@@ -1814,6 +1832,32 @@ function Conversation({
       });
     return () => controller.abort();
   }, [stickerManifest, stickerOpen]);
+
+  const setPanelWidth = (width: number) => {
+    const next = Math.max(300, Math.min(width, Math.min(680, window.innerWidth - 160)));
+    setThreadPanelWidth(next);
+    try { localStorage.setItem('aimtrix.thread-panel-width.v1', String(next)); } catch { /* best-effort */ }
+  };
+
+  const startPanelResize = (event: PointerEvent<HTMLDivElement>) => {
+    if (window.matchMedia('(max-width: 720px)').matches) return;
+    resizeStart.current = { x: event.clientX, width: threadPanelWidth };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const resizePanel = (event: PointerEvent<HTMLDivElement>) => {
+    if (!resizeStart.current) return;
+    setPanelWidth(resizeStart.current.width + resizeStart.current.x - event.clientX);
+  };
+
+  const stopPanelResize = () => { resizeStart.current = undefined; };
+
+  const handleThreadComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      onThreadSubmit();
+    }
+  };
 
   if (!room) {
     return (
@@ -1928,7 +1972,24 @@ function Conversation({
       </section>
 
       {activeThread && threadRoot ? (
-        <aside className="thread-panel" aria-label="Thread">
+        <aside className="thread-panel" aria-label="Thread" style={{ width: threadPanelWidth }}>
+          <div
+            className="thread-panel__resize"
+            role="separator"
+            aria-label="Resize thread panel"
+            aria-orientation="vertical"
+            tabIndex={0}
+            onPointerDown={startPanelResize}
+            onPointerMove={resizePanel}
+            onPointerUp={stopPanelResize}
+            onPointerCancel={stopPanelResize}
+            onKeyDown={(event) => {
+              if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth(threadPanelWidth + 24); }
+              if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth(threadPanelWidth - 24); }
+              if (event.key === 'Home') { event.preventDefault(); setPanelWidth(300); }
+              if (event.key === 'End') { event.preventDefault(); setPanelWidth(680); }
+            }}
+          />
           <header className="thread-panel__header">
             <span><MessageCircle size={16} /><strong>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}</small></span>
             <button type="button" aria-label="Close thread" onClick={onCloseThread}><X size={16} /></button>
@@ -1956,9 +2017,22 @@ function Conversation({
               />
             ))}
           </div>
-          <button className="thread-panel__reply" type="button" aria-label="Reply to this thread" onClick={() => onStartReply(threadRoot)}>
-            <Reply size={15} /> Reply in thread
-          </button>
+          <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); onThreadSubmit(); }}>
+            <label>
+              <span className="sr-only">Message thread</span>
+              <textarea
+                aria-label="Message thread"
+                value={threadDraft}
+                onChange={(event) => onThreadDraftChange(event.target.value)}
+                onKeyDown={handleThreadComposerKeyDown}
+                placeholder="Reply in thread"
+                rows={2}
+              />
+            </label>
+            <button type="submit" aria-label="Send thread reply" disabled={!threadDraft.trim() || threadSending}>
+              <Send size={15} /> Send
+            </button>
+          </form>
         </aside>
       ) : null}
 
@@ -2698,8 +2772,11 @@ export function Workspace({
   const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
   const [demoMessages, setDemoMessages] = useState(workspace.messagesByRoom);
+  const [demoThreadMessages, setDemoThreadMessages] = useState<Record<string, MessageSummary[]>>({});
   const [sending, setSending] = useState(false);
+  const [threadSending, setThreadSending] = useState(false);
   const [uploadInProgress, setUploadInProgress] = useState(false);
   const [failedUpload, setFailedUpload] = useState<File>();
   const [notice, setNotice] = useState<string>();
@@ -2799,11 +2876,19 @@ export function Workspace({
     : undefined;
   const messagesByRoom = workspace.mode === 'demo' ? demoMessages : workspace.messagesByRoom;
   const messages = effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [];
-  const activeThread = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] : undefined;
+  const activeThreadBase = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] : undefined;
+  const activeThread = activeThreadBase && activeThreadRootId
+    ? {
+        ...activeThreadBase,
+        messages: [...activeThreadBase.messages, ...(demoThreadMessages[activeThreadRootId] ?? [])],
+        replyCount: activeThreadBase.replyCount + (demoThreadMessages[activeThreadRootId]?.length ?? 0),
+      }
+    : undefined;
   const activeThreadRoot = activeThreadRootId
     ? messages.find((message) => message.id === activeThreadRootId)
     : undefined;
   const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
+  const threadDraft = activeThreadRootId ? threadDrafts[activeThreadRootId] ?? '' : '';
 
   const loadEarlier = useCallback((roomId: string): Promise<void> => {
     const existing = historyRequests.current.get(roomId);
@@ -3134,6 +3219,45 @@ export function Workspace({
     }
   };
 
+  const submitThreadMessage = async () => {
+    if (!effectiveRoomId || !activeThreadRoot || !threadDraft.trim() || threadSending) return;
+    const body = threadDraft.trim();
+    setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: '' }));
+    setThreadSending(true);
+    try {
+      if (workspace.mode === 'demo') {
+        const message: MessageSummary = {
+          id: `demo-thread-${Date.now()}`,
+          roomId: effectiveRoomId,
+          senderId: workspace.user.id,
+          senderName: workspace.user.displayName,
+          senderAvatarUrl: workspace.user.avatarUrl,
+          body,
+          timestamp: Date.now(),
+          kind: 'text',
+          isOwn: true,
+          threadRootId: activeThreadRoot.id,
+        };
+        setDemoThreadMessages((current) => ({
+          ...current,
+          [activeThreadRoot.id]: [...(current[activeThreadRoot.id] ?? []), message],
+        }));
+      } else if (onSendReply) {
+        await onSendReply(effectiveRoomId, body, {
+          id: activeThreadRoot.id,
+          senderId: activeThreadRoot.senderId,
+          body: activeThreadRoot.body,
+          threadRootId: activeThreadRoot.id,
+        });
+      }
+    } catch {
+      setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: body }));
+      setNotice('That thread reply did not send. Your draft has been restored.');
+    } finally {
+      setThreadSending(false);
+    }
+  };
+
   return (
     <div className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
       <section className={`aimtrix-window${detailsOpen ? ' details-open' : ''}`}>
@@ -3194,7 +3318,9 @@ export function Workspace({
             activeThread={activeThread}
             threadRoot={activeThreadRoot}
             draft={draft}
+            threadDraft={threadDraft}
             sending={sending}
+            threadSending={threadSending}
             notice={notice}
             uploadInProgress={uploadInProgress}
             failedUploadName={failedUpload?.name}
@@ -3220,7 +3346,12 @@ export function Workspace({
                 }, 5000);
               }
             }}
+            onThreadDraftChange={(nextDraft) => {
+              if (!activeThreadRootId) return;
+              setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: nextDraft }));
+            }}
             onSubmit={() => void submitMessage()}
+            onThreadSubmit={() => void submitThreadMessage()}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onOpenBackground={() => setBackgroundDialogOpen(true)}
             onStartReply={handleStartReply}
