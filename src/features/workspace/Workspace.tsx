@@ -1885,8 +1885,8 @@ function Conversation({
 
   return (
     <main
-      className={`conversation${hasRoomBackground ? ` conversation--backdrop room-backdrop--${room.background?.preset ?? 'none'}${roomBackgroundSource ? ' has-custom-backdrop' : ''}` : ''}`}
-      style={roomBackgroundStyle}
+      className={`conversation${activeThread && threadRoot && !threadCollapsed ? ' conversation--thread-open' : ''}${hasRoomBackground ? ` conversation--backdrop room-backdrop--${room.background?.preset ?? 'none'}${roomBackgroundSource ? ' has-custom-backdrop' : ''}` : ''}`}
+      style={{ ...roomBackgroundStyle, '--thread-panel-width': `${threadPanelWidth}px` } as CSSProperties}
       aria-label={`Conversation with ${room.name}`}
     >
       <header className="conversation-header">
