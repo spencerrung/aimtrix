@@ -24,7 +24,12 @@ function fakeEvent(
 
 function fakeClient(
   events: MatrixEvent[],
-  options: { unreadCount?: number; timelineUnreadCount?: number; readUpToEventId?: string } = {},
+  options: {
+    unreadCount?: number;
+    timelineUnreadCount?: number;
+    readUpToEventId?: string;
+    threads?: Array<{ id: string; length: number; events: MatrixEvent[] }>;
+  } = {},
 ): MatrixClient {
   const room = {
     roomId: '!room:test',
@@ -32,6 +37,7 @@ function fakeClient(
     getMyMembership: () => 'join',
     getType: () => undefined,
     getLiveTimeline: () => ({ getEvents: () => events }),
+    getThreads: () => options.threads ?? [],
     getMember: vi.fn().mockReturnValue(undefined),
     getMembers: () => [],
     getJoinedMembers: () => [],
@@ -133,6 +139,34 @@ describe('buildWorkspaceSnapshot read position', () => {
       timelineUnreadCount: 0,
       readUpToMessageId: undefined,
     });
+  });
+});
+
+describe('buildWorkspaceSnapshot threads', () => {
+  it('keeps thread replies out of the main timeline and exposes a root summary', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Ship it?' }, '$root:test');
+    const reply = fakeEvent('m.room.message', {
+      msgtype: 'm.text',
+      body: 'Absolutely.',
+      'm.relates_to': {
+        rel_type: 'm.thread',
+        event_id: '$root:test',
+        'm.in_reply_to': { event_id: '$root:test' },
+      },
+    }, '$reply:test');
+    const snapshot = buildWorkspaceSnapshot(fakeClient([root], {
+      threads: [{ id: '$root:test', length: 1, events: [root, reply] }],
+    }), 'online');
+
+    expect(snapshot.messagesByRoom['!room:test']).toHaveLength(1);
+    expect(snapshot.messagesByRoom['!room:test'][0]).toMatchObject({
+      id: '$root:test',
+      isThreadRoot: true,
+      thread: { replyCount: 1, latestReply: { body: 'Absolutely.' } },
+    });
+    expect(snapshot.threadsByRoot['$root:test'].messages).toMatchObject([
+      { id: '$reply:test', threadRootId: '$root:test', body: 'Absolutely.' },
+    ]);
   });
 });
 

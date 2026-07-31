@@ -201,6 +201,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         onCancelUpload={() => controller.cancelUpload()}
         onSendGif={(roomId, gif) => controller.sendGif(roomId, gif)}
         onMarkRoomRead={(roomId) => controller.markRoomRead(roomId)}
+        onThreadOpened={(roomId, rootId) => controller.markThreadRead(roomId, rootId)}
         onJoinRoom={(roomIdOrAlias) => controller.joinRoom(roomIdOrAlias)}
         onSearchPublicRooms={(query) => controller.searchPublicRooms(query)}
         onCreateDirectRoom={(userId) => controller.createDirectRoom(userId)}

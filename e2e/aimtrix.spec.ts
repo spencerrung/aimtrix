@@ -124,6 +124,20 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(page.getByRole('img', { name: 'Bubble Buddy' })).toBeVisible();
 });
 
+test('thread summaries open a focused conversation and reply through the thread root', async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  }
+  await page.getByRole('button', { name: /2 replies/ }).click();
+  const thread = page.getByRole('complementary', { name: 'Thread' });
+  await expect(thread).toBeVisible();
+  await expect(thread.getByText('That is exactly the energy.')).toBeVisible();
+  await thread.getByRole('button', { name: 'Reply to this thread' }).click();
+  await expect(page.getByText('Replying to Spencer')).toBeVisible();
+  await thread.getByRole('button', { name: 'Close thread' }).click();
+  await expect(thread).toBeHidden();
+});
+
 test('profile page supports banners, frames, bios, and pinned stickers', async ({ page }, testInfo) => {
   await page.route('https://stickers.example.test/manifest.json', (route) => route.fulfill({
     contentType: 'application/json',

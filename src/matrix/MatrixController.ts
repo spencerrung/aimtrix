@@ -137,6 +137,8 @@ export class MatrixController {
   private initialized = false;
   private publishFrame?: number;
   private connection: ConnectionState = 'connecting';
+  /** Server-side thread feature support level (0 = None, 1 = Stable, etc.) */
+  private threadSupport = 0;
   private readonly snapshotCache = createWorkspaceSnapshotCache();
   private readonly mediaRequests = new Map<string, Promise<string | undefined>>();
   private readonly mediaObjectUrls = new Set<string>();
@@ -1625,19 +1627,55 @@ export class MatrixController {
   public async sendReply(
     roomId: string,
     body: string,
-    target: { id: string; senderId: string; body: string },
+    target: { id: string; senderId: string; body: string; threadRootId?: string },
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
     if (!client || !sdk || !message) return;
     const quoted = target.body.split('\n').map((line) => `> <${target.senderId}> ${line}`).join('\n');
-    await client.sendEvent(roomId, sdk.EventType.RoomMessage, {
-      msgtype: sdk.MsgType.Text,
-      body: `${quoted}\n\n${message}`,
-      'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
-    });
+
+    if (target.threadRootId) {
+      // Thread-scoped reply: use the 5-argument sendEvent overload so the SDK
+      // routes the event to the thread timeline. We pass m.in_reply_to for the
+      // explicit reply target, and the SDK's addThreadRelationIfNeeded() will
+      // automatically inject the m.thread relation (rel_type, event_id, and
+      // is_falling_back=false) since m.in_reply_to is already present.
+      //
+      // Wire format (MSC3440 / MSC3816):
+      //   m.relates_to: {
+      //     rel_type: "m.thread",
+      //     event_id: <threadRootId>,
+      //     is_falling_back: false,  // false because we have m.in_reply_to
+      //     m.in_reply_to: { event_id: <target.id> }
+      //   }
+      await client.sendEvent(
+        roomId,
+        target.threadRootId,
+        sdk.EventType.RoomMessage,
+        {
+          msgtype: sdk.MsgType.Text,
+          body: `${quoted}\n\n${message}`,
+          'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
+        },
+      );
+    } else {
+      // Standard reply (no thread): use the 4-argument sendEvent overload.
+      await client.sendEvent(roomId, sdk.EventType.RoomMessage, {
+        msgtype: sdk.MsgType.Text,
+        body: `${quoted}\n\n${message}`,
+        'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
+      });
+    }
     this.scheduleWorkspacePublish();
+  }
+
+  public async markThreadRead(roomId: string, rootId: string): Promise<void> {
+    const client = this.client;
+    const thread = client?.getRoom(roomId)?.getThread(rootId);
+    const latest = thread?.events.at(-1);
+    if (!client || !latest) return;
+    await client.sendReadReceipt(latest);
   }
 
   public async togglePinnedMessage(roomId: string, eventId: string, pinned: boolean): Promise<void> {
@@ -1776,7 +1814,20 @@ export class MatrixController {
         initialSyncLimit: 30,
         lazyLoadMembers: true,
         pendingEventOrdering: sdk.PendingEventOrdering.Chronological,
+        threadSupport: true,
       });
+
+      // Log thread support level for diagnostics. The SDK's thread APIs are
+      // safe to call even when the server has no thread support — messages
+      // simply land on the main timeline — but knowing the level helps with
+      // debugging interoperability issues.
+      try {
+        const support = await client.doesServerSupportThread();
+        this.threadSupport = support.threads;
+      } catch {
+        // doesServerSupportThread can reject on older servers; default to None.
+        this.threadSupport = 0; // FeatureSupport.None
+      }
     } catch (error) {
       this.detachClientListeners();
       client.stopClient();

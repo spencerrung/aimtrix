@@ -52,6 +52,7 @@ import {
   type RoomSummary,
   type SpaceRoomPreview,
   type SpaceSummary,
+  type ThreadSummary,
   type WorkspaceSnapshot,
 } from './viewModels';
 
@@ -262,13 +263,13 @@ function eventBody(
   }
 }
 
-function messagesForRoom(
-  client: MatrixClient,
+function messagesForEvents(
   room: Room,
   userId: string,
   pinnedIds: ReadonlySet<string>,
+  events: MatrixEvent[],
+  includeReadReceipts = false,
 ): MessageSummary[] {
-  const events = room.getLiveTimeline().getEvents().slice(-250);
   const eventById = new Map(
     events.flatMap((event) => (event.getId() ? [[event.getId()!, event] as const] : [])),
   );
@@ -277,6 +278,10 @@ function messagesForRoom(
     string,
     Map<string, { senders: Set<string>; ownEventId?: string }>
   >();
+  // Set of event IDs that are thread roots (referenced by at least one m.thread relation).
+  const threadRootIds = new Set<string>();
+  // Map from event ID → thread root ID for events that belong to a thread.
+  const threadRootByEventId = new Map<string, string>();
 
   for (const event of events) {
     const content = event.getContent<MessageContent>();
@@ -286,6 +291,16 @@ function messagesForRoom(
     if (relation?.rel_type === 'm.replace' && relation.event_id) {
       const existing = replacements.get(relation.event_id);
       if (!existing || existing.getTs() < event.getTs()) replacements.set(relation.event_id, event);
+    }
+    // Detect thread relations: rel_type "m.thread" or unstable "io.element.thread"
+    if (
+      (relation?.rel_type === 'm.thread' || relation?.rel_type === 'io.element.thread') &&
+      relation.event_id &&
+      eventId
+    ) {
+      const rootId = relation.event_id;
+      threadRootIds.add(rootId);
+      threadRootByEventId.set(eventId, rootId);
     }
     if (
       event.getType() === matrixEventType.reaction &&
@@ -341,6 +356,8 @@ function messagesForRoom(
       mimeType: rendered.mimeType,
       mediaKind: rendered.mediaKind,
       edited: rendered.edited,
+      threadRootId: threadRootByEventId.get(eventId),
+      isThreadRoot: threadRootIds.has(eventId),
       replyTo: replyEventId && replyRendered
         ? {
             eventId: replyEventId,
@@ -362,7 +379,7 @@ function messagesForRoom(
   const getReceipt = (room as unknown as {
     getReadReceiptForUserId?: (memberId: string) => { eventId: string } | null;
   }).getReadReceiptForUserId?.bind(room);
-  if (getReceipt) {
+  if (includeReadReceipts && getReceipt) {
     const targets = resolveReadReceiptTargets(
       events.flatMap((event) => event.getId() ?? []),
       messages.map((message) => message.id),
@@ -386,6 +403,20 @@ function messagesForRoom(
   }
 
   return messages;
+}
+
+function messagesForRoom(
+  room: Room,
+  userId: string,
+  pinnedIds: ReadonlySet<string>,
+): MessageSummary[] {
+  return messagesForEvents(
+    room,
+    userId,
+    pinnedIds,
+    room.getLiveTimeline().getEvents().slice(-250),
+    true,
+  );
 }
 
 function directRoomIds(client: MatrixClient): Set<string> {
@@ -493,6 +524,7 @@ export function buildWorkspaceSnapshot(
   const chatRooms = visible.filter((room) => room.getType() !== 'm.space');
   const messagesByRoom: Record<string, MessageSummary[]> = {};
   const membersByRoom: Record<string, MemberSummary[]> = {};
+  const threadsByRoot: Record<string, ThreadSummary> = {};
 
   const rooms: RoomSummary[] = chatRooms.map((room) => {
     const roomVersion = cache?.roomVersions.get(room.roomId) ?? 0;
@@ -509,7 +541,7 @@ export function buildWorkspaceSnapshot(
                 (eventId): eventId is string => typeof eventId === 'string',
               ) ?? [],
             );
-            const rebuilt = messagesForRoom(client, room, userId, pinnedIds);
+            const rebuilt = messagesForRoom(room, userId, pinnedIds);
             const reconciled = cachedMessages
               ? reuseUnchangedMessages(cachedMessages.value, rebuilt)
               : rebuilt;
@@ -517,6 +549,45 @@ export function buildWorkspaceSnapshot(
             return reconciled;
           })();
     messagesByRoom[room.roomId] = messages;
+    const pinnedEvent = room.currentState.getStateEvents('m.room.pinned_events', '');
+    const pinnedIds = new Set(
+      (pinnedEvent?.getContent<{ pinned?: unknown }>().pinned as unknown[] | undefined)?.filter(
+        (eventId): eventId is string => typeof eventId === 'string',
+      ) ?? [],
+    );
+    const threads = (room as unknown as { getThreads?: () => Array<{
+      id: string;
+      length: number;
+      events: MatrixEvent[];
+    }> }).getThreads?.() ?? [];
+    for (const thread of threads) {
+      const rootId = thread.id;
+      const replies = messagesForEvents(room, userId, pinnedIds, thread.events)
+        .filter((message) => message.id !== rootId && message.threadRootId === rootId);
+      if (!replies.length && thread.length === 0) continue;
+      const latestReply = replies.at(-1);
+      const summary: ThreadSummary = {
+        rootId,
+        replyCount: Math.max(thread.length, replies.length),
+        messages: replies,
+        latestReply: latestReply
+          ? {
+              senderName: latestReply.senderName,
+              body: latestReply.body,
+              timestamp: latestReply.timestamp,
+            }
+          : undefined,
+      };
+      threadsByRoot[rootId] = summary;
+      const root = messages.find((message) => message.id === rootId);
+      if (root) {
+        root.isThreadRoot = true;
+        root.thread = {
+          replyCount: summary.replyCount,
+          latestReply: summary.latestReply,
+        };
+      }
+    }
     const cachedMembers = cache?.members.get(room.roomId);
     membersByRoom[room.roomId] =
       cachedMembers && cachedMembers.version === roomVersion && cachedMembers.presence === cache?.presenceVersion
@@ -804,5 +875,6 @@ export function buildWorkspaceSnapshot(
     rooms,
     messagesByRoom,
     membersByRoom,
+    threadsByRoot,
   };
 }

@@ -73,6 +73,13 @@ export interface ReadReceiptSummary {
   avatarUrl?: string;
 }
 
+export interface ThreadSummary {
+  rootId: string;
+  replyCount: number;
+  messages: MessageSummary[];
+  latestReply?: Pick<MessageSummary, 'senderName' | 'body' | 'timestamp'>;
+}
+
 export interface MessageSummary {
   id: string;
   roomId: string;
@@ -102,6 +109,9 @@ export interface MessageSummary {
   mediaKind?: 'image' | 'video' | 'audio' | 'file';
   pinned?: boolean;
   readBy?: ReadReceiptSummary[];
+  threadRootId?: string;
+  isThreadRoot?: boolean;
+  thread?: Omit<ThreadSummary, 'rootId' | 'messages'>;
 }
 
 export interface MemberSummary {
@@ -136,6 +146,7 @@ export interface WorkspaceSnapshot {
   rooms: RoomSummary[];
   messagesByRoom: Record<string, MessageSummary[]>;
   membersByRoom: Record<string, MemberSummary[]>;
+  threadsByRoot: Record<string, ThreadSummary>;
   call?: CallSummary;
 }
 

@@ -128,7 +128,7 @@ These are additive follow-ups, not hidden placeholders in the 0.1 UI.
 
 ### Matrix messaging depth
 
-- [ ] Add Matrix threads with thread timelines, unread state, and thread receipts.
+- [x] Add Matrix threads with root summaries, focused timelines, standard `m.thread` replies, and separate thread receipts.
 - [ ] Add homeserver-backed full-history search and filters beyond the loaded timeline.
 - [ ] Render sanitized `formatted_body` HTML, code blocks, spoilers, polls, locations, and extensible events.
 - [ ] Add per-event delivery and decryption diagnostics beyond the implemented read-position avatars.
