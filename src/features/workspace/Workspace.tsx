@@ -92,6 +92,30 @@ import {
   type WorkspaceSnapshot,
 } from '../../matrix/viewModels';
 
+type LinkPreview = {
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+  siteName?: string;
+};
+
+const URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
+const linkPreviewRequests = new Map<string, Promise<LinkPreview | undefined>>();
+
+function firstSharedUrl(body: string): string | undefined {
+  const match = body.match(URL_PATTERN)?.[0];
+  return match?.replace(/[),.!?]+$/, '');
+}
+
+function LinkifiedText({ body }: { body: string }) {
+  const parts = body.split(URL_PATTERN);
+  const links = body.match(URL_PATTERN) ?? [];
+  return <>{parts.flatMap((part, index) => {
+    const url = links[index]?.replace(/[),.!?]+$/, '');
+    return [part, url ? <a href={url} target="_blank" rel="noreferrer" key={`${url}:${index}`}>{url}</a> : null];
+  })}</>;
+}
+
 interface WorkspaceProps {
   workspace: WorkspaceSnapshot;
   config: RuntimeConfig;
@@ -105,6 +129,7 @@ interface WorkspaceProps {
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
   onSendMessage?: (roomId: string, body: string) => Promise<void>;
+  onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
   onSpaceSelected?: (spaceId: string) => Promise<void>;
   onReorganizeSpaceChildren?: (update: {
@@ -1142,10 +1167,42 @@ function BuddyPanel({
   );
 }
 
+function LinkPreviewCard({ message, onLoad }: { message: MessageSummary; onLoad?: (url: string) => Promise<LinkPreview | undefined> }) {
+  const url = firstSharedUrl(message.body);
+  const [preview, setPreview] = useState<LinkPreview>();
+  const [dismissed, setDismissed] = useState(() => localStorage.getItem(`aimtrix.dismissed-link-preview.v1:${message.id}`) === '1');
+
+  useEffect(() => {
+    if (!url || !onLoad || dismissed) return;
+    let active = true;
+    const request = linkPreviewRequests.get(url) ?? onLoad(url);
+    linkPreviewRequests.set(url, request);
+    void request.then((result) => { if (active) setPreview(result); });
+    return () => { active = false; };
+  }, [dismissed, onLoad, url]);
+
+  if (!url || dismissed || !preview || (!preview.title && !preview.description && !preview.imageUrl)) return null;
+  return (
+    <article className="link-preview">
+      {preview.imageUrl ? <img src={preview.imageUrl} alt="" loading="lazy" /> : null}
+      <div>
+        <small>{preview.siteName || new URL(url).hostname}</small>
+        {preview.title ? <a href={url} target="_blank" rel="noreferrer">{preview.title}</a> : null}
+        {preview.description ? <p>{preview.description}</p> : null}
+      </div>
+      <button type="button" aria-label="Hide link preview" title="Hide preview" onClick={() => {
+        localStorage.setItem(`aimtrix.dismissed-link-preview.v1:${message.id}`, '1');
+        setDismissed(true);
+      }}><X size={14} /></button>
+    </article>
+  );
+}
+
 const TimelineMessage = memo(function TimelineMessage({
   message,
   dataSaver,
   autoplayMedia,
+  onLoadLinkPreview,
   onReply,
   onOpenThread,
   onStartThread,
@@ -1159,6 +1216,7 @@ const TimelineMessage = memo(function TimelineMessage({
   message: MessageSummary;
   dataSaver: boolean;
   autoplayMedia: boolean;
+  onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onReply: (message: MessageSummary) => void;
   onOpenThread: (message: MessageSummary) => void;
   onStartThread: (message: MessageSummary) => void;
@@ -1221,9 +1279,10 @@ const TimelineMessage = memo(function TimelineMessage({
           />
         ) : (
           <p className={`message-kind--${message.kind}`}>
-            {message.kind === 'emote' ? `${message.senderName} ` : ''}{message.body}
+            {message.kind === 'emote' ? `${message.senderName} ` : ''}<LinkifiedText body={message.body} />
           </p>
         )}
+        <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
         {message.reactions?.length ? (
           <div className="reaction-row" aria-label="Message reactions">
             {message.reactions.map((reaction) => (
@@ -1378,6 +1437,7 @@ function Conversation({
   onStartCall,
   dataSaver,
   autoplayMedia,
+  onLoadLinkPreview,
 }: {
   room?: RoomSummary;
   messages: MessageSummary[];
@@ -1424,6 +1484,7 @@ function Conversation({
   onStartCall: (video: boolean) => void;
   dataSaver: boolean;
   autoplayMedia: boolean;
+  onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
@@ -1974,6 +2035,7 @@ function Conversation({
                   canPin={Boolean(room.canManage)}
                   onReact={onReact}
                   onMediaLoad={handleMediaLoad}
+                  onLoadLinkPreview={onLoadLinkPreview}
                 />
               </Fragment>
             ))
@@ -2029,6 +2091,7 @@ function Conversation({
                 canPin={Boolean(room?.canManage)}
                 onReact={onReact}
                 onMediaLoad={handleMediaLoad}
+                onLoadLinkPreview={onLoadLinkPreview}
               />
             ))}
           </div>
@@ -2720,6 +2783,7 @@ export function Workspace({
   onUpdateProfile,
   matrixSettingsActions,
   onSendMessage,
+  onLoadLinkPreview,
   onRoomSelected,
   onSpaceSelected,
   onReorganizeSpaceChildren,
@@ -3489,6 +3553,7 @@ export function Workspace({
             }}
             dataSaver={preferences.dataSaver}
             autoplayMedia={preferences.autoplayMedia}
+            onLoadLinkPreview={onLoadLinkPreview}
           />
           {collapsedPanels.conversation ? <button className="workspace-collapsed-panel workspace-collapsed-panel--conversation" type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={18} /></button> : null}
           {detailsOpen ? <div className="workspace-panel-resize workspace-panel-resize--details" role="separator" aria-label="Resize conversation and details" aria-orientation="vertical" aria-valuemin={260} aria-valuemax={560} aria-valuenow={Math.round(panelWidths.details)} tabIndex={0} onPointerDown={(event) => startPanelResize('details', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('details', panelWidths.details + 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('details', panelWidths.details - 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('details', 260); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('details', 560); } }} /> : null}

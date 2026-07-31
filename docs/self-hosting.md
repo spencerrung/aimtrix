@@ -8,6 +8,7 @@ Aimtrix is a stateless static application. It does not need a database or PVC. M
 - CORS-compatible Client-Server API access from the Aimtrix origin.
 - `/.well-known/matrix/client` delegation when users enter a Matrix server name that differs from the API host.
 - A persistent HTTPS origin. Browser encryption storage, camera, microphone, notifications, and service-worker features are restricted on insecure origins.
+- Enable the homeserver's Matrix URL-preview endpoint to show rich link cards. Links remain clickable when previews are disabled or unavailable.
 
 ## Container
 

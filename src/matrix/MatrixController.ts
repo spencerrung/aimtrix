@@ -402,6 +402,38 @@ export class MatrixController {
     return request;
   };
 
+  public async getLinkPreview(url: string): Promise<{
+    title?: string;
+    description?: string;
+    imageUrl?: string;
+    siteName?: string;
+  } | undefined> {
+    const client = this.client;
+    if (!client) return undefined;
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      return undefined;
+    }
+    if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
+    try {
+      const response = await client.getUrlPreview(parsed.href, Date.now()) as Record<string, unknown>;
+      const string = (key: string) => typeof response[key] === 'string' ? response[key] : undefined;
+      const image = string('og:image');
+      return {
+        title: string('og:title'),
+        description: string('og:description'),
+        siteName: string('og:site_name'),
+        imageUrl: image?.startsWith('mxc://')
+          ? client.mxcUrlToHttp(image, 640, 360, 'scale', false, true, true) ?? undefined
+          : undefined,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   private async fetchMatrixMedia(
     source: string,
     size: number,
