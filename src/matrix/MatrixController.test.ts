@@ -51,6 +51,46 @@ describe('MatrixController protocol integration', () => {
     expect(client.setPowerLevel).toHaveBeenCalledWith('!room:test', '@decorator:test', 25);
   });
 
+  it('sends thread replies through the Matrix SDK thread overload', async () => {
+    const sendEvent = vi.fn().mockResolvedValue({});
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, { sendEvent }, {
+      EventType: { RoomMessage: 'm.room.message' },
+      MsgType: { Text: 'm.text' },
+    });
+
+    await controller.sendReply('!room:test', 'Absolutely.', {
+      id: '$reply-to:test',
+      senderId: '@mara:test',
+      body: 'Ship it?',
+      threadRootId: '$root:test',
+    });
+
+    expect(sendEvent).toHaveBeenCalledWith(
+      '!room:test',
+      '$root:test',
+      'm.room.message',
+      expect.objectContaining({
+        msgtype: 'm.text',
+        'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
+      }),
+    );
+  });
+
+  it('marks the latest thread event read without advancing the main timeline', async () => {
+    const latest = { getId: () => '$thread-reply:test' };
+    const sendReadReceipt = vi.fn().mockResolvedValue({});
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, {
+      getRoom: () => ({ getThread: () => ({ events: [latest] }) } as unknown as import('matrix-js-sdk').Room),
+      sendReadReceipt,
+    });
+
+    await controller.markThreadRead('!room:test', '$root:test');
+
+    expect(sendReadReceipt).toHaveBeenCalledWith(latest);
+  });
+
   it('uploads an unencrypted attachment and sends a Matrix file event', async () => {
     const progress = vi.fn();
     const sendMessage = vi.fn().mockResolvedValue({});

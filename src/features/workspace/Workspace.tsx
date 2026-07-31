@@ -14,6 +14,7 @@ import {
   Images,
   Info,
   Lock,
+  MessageCircle,
   Paintbrush,
   PanelRight,
   Paperclip,
@@ -85,6 +86,7 @@ import {
   type RoomSummary,
   type SpaceRoomPreview,
   type SpaceSummary,
+  type ThreadSummary,
   type WorkspaceSnapshot,
 } from '../../matrix/viewModels';
 
@@ -114,7 +116,7 @@ interface WorkspaceProps {
   onSendReply?: (
     roomId: string,
     body: string,
-    target: { id: string; senderId: string; body: string },
+    target: { id: string; senderId: string; body: string; threadRootId?: string },
   ) => Promise<void>;
   onEditMessage?: (roomId: string, eventId: string, body: string) => Promise<void>;
   onRedactMessage?: (roomId: string, eventId: string) => Promise<void>;
@@ -134,6 +136,7 @@ interface WorkspaceProps {
   onCancelUpload?: () => void;
   onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
   onMarkRoomRead?: (roomId: string) => Promise<void>;
+  onThreadOpened?: (roomId: string, rootId: string) => Promise<void>;
   onJoinRoom?: (roomIdOrAlias: string) => Promise<void>;
   onSearchPublicRooms?: (query: string) => Promise<PublicRoomChoice[]>;
   onCreateDirectRoom?: (userId: string) => Promise<string>;
@@ -1142,6 +1145,8 @@ const TimelineMessage = memo(function TimelineMessage({
   dataSaver,
   autoplayMedia,
   onReply,
+  onOpenThread,
+  onStartThread,
   onEdit,
   onDelete,
   onPin,
@@ -1153,6 +1158,8 @@ const TimelineMessage = memo(function TimelineMessage({
   dataSaver: boolean;
   autoplayMedia: boolean;
   onReply: (message: MessageSummary) => void;
+  onOpenThread: (message: MessageSummary) => void;
+  onStartThread: (message: MessageSummary) => void;
   onEdit: (message: MessageSummary) => void;
   onDelete: (message: MessageSummary) => void;
   onPin: (message: MessageSummary) => void;
@@ -1250,9 +1257,22 @@ const TimelineMessage = memo(function TimelineMessage({
             {message.readBy.length > 5 ? <b>+{message.readBy.length - 5}</b> : null}
           </div>
         ) : null}
+        {message.thread ? (
+          <button
+            className="thread-summary"
+            type="button"
+            onClick={() => onOpenThread(message)}
+          >
+            <MessageCircle size={14} />
+            <strong>{message.thread.replyCount} {message.thread.replyCount === 1 ? 'reply' : 'replies'}</strong>
+            {message.thread.latestReply ? <span>Latest from {message.thread.latestReply.senderName}</span> : null}
+          </button>
+        ) : null}
       </div>
       <div className="message-actions">
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
+        <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
+        {message.isThreadRoot ? <button type="button" aria-label="Open thread" title="Open thread" onClick={() => onOpenThread(message)}><MessageCircle size={14} /></button> : null}
         <button type="button" aria-label="React with thumbs up" title="React" onClick={() => onReact(message, '👍')}><SmilePlus size={14} /></button>
         {canPin ? <button type="button" aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(message)}><Pin size={14} /></button> : null}
         {message.isOwn && message.kind === 'text' ? (
@@ -1311,6 +1331,8 @@ type TimelineViewportMode = 'unread' | 'bottom' | 'detached';
 function Conversation({
   room,
   messages,
+  activeThread,
+  threadRoot,
   draft,
   sending,
   notice,
@@ -1324,6 +1346,9 @@ function Conversation({
   onToggleDetails,
   onOpenBackground,
   onStartReply,
+  onOpenThread,
+  onStartThread,
+  onCloseThread,
   onStartEdit,
   onDeleteMessage,
   onTogglePin,
@@ -1345,6 +1370,8 @@ function Conversation({
 }: {
   room?: RoomSummary;
   messages: MessageSummary[];
+  activeThread?: ThreadSummary;
+  threadRoot?: MessageSummary;
   draft: string;
   sending: boolean;
   notice?: string;
@@ -1358,6 +1385,9 @@ function Conversation({
   onToggleDetails: () => void;
   onOpenBackground: () => void;
   onStartReply: (message: MessageSummary) => void;
+  onOpenThread: (message: MessageSummary) => void;
+  onStartThread: (message: MessageSummary) => void;
+  onCloseThread: () => void;
   onStartEdit: (message: MessageSummary) => void;
   onDeleteMessage: (message: MessageSummary) => void;
   onTogglePin: (message: MessageSummary) => void;
@@ -1880,6 +1910,8 @@ function Conversation({
                   dataSaver={dataSaver}
                   autoplayMedia={autoplayMedia}
                   onReply={onStartReply}
+                  onOpenThread={onOpenThread}
+                  onStartThread={onStartThread}
                   onEdit={onStartEdit}
                   onDelete={onDeleteMessage}
                   onPin={onTogglePin}
@@ -1894,6 +1926,41 @@ function Conversation({
           )}
         </div>
       </section>
+
+      {activeThread && threadRoot ? (
+        <aside className="thread-panel" aria-label="Thread">
+          <header className="thread-panel__header">
+            <span><MessageCircle size={16} /><strong>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}</small></span>
+            <button type="button" aria-label="Close thread" onClick={onCloseThread}><X size={16} /></button>
+          </header>
+          <div className="thread-panel__timeline">
+            <div className="thread-panel__root">
+              <strong>{threadRoot.senderName}</strong>
+              <p>{threadRoot.body}</p>
+            </div>
+            {activeThread.messages.map((message) => (
+              <TimelineMessage
+                key={message.id}
+                message={message}
+                dataSaver={dataSaver}
+                autoplayMedia={autoplayMedia}
+                onReply={onStartReply}
+                onOpenThread={onOpenThread}
+                onStartThread={onStartThread}
+                onEdit={onStartEdit}
+                onDelete={onDeleteMessage}
+                onPin={onTogglePin}
+                canPin={Boolean(room?.canManage)}
+                onReact={onReact}
+                onMediaLoad={handleMediaLoad}
+              />
+            ))}
+          </div>
+          <button className="thread-panel__reply" type="button" aria-label="Reply to this thread" onClick={() => onStartReply(threadRoot)}>
+            <Reply size={15} /> Reply in thread
+          </button>
+        </aside>
+      ) : null}
 
       <div className="typing-strip" aria-live="polite">
         {notice ? <>{notice}{uploadInProgress ? <button className="cancel-upload" type="button" onClick={onCancelUpload}>Cancel</button> : failedUploadName ? <button className="cancel-upload" type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button> : null}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
@@ -2576,6 +2643,7 @@ export function Workspace({
   onCancelUpload,
   onSendGif,
   onMarkRoomRead,
+  onThreadOpened,
   onJoinRoom,
   onSearchPublicRooms,
   onCreateDirectRoom,
@@ -2627,6 +2695,8 @@ export function Workspace({
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
+  const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
+  const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [demoMessages, setDemoMessages] = useState(workspace.messagesByRoom);
   const [sending, setSending] = useState(false);
@@ -2729,6 +2799,10 @@ export function Workspace({
     : undefined;
   const messagesByRoom = workspace.mode === 'demo' ? demoMessages : workspace.messagesByRoom;
   const messages = effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [];
+  const activeThread = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] : undefined;
+  const activeThreadRoot = activeThreadRootId
+    ? messages.find((message) => message.id === activeThreadRootId)
+    : undefined;
   const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
 
   const loadEarlier = useCallback((roomId: string): Promise<void> => {
@@ -2783,7 +2857,9 @@ export function Workspace({
     setMobileChatOpen(true);
     setNotice(undefined);
     setReplyTarget(undefined);
+    setReplyThreadRootId(undefined);
     setEditingMessage(undefined);
+    setActiveThreadRootId(undefined);
   }, []);
 
   useEffect(() => {
@@ -2961,12 +3037,20 @@ export function Workspace({
 
   const handleStartReply = useCallback((message: MessageSummary) => {
     setReplyTarget(message);
+    setReplyThreadRootId(message.threadRootId ?? (message.isThreadRoot ? message.id : undefined));
+    setEditingMessage(undefined);
+  }, []);
+
+  const handleStartThread = useCallback((message: MessageSummary) => {
+    setReplyTarget(message);
+    setReplyThreadRootId(message.threadRootId ?? message.id);
     setEditingMessage(undefined);
   }, []);
 
   const handleStartEdit = useCallback((message: MessageSummary) => {
     setEditingMessage(message);
     setReplyTarget(undefined);
+    setReplyThreadRootId(undefined);
     if (effectiveRoomId) {
       setDrafts((current) => ({ ...current, [effectiveRoomId]: message.body }));
     }
@@ -3028,15 +3112,18 @@ export function Workspace({
       } else if (editingMessage && onEditMessage) {
         await onEditMessage(effectiveRoomId, editingMessage.id, body);
       } else if (replyTarget && onSendReply) {
+        const threadRootId = replyThreadRootId ?? replyTarget.threadRootId;
         await onSendReply(effectiveRoomId, body, {
           id: replyTarget.id,
           senderId: replyTarget.senderId,
           body: replyTarget.body,
+          threadRootId,
         });
       } else if (onSendMessage) {
         await onSendMessage(effectiveRoomId, body);
       }
       setReplyTarget(undefined);
+      setReplyThreadRootId(undefined);
       setEditingMessage(undefined);
       if (preferences.sendTypingNotifications) void onSendTyping?.(effectiveRoomId, false);
     } catch {
@@ -3104,6 +3191,8 @@ export function Workspace({
           <Conversation
             room={selectedRoom}
             messages={messages}
+            activeThread={activeThread}
+            threadRoot={activeThreadRoot}
             draft={draft}
             sending={sending}
             notice={notice}
@@ -3135,11 +3224,22 @@ export function Workspace({
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onOpenBackground={() => setBackgroundDialogOpen(true)}
             onStartReply={handleStartReply}
+            onStartThread={handleStartThread}
+            onOpenThread={(message) => {
+              setActiveThreadRootId(message.id);
+              if (workspace.mode === 'matrix') {
+                void onThreadOpened?.(message.roomId, message.id).catch(() =>
+                  setNotice('This thread could not be marked read.'),
+                );
+              }
+            }}
+            onCloseThread={() => setActiveThreadRootId(undefined)}
             onStartEdit={handleStartEdit}
             onTogglePin={handleTogglePin}
             onDeleteMessage={handleDeleteMessage}
             onCancelContext={() => {
               setReplyTarget(undefined);
+              setReplyThreadRootId(undefined);
               setEditingMessage(undefined);
             }}
             onReact={handleReact}

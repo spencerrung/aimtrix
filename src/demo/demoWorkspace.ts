@@ -240,6 +240,15 @@ export const demoWorkspace: WorkspaceSnapshot = {
         isOwn: true,
         reactions: [{ key: '💙', count: 3, reacted: true }],
         readBy: [{ id: '@mara:example.com', displayName: 'Mara' }],
+        isThreadRoot: true,
+        thread: {
+          replyCount: 2,
+          latestReply: {
+            senderName: 'Mara',
+            body: 'That is exactly the energy.',
+            timestamp: minutesAgo(24),
+          },
+        },
       },
       {
         id: 'm3',
@@ -323,5 +332,40 @@ export const demoWorkspace: WorkspaceSnapshot = {
       { id: '@mara:example.com', displayName: 'Mara', presence: 'online', powerLevel: 0 },
       { id: '@pixel:example.com', displayName: 'PixelGhost', presence: 'away', role: 'Decorator', powerLevel: 25 },
     ],
+  },
+  threadsByRoot: {
+    m2: {
+      rootId: 'm2',
+      replyCount: 2,
+      latestReply: {
+        senderName: 'Mara',
+        body: 'That is exactly the energy.',
+        timestamp: minutesAgo(24),
+      },
+      messages: [
+        {
+          id: 'm2-thread-1',
+          roomId: 'welcome',
+          senderId: '@mara:example.com',
+          senderName: 'Mara',
+          body: 'That is exactly the energy.',
+          timestamp: minutesAgo(27),
+          kind: 'text',
+          isOwn: false,
+          threadRootId: 'm2',
+        },
+        {
+          id: 'm2-thread-2',
+          roomId: 'welcome',
+          senderId: '@you:example.com',
+          senderName: 'Spencer',
+          body: 'Keep the Aqua, lose the bad UX.',
+          timestamp: minutesAgo(24),
+          kind: 'text',
+          isOwn: true,
+          threadRootId: 'm2',
+        },
+      ],
+    },
   },
 };
