@@ -1353,6 +1353,7 @@ function Conversation({
   onSubmit,
   onThreadSubmit,
   onToggleDetails,
+  onCollapseConversation,
   onOpenBackground,
   onStartReply,
   onOpenThread,
@@ -1398,6 +1399,7 @@ function Conversation({
   onSubmit: () => void;
   onThreadSubmit: () => void;
   onToggleDetails: () => void;
+  onCollapseConversation: () => void;
   onOpenBackground: () => void;
   onStartReply: (message: MessageSummary) => void;
   onOpenThread: (message: MessageSummary) => void;
@@ -1912,6 +1914,7 @@ function Conversation({
             </span>
           ) : null}
           <IconButton label="Decorate conversation background" onClick={onOpenBackground}><Paintbrush size={17} /></IconButton>
+          <IconButton label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
           <IconButton label="Toggle room details" onClick={onToggleDetails}>
             <PanelRight size={18} />
           </IconButton>
@@ -3375,7 +3378,7 @@ export function Workspace({
         <div
           className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
           style={{
-            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '0px' : `${panelWidths.buddies}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '0px' : `${panelWidths.conversation}px`} ${collapsedPanels.conversation ? '0px' : '8px'} minmax(0, 1fr) ${detailsOpen ? '300px' : '0px'}`,
+            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${panelWidths.buddies}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '48px' : 'minmax(360px, 1fr)'} 0px 0px ${detailsOpen ? '300px' : '0px'}`,
           }}
         >
           <SpaceRail
@@ -3384,7 +3387,7 @@ export function Workspace({
             onSelect={selectSpace}
             onReorder={onReorderRootSpaces}
           />
-          {!collapsedPanels.buddies ? <BuddyPanel
+          {collapsedPanels.buddies ? <button className="workspace-collapsed-panel workspace-collapsed-panel--buddies" type="button" aria-label="Expand rooms" title="Expand rooms" onClick={() => setPanelCollapsed('buddies', false)}><Users size={18} /></button> : <BuddyPanel
             workspace={scopedWorkspace}
             selectedRoomId={effectiveRoomId}
             scopeName={activeSpaceSummary?.name ?? 'Conversations'}
@@ -3401,7 +3404,7 @@ export function Workspace({
             onAcceptInvite={onJoinRoom}
             onRejectInvite={onRejectInvite}
             onReorganize={onReorganizeSpaceChildren}
-          /> : null}
+          />}
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           <Conversation
             room={selectedRoom}
@@ -3445,6 +3448,7 @@ export function Workspace({
             onSubmit={() => void submitMessage()}
             onThreadSubmit={() => void submitThreadMessage()}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onCollapseConversation={() => setPanelCollapsed('conversation', true)}
             onOpenBackground={() => setBackgroundDialogOpen(true)}
             onStartReply={handleStartReply}
             onStartThread={handleStartThread}
@@ -3488,9 +3492,7 @@ export function Workspace({
             dataSaver={preferences.dataSaver}
             autoplayMedia={preferences.autoplayMedia}
           />
-          {!collapsedPanels.conversation ? <div className="workspace-panel-resize workspace-panel-resize--conversation" role="separator" aria-label="Resize conversation" aria-orientation="vertical" aria-valuemin={360} aria-valuemax={1100} aria-valuenow={Math.round(panelWidths.conversation)} tabIndex={0} onPointerDown={(event) => startPanelResize('conversation', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('conversation', panelWidths.conversation - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('conversation', panelWidths.conversation + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('conversation', 360); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('conversation', 1100); } }} /> : null}
-          {!collapsedPanels.conversation ? <button className="workspace-panel-collapse-edge" type="button" aria-label="Collapse conversation" title="Collapse conversation" onClick={() => setPanelCollapsed('conversation', true)}><ChevronRight size={14} /></button> : null}
-          <div className="workspace-chat-shelf" aria-hidden="true" />
+          {collapsedPanels.conversation ? <button className="workspace-collapsed-panel workspace-collapsed-panel--conversation" type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={18} /></button> : null}
           {detailsOpen ? (
             <DetailsPanel
               key={selectedRoomConfigured?.id}
@@ -3511,10 +3513,6 @@ export function Workspace({
               onLeave={onLeaveRoom}
             />
           ) : null}
-          <div className="workspace-panel-restores" role="group" aria-label="Expand collapsed panels">
-            {collapsedPanels.buddies ? <button type="button" aria-label="Expand rooms" title="Expand rooms" onClick={() => setPanelCollapsed('buddies', false)}><Users size={16} /></button> : null}
-            {collapsedPanels.conversation ? <button type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={16} /></button> : null}
-          </div>
         </div>
 
         {workspace.call ? (
