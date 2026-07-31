@@ -2801,15 +2801,16 @@ export function Workspace({
   });
   const [panelWidths, setPanelWidths] = useState(() => {
     try {
-      const stored = JSON.parse(localStorage.getItem('aimtrix.workspace-panel-widths.v1') || '{}') as Partial<{ buddies: number }>;
+      const stored = JSON.parse(localStorage.getItem('aimtrix.workspace-panel-widths.v1') || '{}') as Partial<{ buddies: number; details: number }>;
       return {
         buddies: typeof stored.buddies === 'number' ? Math.max(220, Math.min(stored.buddies, 520)) : 300,
+        details: typeof stored.details === 'number' ? Math.max(260, Math.min(stored.details, 560)) : 300,
       };
     } catch {
-      return { buddies: 300 };
+      return { buddies: 300, details: 300 };
     }
   });
-  const panelResizeStart = useRef<{ panel: 'buddies'; x: number; width: number } | undefined>(undefined);
+  const panelResizeStart = useRef<{ panel: 'buddies' | 'details'; x: number; width: number } | undefined>(undefined);
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
@@ -3306,16 +3307,16 @@ export function Workspace({
     });
   };
 
-  const startPanelResize = (panel: 'buddies', event: PointerEvent<HTMLDivElement>) => {
+  const startPanelResize = (panel: 'buddies' | 'details', event: PointerEvent<HTMLDivElement>) => {
     panelResizeStart.current = { panel, x: event.clientX, width: panelWidths[panel] };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const setPanelWidth = (panel: 'buddies', width: number) => {
-    const minimum = 220;
-    const maximum = 520;
+  const setPanelWidth = (panel: 'buddies' | 'details', width: number) => {
+    const minimum = panel === 'buddies' ? 220 : 260;
+    const maximum = panel === 'buddies' ? 520 : 560;
     const next = Math.max(minimum, Math.min(maximum, width));
-    setPanelCollapsed(panel, false);
+    if (panel === 'buddies') setPanelCollapsed(panel, false);
     setPanelWidths((current) => {
       const updated = { ...current, [panel]: next };
       try { localStorage.setItem('aimtrix.workspace-panel-widths.v1', JSON.stringify(updated)); } catch { /* best-effort */ }
@@ -3326,10 +3327,11 @@ export function Workspace({
   const resizePanel = (event: PointerEvent<HTMLDivElement>) => {
     const start = panelResizeStart.current;
     if (!start) return;
-    const minimum = 220;
-    const maximum = 520;
-    const width = Math.max(0, Math.min(maximum, start.width + event.clientX - start.x));
-    if (width < minimum - 48) {
+    const minimum = start.panel === 'buddies' ? 220 : 260;
+    const maximum = start.panel === 'buddies' ? 520 : 560;
+    const delta = event.clientX - start.x;
+    const width = Math.max(0, Math.min(maximum, start.width + (start.panel === 'details' ? -delta : delta)));
+    if (start.panel === 'buddies' && width < minimum - 48) {
       setPanelCollapsed(start.panel, true);
       return;
     }
@@ -3339,8 +3341,8 @@ export function Workspace({
   const stopPanelResize = (event?: PointerEvent<HTMLDivElement>) => {
     const start = panelResizeStart.current;
     if (start && event) {
-      const minimum = 220;
-      if (start.width + event.clientX - start.x < minimum - 48) setPanelCollapsed(start.panel, true);
+      const minimum = start.panel === 'buddies' ? 220 : 260;
+      if (start.panel === 'buddies' && start.width + event.clientX - start.x < minimum - 48) setPanelCollapsed(start.panel, true);
     }
     panelResizeStart.current = undefined;
   };
@@ -3377,7 +3379,7 @@ export function Workspace({
         <div
           className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
           style={{
-            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${panelWidths.buddies}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '48px' : 'minmax(360px, 1fr)'} 0px 0px ${detailsOpen ? '300px' : '0px'}`,
+            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${panelWidths.buddies}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '48px' : 'minmax(360px, 1fr)'} 0px 0px ${detailsOpen ? '8px' : '0px'} ${detailsOpen ? `${panelWidths.details}px` : '0px'}`,
           }}
         >
           <SpaceRail
@@ -3492,6 +3494,7 @@ export function Workspace({
             autoplayMedia={preferences.autoplayMedia}
           />
           {collapsedPanels.conversation ? <button className="workspace-collapsed-panel workspace-collapsed-panel--conversation" type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={18} /></button> : null}
+          {detailsOpen ? <div className="workspace-panel-resize workspace-panel-resize--details" role="separator" aria-label="Resize conversation and details" aria-orientation="vertical" aria-valuemin={260} aria-valuemax={560} aria-valuenow={Math.round(panelWidths.details)} tabIndex={0} onPointerDown={(event) => startPanelResize('details', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('details', panelWidths.details + 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('details', panelWidths.details - 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('details', 260); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('details', 560); } }} /> : null}
           {detailsOpen ? (
             <DetailsPanel
               key={selectedRoomConfigured?.id}
