@@ -1396,8 +1396,8 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: () => void;
-  onThreadSubmit: () => void;
+  onSubmit: () => Promise<void>;
+  onThreadSubmit: () => Promise<void>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
   onOpenBackground: () => void;
@@ -1539,8 +1539,7 @@ function Conversation({
     });
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    onSubmit();
-    requestAnimationFrame(() => mainComposer.current?.focus());
+    void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (colonResults.length) {
@@ -1567,8 +1566,7 @@ function Conversation({
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      onSubmit();
-      requestAnimationFrame(() => mainComposer.current?.focus());
+      void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
     }
   };
 
@@ -1868,8 +1866,7 @@ function Conversation({
   const handleThreadComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      onThreadSubmit();
-      requestAnimationFrame(() => threadComposer.current?.focus());
+      void onThreadSubmit().finally(() => requestAnimationFrame(() => threadComposer.current?.focus()));
     }
   };
 
@@ -2035,7 +2032,7 @@ function Conversation({
               />
             ))}
           </div>
-          <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); onThreadSubmit(); requestAnimationFrame(() => threadComposer.current?.focus()); }}>
+          <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); void onThreadSubmit().finally(() => requestAnimationFrame(() => threadComposer.current?.focus())); }}>
             <label>
               <span className="sr-only">Message thread</span>
               <textarea
@@ -3446,8 +3443,8 @@ export function Workspace({
               if (!activeThreadRootId) return;
               setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: nextDraft }));
             }}
-            onSubmit={() => void submitMessage()}
-            onThreadSubmit={() => void submitThreadMessage()}
+            onSubmit={submitMessage}
+            onThreadSubmit={submitThreadMessage}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onCollapseConversation={() => setPanelCollapsed('conversation', true)}
             onOpenBackground={() => setBackgroundDialogOpen(true)}
