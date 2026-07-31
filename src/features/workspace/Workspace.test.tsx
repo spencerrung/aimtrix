@@ -54,6 +54,7 @@ function renderWorkspace(
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
     onSendMessage?: (roomId: string, body: string) => Promise<void>;
+    onLoadLinkPreview?: (url: string) => Promise<{ title?: string; description?: string; imageUrl?: string; siteName?: string } | undefined>;
     workspace?: typeof demoWorkspace;
   } = {},
 ) {
@@ -70,6 +71,7 @@ function renderWorkspace(
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onSendMessage={overrides.onSendMessage}
+      onLoadLinkPreview={overrides.onLoadLinkPreview}
       onSignOut={vi.fn()}
     />
   );
@@ -116,6 +118,40 @@ describe('Workspace demo', () => {
 
     resolveSend?.();
     await waitFor(() => expect(composer).toHaveFocus());
+  });
+
+  it('links URLs, renders Matrix previews, and dismisses them locally', async () => {
+    const previewUrl = 'https://example.test/roadmap';
+    const workspace = {
+      ...demoWorkspace,
+      messagesByRoom: {
+        ...demoWorkspace.messagesByRoom,
+        welcome: [{
+          id: 'link-preview-message',
+          roomId: 'welcome',
+          senderId: '@mara:demo',
+          senderName: 'Mara',
+          body: `Check this out: ${previewUrl}`,
+          timestamp: Date.now(),
+          kind: 'text' as const,
+          isOwn: false,
+        }],
+      },
+    };
+    renderWorkspace({
+      workspace,
+      onLoadLinkPreview: vi.fn().mockResolvedValue({
+        title: 'Aimtrix roadmap',
+        description: 'The next Matrix client milestones.',
+        siteName: 'Aimtrix',
+      }),
+    });
+
+    const link = screen.getByRole('link', { name: previewUrl });
+    expect(link).toHaveAttribute('href', previewUrl);
+    expect(await screen.findByRole('link', { name: 'Aimtrix roadmap' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Hide link preview' }));
+    expect(screen.queryByRole('link', { name: 'Aimtrix roadmap' })).not.toBeInTheDocument();
   });
 
   it('shows compact read-position avatars on the last message each buddy read', () => {

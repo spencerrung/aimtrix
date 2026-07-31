@@ -184,6 +184,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
         onSendMessage={(roomId, body) => controller.sendMessage(roomId, body)}
+        onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
         onRoomSelected={(roomId) => controller.loadRoomHistory(roomId)}
         onSpaceSelected={(spaceId) => controller.loadSpaceHierarchy(spaceId)}
         onReorganizeSpaceChildren={(update) => controller.reorganizeSpaceChildren(update)}
