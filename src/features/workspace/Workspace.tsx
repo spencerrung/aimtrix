@@ -50,6 +50,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ClipboardEvent,
   type DragEvent,
   type FormEvent,
   type KeyboardEvent,
@@ -159,7 +160,7 @@ interface WorkspaceProps {
     roomId: string,
     sticker: { id: string; name: string; src: string },
   ) => Promise<void>;
-  onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void) => Promise<void>;
+  onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
   onCancelUpload?: () => void;
   onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
   onMarkRoomRead?: (roomId: string) => Promise<void>;
@@ -1472,7 +1473,7 @@ function Conversation({
   onCancelContext: () => void;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
   onSendSticker: (sticker: { id: string; name: string; src: string }) => void;
-  onUploadAttachment: (file: File) => void;
+  onUploadAttachment: (file: File, threadRootId?: string) => void;
   onCancelUpload: () => void;
   onRetryUpload: () => void;
   onLoadMore: () => Promise<void>;
@@ -1601,6 +1602,16 @@ function Conversation({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
+  };
+
+  const uploadPastedImage = (event: ClipboardEvent<HTMLTextAreaElement>, threadRootId?: string) => {
+    const item = [...event.clipboardData.items].find((candidate) => candidate.type.startsWith('image/'));
+    const image = item?.getAsFile();
+    if (!image) return;
+    event.preventDefault();
+    const extension = image.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
+    const file = image.name ? image : new File([image], `pasted-image.${extension}`, { type: image.type });
+    onUploadAttachment(file, threadRootId);
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (colonResults.length) {
@@ -2104,6 +2115,7 @@ function Conversation({
                 value={threadDraft}
                 onChange={(event) => onThreadDraftChange(event.target.value)}
                 onKeyDown={handleThreadComposerKeyDown}
+                onPaste={(event) => uploadPastedImage(event, threadRoot.id)}
                 placeholder="Reply in thread"
                 rows={2}
               />
@@ -2229,6 +2241,7 @@ function Conversation({
             onFocus={() => setComposerFocused(true)}
             onBlur={() => setComposerFocused(false)}
             onKeyDown={handleKeyDown}
+            onPaste={uploadPastedImage}
             disabled={sending}
           />
         </label>
@@ -3072,7 +3085,7 @@ export function Workspace({
     if (typingTimer.current !== undefined) window.clearTimeout(typingTimer.current);
   }, []);
 
-  const uploadAttachment = async (file: File) => {
+  const uploadAttachment = async (file: File, threadRootId?: string) => {
     if (!effectiveRoomId || workspace.mode !== 'matrix' || !onUploadAttachment) return;
     setSending(true);
     setUploadInProgress(true);
@@ -3082,7 +3095,7 @@ export function Workspace({
       await onUploadAttachment(effectiveRoomId, file, (loaded, total) => {
         const percent = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
         setNotice(`Uploading ${file.name} — ${percent}%`);
-      });
+      }, threadRootId);
       setNotice(undefined);
     } catch {
       setFailedUpload(file);
@@ -3535,7 +3548,7 @@ export function Workspace({
             }}
             onReact={handleReact}
             onSendSticker={(sticker) => void sendSticker(sticker)}
-            onUploadAttachment={(file) => void uploadAttachment(file)}
+            onUploadAttachment={(file, threadRootId) => void uploadAttachment(file, threadRootId)}
             onCancelUpload={() => onCancelUpload?.()}
             onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload); }}
             onLoadMore={async () => {

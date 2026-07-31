@@ -54,6 +54,7 @@ function renderWorkspace(
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
     onSendMessage?: (roomId: string, body: string) => Promise<void>;
+    onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
     onLoadLinkPreview?: (url: string) => Promise<{ title?: string; description?: string; imageUrl?: string; siteName?: string } | undefined>;
     workspace?: typeof demoWorkspace;
   } = {},
@@ -71,6 +72,7 @@ function renderWorkspace(
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onSendMessage={overrides.onSendMessage}
+      onUploadAttachment={overrides.onUploadAttachment}
       onLoadLinkPreview={overrides.onLoadLinkPreview}
       onSignOut={vi.fn()}
     />
@@ -152,6 +154,25 @@ describe('Workspace demo', () => {
     expect(await screen.findByRole('link', { name: 'Aimtrix roadmap' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Hide link preview' }));
     expect(screen.queryByRole('link', { name: 'Aimtrix roadmap' })).not.toBeInTheDocument();
+  });
+
+  it('uploads pasted images while preserving text paste and thread context', async () => {
+    const onUploadAttachment = vi.fn().mockResolvedValue(undefined);
+    const matrixWorkspace = { ...demoWorkspace, mode: 'matrix' as const };
+    renderWorkspace({ workspace: matrixWorkspace, onUploadAttachment });
+    const image = new File(['pixels'], '', { type: 'image/png' });
+    const imageClipboard = { items: [{ type: 'image/png', getAsFile: () => image }] };
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+
+    fireEvent.paste(composer, { clipboardData: { items: [{ type: 'text/plain', getAsFile: () => null }] } });
+    expect(onUploadAttachment).not.toHaveBeenCalled();
+    fireEvent.paste(composer, { clipboardData: imageClipboard });
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', expect.objectContaining({ name: 'pasted-image.png' }), expect.any(Function), undefined));
+
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const threadComposer = screen.getByLabelText('Message thread');
+    fireEvent.paste(threadComposer, { clipboardData: imageClipboard });
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), expect.any(String)));
   });
 
   it('shows compact read-position avatars on the last message each buddy read', () => {

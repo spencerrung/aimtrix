@@ -1463,6 +1463,7 @@ export class MatrixController {
     roomId: string,
     file: File,
     onProgress?: (loaded: number, total: number) => void,
+    threadRootId?: string,
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
@@ -1486,6 +1487,9 @@ export class MatrixController {
       progressHandler: (progress: { loaded: number; total: number }) =>
         onProgress?.(progress.loaded, progress.total || file.size),
     };
+    const sendAttachment = (content: RoomMessageEventContent) => threadRootId
+      ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, content)
+      : client.sendMessage(roomId, content);
 
     try {
       if (room.hasEncryptionStateEvent()) {
@@ -1496,7 +1500,7 @@ export class MatrixController {
           type: 'application/octet-stream',
           includeFilename: false,
         });
-        await client.sendMessage(roomId, {
+        await sendAttachment({
           msgtype,
           body: file.name,
           info,
@@ -1512,7 +1516,7 @@ export class MatrixController {
           name: file.name,
           type: file.type,
         });
-        await client.sendMessage(roomId, {
+        await sendAttachment({
           msgtype,
           body: file.name,
           info,
