@@ -169,6 +169,11 @@ test('thread summaries open a resizable conversation with its own composer', asy
   const thread = page.getByRole('complementary', { name: 'Thread' });
   await expect(thread).toBeVisible();
   await expect(thread.getByText('That is exactly the energy.')).toBeVisible();
+  if (testInfo.project.name === 'desktop') {
+    const mainComposerBounds = await page.getByLabel('Message Welcome Lounge').boundingBox();
+    const threadBounds = await thread.boundingBox();
+    expect((mainComposerBounds?.x ?? 0) + (mainComposerBounds?.width ?? 0)).toBeLessThanOrEqual((threadBounds?.x ?? 0) + 1);
+  }
   const threadComposer = thread.getByLabel('Message thread');
   await threadComposer.fill('Thread browser test message');
   await expect(page.getByLabel('Message Welcome Lounge')).toHaveValue('');
