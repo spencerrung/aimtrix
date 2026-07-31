@@ -387,15 +387,17 @@
   .theme-switcher button.is-active { color: white; background: linear-gradient(var(--selection-start), var(--selection-end)); text-shadow: 0 -1px rgba(0,0,0,0.35); }
   .titlebar-unread { color: var(--text-soft); border-color: var(--border-soft); background: var(--surface-soft); }
 
-  .workspace-grid { position: relative; display: grid; min-height: 0; grid-template-columns: 66px 8px 300px 8px minmax(360px, 1fr) 0px; }
+  .workspace-grid { position: relative; display: grid; min-height: 0; grid-template-columns: 66px 0px 300px 8px 720px 8px minmax(0, 1fr) 0px; }
   .details-open .workspace-grid { grid-template-columns: 66px 300px minmax(360px, 1fr) 300px; }
   .workspace-panel-resize { z-index: 3; min-width: 8px; cursor: col-resize; outline: 0; background: linear-gradient(90deg, transparent 3px, var(--border-soft) 3px 4px, transparent 4px); }
   .space-rail { grid-column: 1; }
-  .workspace-panel-resize--spaces { grid-column: 2; }
   .buddy-panel { grid-column: 3; }
   .workspace-panel-resize--buddies { grid-column: 4; }
   .workspace-grid > .conversation { grid-column: 5; }
-  .workspace-grid > .details-panel { grid-column: 6; }
+  .workspace-panel-resize--conversation { grid-column: 6; }
+  .workspace-panel-collapse-edge { z-index: 4; width: 22px; height: 30px; align-self: start; grid-column: 6; margin-top: 12px; padding: 0; place-self: start center; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--small-shadow); }
+  .workspace-chat-shelf { grid-column: 7; min-width: 0; background: var(--surface-soft); }
+  .workspace-grid > .details-panel { grid-column: 8; }
   .workspace-panel-resize:hover, .workspace-panel-resize:focus-visible { background: linear-gradient(90deg, transparent 2px, var(--blue) 2px 6px, transparent 6px); }
   .workspace-grid--conversation-collapsed .conversation { display: none; }
   .workspace-panel-restores { position: absolute; z-index: 15; top: 10px; left: 10px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
@@ -1153,7 +1155,7 @@
     .app-stage { padding: 0; }
     .aimtrix-window { width: 100%; max-height: none; border: 0; border-radius: 0; }
     .workspace-grid, .details-open .workspace-grid { grid-template-columns: 52px minmax(0, 1fr) !important; }
-    .workspace-panel-resize, .workspace-panel-restores { display: none; }
+    .workspace-panel-resize, .workspace-panel-restores, .workspace-chat-shelf, .workspace-panel-collapse-edge { display: none; }
     .space-rail { grid-column: 1; grid-row: 1; }
     .buddy-panel { grid-column: 2; grid-row: 1; border-right: 0; }
     .conversation { display: none; grid-column: 2; grid-row: 1; }
