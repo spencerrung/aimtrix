@@ -7,6 +7,8 @@ import { MatrixController } from './MatrixController';
 type ControllerInternals = {
   client?: MatrixClient;
   sdk?: typeof import('matrix-js-sdk');
+  snapshotCache: { roomVersions: Map<string, number> };
+  attachThreadListeners: (room: unknown) => void;
 };
 
 function inject(
@@ -20,6 +22,30 @@ function inject(
 }
 
 describe('MatrixController protocol integration', () => {
+  it('republishes when the SDK creates a thread after the timeline event', () => {
+    const listeners = new Map<string, (thread: { room: { roomId: string } }) => void>();
+    const room = {
+      roomId: '!room:test',
+      on: vi.fn((event: string, listener: (thread: { room: { roomId: string } }) => void) => {
+        listeners.set(event, listener);
+      }),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, {} as Partial<MatrixClient>, {
+      ThreadEvent: {
+        New: 'Thread.new',
+        Update: 'Thread.update',
+        NewReply: 'Thread.newReply',
+        Delete: 'Thread.delete',
+      },
+    });
+
+    (controller as unknown as ControllerInternals).attachThreadListeners(room);
+    listeners.get('Thread.new')?.({ room });
+
+    expect((controller as unknown as ControllerInternals).snapshotCache.roomVersions.get('!room:test')).toBe(1);
+  });
+
   it('writes standard room state and moderation operations', async () => {
     const client = {
       setRoomName: vi.fn().mockResolvedValue({}),

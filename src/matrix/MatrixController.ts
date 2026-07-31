@@ -137,6 +137,7 @@ export class MatrixController {
   private initialized = false;
   private publishFrame?: number;
   private connection: ConnectionState = 'connecting';
+  private readonly threadListenerRooms = new Map<string, Room>();
   /** Server-side thread feature support level (0 = None, 1 = Stable, etc.) */
   private threadSupport = 0;
   private readonly snapshotCache = createWorkspaceSnapshotCache();
@@ -1958,6 +1959,7 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
+    if (room) this.attachThreadListeners(room);
     this.bumpRoomVersion(room?.roomId ?? event.getRoomId());
     if (!toStartOfTimeline) this.scheduleWorkspacePublish();
     if (!data?.liveEvent || !room || event.getSender() === this.client?.getUserId()) return;
@@ -2131,6 +2133,31 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   };
 
+  private readonly handleThreadUpdate = (thread: { room: Room }): void => {
+    this.bumpRoomVersion(thread.room.roomId);
+    this.scheduleWorkspacePublish();
+  };
+
+  private attachThreadListeners(room: Room): void {
+    if (!this.sdk?.ThreadEvent || this.threadListenerRooms.has(room.roomId)) return;
+    this.threadListenerRooms.set(room.roomId, room);
+    room.on(this.sdk.ThreadEvent.New, this.handleThreadUpdate);
+    room.on(this.sdk.ThreadEvent.Update, this.handleThreadUpdate);
+    room.on(this.sdk.ThreadEvent.NewReply, this.handleThreadUpdate);
+    room.on(this.sdk.ThreadEvent.Delete, this.handleThreadUpdate);
+  }
+
+  private detachThreadListeners(): void {
+    if (!this.sdk?.ThreadEvent) return;
+    for (const room of this.threadListenerRooms.values()) {
+      room.removeListener(this.sdk.ThreadEvent.New, this.handleThreadUpdate);
+      room.removeListener(this.sdk.ThreadEvent.Update, this.handleThreadUpdate);
+      room.removeListener(this.sdk.ThreadEvent.NewReply, this.handleThreadUpdate);
+      room.removeListener(this.sdk.ThreadEvent.Delete, this.handleThreadUpdate);
+    }
+    this.threadListenerRooms.clear();
+  }
+
   private attachClientListeners(): void {
     if (!this.client || !this.sdk) return;
     this.client.on(this.sdk.ClientEvent.Sync, this.handleSync);
@@ -2142,6 +2169,7 @@ export class MatrixController {
     this.client.on(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.on(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
     this.client.on('Call.incoming' as any, this.handleIncomingCall as any);
+    this.client.getRooms().forEach((room) => this.attachThreadListeners(room));
   }
 
   private detachClientListeners(): void {
@@ -2155,6 +2183,7 @@ export class MatrixController {
     this.client.removeListener(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.removeListener(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
     this.client.removeListener('Call.incoming' as any, this.handleIncomingCall as any);
+    this.detachThreadListeners();
     if (this.publishFrame !== undefined) cancelAnimationFrame(this.publishFrame);
     this.publishFrame = undefined;
   }
