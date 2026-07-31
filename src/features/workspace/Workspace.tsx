@@ -1444,6 +1444,8 @@ function Conversation({
   const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
   const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
   const fileInput = useRef<HTMLInputElement>(null);
+  const mainComposer = useRef<HTMLTextAreaElement>(null);
+  const threadComposer = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<Array<{ emoji: string; name: string }>>([]);
@@ -1529,6 +1531,7 @@ function Conversation({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     onSubmit();
+    requestAnimationFrame(() => mainComposer.current?.focus());
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (colonResults.length) {
@@ -1556,6 +1559,7 @@ function Conversation({
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       onSubmit();
+      requestAnimationFrame(() => mainComposer.current?.focus());
     }
   };
 
@@ -1856,6 +1860,7 @@ function Conversation({
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       onThreadSubmit();
+      requestAnimationFrame(() => threadComposer.current?.focus());
     }
   };
 
@@ -2017,10 +2022,11 @@ function Conversation({
               />
             ))}
           </div>
-          <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); onThreadSubmit(); }}>
+          <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); onThreadSubmit(); requestAnimationFrame(() => threadComposer.current?.focus()); }}>
             <label>
               <span className="sr-only">Message thread</span>
               <textarea
+                ref={threadComposer}
                 aria-label="Message thread"
                 value={threadDraft}
                 onChange={(event) => onThreadDraftChange(event.target.value)}
@@ -2137,6 +2143,7 @@ function Conversation({
         <label className="composer__field">
           <span className="sr-only">Message {room.name}</span>
           <textarea
+            ref={mainComposer}
             rows={1}
             value={draft}
             placeholder={`Message ${room.name}`}

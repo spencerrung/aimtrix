@@ -107,8 +107,9 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   }
   const composer = page.getByLabel('Message Welcome Lounge');
   await composer.fill('Browser test message');
-  await page.getByRole('button', { name: 'Send message' }).click();
+  await composer.press('Enter');
   await expect(page.getByText('Browser test message')).toBeVisible();
+  await expect(composer).toBeFocused();
 
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByRole('button', { name: 'Insert 🌈' }).click();
@@ -135,8 +136,9 @@ test('thread summaries open a resizable conversation with its own composer', asy
   const threadComposer = thread.getByLabel('Message thread');
   await threadComposer.fill('Thread browser test message');
   await expect(page.getByLabel('Message Welcome Lounge')).toHaveValue('');
-  await thread.getByRole('button', { name: 'Send thread reply' }).click();
+  await threadComposer.press('Enter');
   await expect(thread.getByText('Thread browser test message')).toBeVisible();
+  await expect(threadComposer).toBeFocused();
   if (testInfo.project.name === 'desktop') {
     const before = await thread.boundingBox();
     await thread.getByRole('separator', { name: 'Resize thread panel' }).press('End');
