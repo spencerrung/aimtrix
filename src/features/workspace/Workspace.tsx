@@ -5,6 +5,8 @@ import {
   Ban,
   Check,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
   Copy,
   DoorOpen,
   Film,
@@ -1329,11 +1331,14 @@ function resolveEntryUnreadMarker(
 
 type TimelineViewportMode = 'unread' | 'bottom' | 'detached';
 
+type WorkspacePanelId = 'spaces' | 'buddies' | 'conversation' | 'thread';
+
 function Conversation({
   room,
   messages,
   activeThread,
   threadRoot,
+  threadCollapsed,
   draft,
   threadDraft,
   sending,
@@ -1349,11 +1354,13 @@ function Conversation({
   onSubmit,
   onThreadSubmit,
   onToggleDetails,
+  onCollapseConversation,
   onOpenBackground,
   onStartReply,
   onOpenThread,
   onStartThread,
   onCloseThread,
+  onToggleThreadCollapsed,
   onStartEdit,
   onDeleteMessage,
   onTogglePin,
@@ -1377,6 +1384,7 @@ function Conversation({
   messages: MessageSummary[];
   activeThread?: ThreadSummary;
   threadRoot?: MessageSummary;
+  threadCollapsed: boolean;
   draft: string;
   threadDraft: string;
   sending: boolean;
@@ -1392,11 +1400,13 @@ function Conversation({
   onSubmit: () => void;
   onThreadSubmit: () => void;
   onToggleDetails: () => void;
+  onCollapseConversation: () => void;
   onOpenBackground: () => void;
   onStartReply: (message: MessageSummary) => void;
   onOpenThread: (message: MessageSummary) => void;
   onStartThread: (message: MessageSummary) => void;
   onCloseThread: () => void;
+  onToggleThreadCollapsed: () => void;
   onStartEdit: (message: MessageSummary) => void;
   onDeleteMessage: (message: MessageSummary) => void;
   onTogglePin: (message: MessageSummary) => void;
@@ -1905,6 +1915,7 @@ function Conversation({
             </span>
           ) : null}
           <IconButton label="Decorate conversation background" onClick={onOpenBackground}><Paintbrush size={17} /></IconButton>
+          <IconButton label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
           <IconButton label="Toggle room details" onClick={onToggleDetails}>
             <PanelRight size={18} />
           </IconButton>
@@ -1976,13 +1987,16 @@ function Conversation({
         </div>
       </section>
 
-      {activeThread && threadRoot ? (
+      {activeThread && threadRoot && !threadCollapsed ? (
         <aside className="thread-panel" aria-label="Thread" style={{ width: threadPanelWidth }}>
           <div
             className="thread-panel__resize"
             role="separator"
             aria-label="Resize thread panel"
             aria-orientation="vertical"
+            aria-valuemin={300}
+            aria-valuemax={680}
+            aria-valuenow={Math.round(threadPanelWidth)}
             tabIndex={0}
             onPointerDown={startPanelResize}
             onPointerMove={resizePanel}
@@ -1997,7 +2011,7 @@ function Conversation({
           />
           <header className="thread-panel__header">
             <span><MessageCircle size={16} /><strong>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}</small></span>
-            <button type="button" aria-label="Close thread" onClick={onCloseThread}><X size={16} /></button>
+            <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><X size={16} /></button></span>
           </header>
           <div className="thread-panel__timeline">
             <div className="thread-panel__root">
@@ -2041,6 +2055,7 @@ function Conversation({
           </form>
         </aside>
       ) : null}
+      {activeThread && threadRoot && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
 
       <div className="typing-strip" aria-live="polite">
         {notice ? <>{notice}{uploadInProgress ? <button className="cancel-upload" type="button" onClick={onCancelUpload}>Cancel</button> : failedUploadName ? <button className="cancel-upload" type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button> : null}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
@@ -2777,6 +2792,26 @@ export function Workspace({
   const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
   const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
+  const [threadCollapsed, setThreadCollapsed] = useState(false);
+  const [collapsedPanels, setCollapsedPanels] = useState<Record<WorkspacePanelId, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('aimtrix.workspace-panels.v1') || '{}') as Record<WorkspacePanelId, boolean>;
+    } catch {
+      return {} as Record<WorkspacePanelId, boolean>;
+    }
+  });
+  const [panelWidths, setPanelWidths] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('aimtrix.workspace-panel-widths.v1') || '{}') as Partial<{ spaces: number; buddies: number }>;
+      return {
+        spaces: typeof stored.spaces === 'number' ? Math.max(52, Math.min(stored.spaces, 180)) : 66,
+        buddies: typeof stored.buddies === 'number' ? Math.max(220, Math.min(stored.buddies, 520)) : 300,
+      };
+    } catch {
+      return { spaces: 66, buddies: 300 };
+    }
+  });
+  const panelResizeStart = useRef<{ panel: 'spaces' | 'buddies'; x: number; width: number } | undefined>(undefined);
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
@@ -3265,6 +3300,46 @@ export function Workspace({
     }
   };
 
+  const setPanelCollapsed = (panel: WorkspacePanelId, collapsed: boolean) => {
+    setCollapsedPanels((current) => {
+      const next = { ...current, [panel]: collapsed };
+      try { localStorage.setItem('aimtrix.workspace-panels.v1', JSON.stringify(next)); } catch { /* best-effort */ }
+      return next;
+    });
+  };
+
+  const startPanelResize = (panel: 'spaces' | 'buddies', event: PointerEvent<HTMLDivElement>) => {
+    panelResizeStart.current = { panel, x: event.clientX, width: panelWidths[panel] };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const setPanelWidth = (panel: 'spaces' | 'buddies', width: number) => {
+    const minimum = panel === 'spaces' ? 52 : 220;
+    const maximum = panel === 'spaces' ? 180 : 520;
+    const next = Math.max(minimum, Math.min(maximum, width));
+    setPanelCollapsed(panel, false);
+    setPanelWidths((current) => {
+      const updated = { ...current, [panel]: next };
+      try { localStorage.setItem('aimtrix.workspace-panel-widths.v1', JSON.stringify(updated)); } catch { /* best-effort */ }
+      return updated;
+    });
+  };
+
+  const resizePanel = (event: PointerEvent<HTMLDivElement>) => {
+    const start = panelResizeStart.current;
+    if (!start) return;
+    const minimum = start.panel === 'spaces' ? 52 : 220;
+    const maximum = start.panel === 'spaces' ? 180 : 520;
+    const width = Math.max(0, Math.min(maximum, start.width + event.clientX - start.x));
+    if (width < minimum) {
+      setPanelCollapsed(start.panel, true);
+      return;
+    }
+    setPanelWidth(start.panel, width);
+  };
+
+  const stopPanelResize = () => { panelResizeStart.current = undefined; };
+
   return (
     <div className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
       <section className={`aimtrix-window${detailsOpen ? ' details-open' : ''}`}>
@@ -3294,14 +3369,20 @@ export function Workspace({
           {unreadTotal ? <span className="titlebar-unread">{unreadTotal} unread</span> : null}
         </header>
 
-        <div className="workspace-grid">
-          <SpaceRail
+        <div
+          className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
+          style={{
+            gridTemplateColumns: `${collapsedPanels.spaces ? '0px' : `${panelWidths.spaces}px`} ${collapsedPanels.spaces ? '0px' : '8px'} ${collapsedPanels.buddies ? '0px' : `${panelWidths.buddies}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '0px' : 'minmax(360px, 1fr)'} ${detailsOpen ? '300px' : '0px'}`,
+          }}
+        >
+          {!collapsedPanels.spaces ? <SpaceRail
             workspace={workspace}
             activeSpace={activeSpaceSummary?.id ?? 'home'}
             onSelect={selectSpace}
             onReorder={onReorderRootSpaces}
-          />
-          <BuddyPanel
+          /> : null}
+          {!collapsedPanels.spaces ? <div className="workspace-panel-resize" role="separator" aria-label="Resize conversations" aria-orientation="vertical" aria-valuemin={52} aria-valuemax={180} aria-valuenow={Math.round(panelWidths.spaces)} tabIndex={0} onPointerDown={(event) => startPanelResize('spaces', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('spaces', panelWidths.spaces - 12); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('spaces', panelWidths.spaces + 12); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('spaces', 52); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('spaces', 180); } }} /> : null}
+          {!collapsedPanels.buddies ? <BuddyPanel
             workspace={scopedWorkspace}
             selectedRoomId={effectiveRoomId}
             scopeName={activeSpaceSummary?.name ?? 'Conversations'}
@@ -3318,12 +3399,14 @@ export function Workspace({
             onAcceptInvite={onJoinRoom}
             onRejectInvite={onRejectInvite}
             onReorganize={onReorganizeSpaceChildren}
-          />
+          /> : null}
+          {!collapsedPanels.buddies ? <div className="workspace-panel-resize" role="separator" aria-label="Resize buddy and room drawer" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           <Conversation
             room={selectedRoom}
             messages={messages}
             activeThread={activeThread}
             threadRoot={activeThreadRoot}
+            threadCollapsed={threadCollapsed}
             draft={draft}
             threadDraft={threadDraft}
             sending={sending}
@@ -3360,18 +3443,21 @@ export function Workspace({
             onSubmit={() => void submitMessage()}
             onThreadSubmit={() => void submitThreadMessage()}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onCollapseConversation={() => setPanelCollapsed('conversation', true)}
             onOpenBackground={() => setBackgroundDialogOpen(true)}
             onStartReply={handleStartReply}
             onStartThread={handleStartThread}
             onOpenThread={(message) => {
               setActiveThreadRootId(message.id);
+              setThreadCollapsed(false);
               if (workspace.mode === 'matrix') {
                 void onThreadOpened?.(message.roomId, message.id).catch(() =>
                   setNotice('This thread could not be marked read.'),
                 );
               }
             }}
-            onCloseThread={() => setActiveThreadRootId(undefined)}
+            onCloseThread={() => { setActiveThreadRootId(undefined); setThreadCollapsed(false); }}
+            onToggleThreadCollapsed={() => setThreadCollapsed((collapsed) => !collapsed)}
             onStartEdit={handleStartEdit}
             onTogglePin={handleTogglePin}
             onDeleteMessage={handleDeleteMessage}
@@ -3421,6 +3507,11 @@ export function Workspace({
               onLeave={onLeaveRoom}
             />
           ) : null}
+          <div className="workspace-panel-restores" role="group" aria-label="Expand collapsed panels">
+            {collapsedPanels.spaces ? <button type="button" onClick={() => setPanelCollapsed('spaces', false)}><ChevronRight size={15} /> Conversations</button> : null}
+            {collapsedPanels.buddies ? <button type="button" onClick={() => setPanelCollapsed('buddies', false)}><ChevronRight size={15} /> Rooms</button> : null}
+            {collapsedPanels.conversation ? <button type="button" onClick={() => setPanelCollapsed('conversation', false)}><ChevronLeft size={15} /> Conversation</button> : null}
+          </div>
         </div>
 
         {workspace.call ? (
