@@ -118,7 +118,7 @@ function LinkifiedText({ body }: { body: string }) {
 }
 
 function MessageText({ body }: { body: string }) {
-  const blocks = body.split(/```([a-z0-9+-]*)\n?([\s\S]*?)```/gi);
+  const blocks = body.split(/```(?:(typescript|javascript|python|rust|bash|json|yaml)\n)?([\s\S]*?)```/gi);
   return <>{blocks.map((block, index) => {
     if (index % 3 === 1) return null;
     if (index % 3 === 2) {
@@ -1623,6 +1623,7 @@ function Conversation({
     event.preventDefault();
     void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
   };
+  const codeDraft = draft.startsWith('```');
 
   const uploadPastedImage = (event: ClipboardEvent<HTMLTextAreaElement>, threadRootId?: string) => {
     const item = [...event.clipboardData.items].find((candidate) => candidate.type.startsWith('image/'));
@@ -1670,6 +1671,7 @@ function Conversation({
       }
     }
     if (event.key === 'Enter' && !event.shiftKey) {
+      if (codeDraft && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
     }
@@ -2263,7 +2265,7 @@ function Conversation({
           <span className="sr-only">Message {room.name}</span>
           <textarea
             ref={mainComposer}
-            rows={1}
+            rows={codeDraft ? 6 : 1}
             value={draft}
             placeholder={`Message ${room.name}`}
             onChange={(event) => {
@@ -2278,6 +2280,7 @@ function Conversation({
             disabled={sending}
           />
         </label>
+        {codeDraft ? <div className="composer-code-preview" aria-label="Code block preview"><span>Code block preview</span><pre>{draft.replace(/^```(?:typescript|javascript|python|rust|bash|json|yaml)?\n?/, '')}</pre></div> : null}
         {gifEndpoint ? (
           <IconButton label="Search GIFs" active={gifOpen} onClick={() => {
             setGifOpen((open) => !open);
