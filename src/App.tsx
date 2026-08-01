@@ -183,7 +183,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
-        onSendMessage={(roomId, body) => controller.sendMessage(roomId, body)}
+        onSendMessage={(roomId, body, mentionUserIds) => controller.sendMessage(roomId, body, mentionUserIds)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
         onRoomSelected={(roomId) => controller.loadRoomHistory(roomId)}
         onSpaceSelected={(spaceId) => controller.loadSpaceHierarchy(spaceId)}

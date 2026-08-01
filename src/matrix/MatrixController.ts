@@ -1782,7 +1782,7 @@ export class MatrixController {
     await result;
   }
 
-  public async sendMessage(roomId: string, body: string): Promise<void> {
+  public async sendMessage(roomId: string, body: string, mentionUserIds: string[] = []): Promise<void> {
     const message = body.trim();
     const client = this.client;
     const sdk = this.sdk;
@@ -1796,6 +1796,7 @@ export class MatrixController {
     await client.sendMessage(roomId, {
       msgtype: sdk.MsgType.Text,
       body: formatted.body,
+      ...(mentionUserIds.length ? { 'm.mentions': { user_ids: mentionUserIds } } : {}),
       ...(formatted.formattedBody ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody } : {}),
     });
     if (this.notificationPreferences.notificationSounds) this.playSendTone();

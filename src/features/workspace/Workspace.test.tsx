@@ -106,6 +106,17 @@ describe('Workspace demo', () => {
     expect(composer).toHaveValue('');
   });
 
+  it('selects a room member mention and sends standard mention metadata', () => {
+    const onSendMessage = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onSendMessage });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.change(composer, { target: { value: '@mar' } });
+    fireEvent.click(screen.getByRole('option', { name: /Mara/ }));
+    expect(composer).toHaveValue('@Mara ');
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(onSendMessage).toHaveBeenCalledWith('welcome', '@Mara', ['@mara:example.com']);
+  });
+
   it('turns a triple-backtick trigger into a multiline code draft without showing the fence', () => {
     renderWorkspace();
     const composer = screen.getByLabelText('Message Welcome Lounge');

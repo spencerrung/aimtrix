@@ -85,6 +85,7 @@ import {
 } from '../../settings/profilePersonalization';
 import {
   colorForId,
+  type MemberSummary,
   type MessageSummary,
   type RoomSummary,
   type SpaceRoomPreview,
@@ -148,7 +149,7 @@ interface WorkspaceProps {
   onUploadProfileBanner?: (file: File) => Promise<string>;
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
-  onSendMessage?: (roomId: string, body: string) => Promise<void>;
+  onSendMessage?: (roomId: string, body: string, mentionUserIds?: string[]) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
   onSpaceSelected?: (spaceId: string) => Promise<void>;
@@ -1413,6 +1414,7 @@ type WorkspacePanelId = 'buddies' | 'conversation' | 'thread';
 
 function Conversation({
   room,
+  members,
   messages,
   activeThread,
   threadRoot,
@@ -1428,6 +1430,7 @@ function Conversation({
   editingMessage,
   onBack,
   onDraftChange,
+  onMentionSelected,
   onThreadDraftChange,
   onSubmit,
   onThreadSubmit,
@@ -1460,6 +1463,7 @@ function Conversation({
   onLoadLinkPreview,
 }: {
   room?: RoomSummary;
+  members: MemberSummary[];
   messages: MessageSummary[];
   activeThread?: ThreadSummary;
   threadRoot?: MessageSummary;
@@ -1476,7 +1480,8 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: (body?: string) => Promise<void>;
+  onSubmit: (body?: string, mentionUserIds?: string[]) => Promise<void>;
+  onMentionSelected: (userId: string) => void;
   onThreadSubmit: () => Promise<void>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
@@ -1539,6 +1544,12 @@ function Conversation({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('typescript');
   const [codeDraftMode, setCodeDraftMode] = useState(false);
+  const [, setMentionUserIds] = useState<string[]>([]);
+  const mentionUserIdsRef = useRef<string[]>([]);
+  const mentionQuery = draft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
+  const mentionMatches = mentionQuery === undefined ? [] : members.filter((member) =>
+    member.id.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery),
+  ).slice(0, 6);
   const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<Array<{ emoji: string; name: string }>>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
@@ -1626,10 +1637,25 @@ function Conversation({
     const body = codeDraftMode
       ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\``
       : isFencedDraft ? draft : undefined;
-    void onSubmit(body).finally(() => {
+    const resolvedMentionIds = members
+      .filter((member) => new RegExp(`(^|\\s)@${member.displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`, 'u').test(draft))
+      .map((member) => member.id);
+    const selectedMentionIds = [...new Set([...mentionUserIdsRef.current, ...resolvedMentionIds])];
+    void onSubmit(body, selectedMentionIds).finally(() => {
       setCodeDraftMode(false);
+      setMentionUserIds([]);
+      mentionUserIdsRef.current = [];
       requestAnimationFrame(() => mainComposer.current?.focus());
     });
+  };
+  const insertMention = (member: MemberSummary) => {
+    onMentionSelected(member.id);
+    if (!mentionUserIdsRef.current.includes(member.id)) {
+      mentionUserIdsRef.current = [...mentionUserIdsRef.current, member.id];
+      setMentionUserIds(mentionUserIdsRef.current);
+    }
+    onDraftChange(draft.replace(/@[^\s@]*$/, `@${member.displayName} `));
+    requestAnimationFrame(() => mainComposer.current?.focus());
   };
   const codeDraft = codeDraftMode || draft.startsWith('```');
 
@@ -2253,6 +2279,9 @@ function Conversation({
           ))}
         </div>
       ) : null}
+      {mentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a room member">
+        {mentionMatches.map((member) => <button type="button" role="option" key={member.id} onClick={() => insertMention(member)}><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
+      </div> : null}
       <form className="composer" onSubmit={submit}>
         <input
           ref={fileInput}
@@ -2987,6 +3016,7 @@ export function Workspace({
   const [replyTarget, setReplyTarget] = useState<MessageSummary>();
   const [editingMessage, setEditingMessage] = useState<MessageSummary>();
   const typingTimer = useRef<number | undefined>(undefined);
+  const mentionIdsByRoom = useRef<Record<string, string[]>>({});
   const lastTypingSentAt = useRef(0);
   const requestedRoomHistory = useRef(new Set<string>());
   const historyRequests = useRef(new Map<string, Promise<void>>());
@@ -3337,9 +3367,13 @@ export function Workspace({
     onPreferencesChange(nextPreferences);
   };
 
-  const submitMessage = async (draftOverride?: string) => {
+  const submitMessage = async (draftOverride?: string, mentionUserIds?: string[]) => {
     if (!effectiveRoomId || !draft.trim() || sending) return;
     const body = (draftOverride ?? draft).trim();
+    const selectedMentionIds = [...new Set([
+      ...(mentionIdsByRoom.current[effectiveRoomId] ?? []),
+      ...(mentionUserIds ?? []),
+    ])];
     setDrafts((current) => ({ ...current, [effectiveRoomId]: '' }));
     setSending(true);
     setNotice(undefined);
@@ -3372,9 +3406,11 @@ export function Workspace({
           threadRootId,
         });
       } else if (onSendMessage) {
-        await onSendMessage(effectiveRoomId, body);
+        if (selectedMentionIds.length) await onSendMessage(effectiveRoomId, body, selectedMentionIds);
+        else await onSendMessage(effectiveRoomId, body);
       }
       setReplyTarget(undefined);
+      delete mentionIdsByRoom.current[effectiveRoomId];
       setReplyThreadRootId(undefined);
       setEditingMessage(undefined);
       if (preferences.sendTypingNotifications) void onSendTyping?.(effectiveRoomId, false);
@@ -3535,6 +3571,7 @@ export function Workspace({
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           <Conversation
             room={selectedRoom}
+            members={effectiveMembersByRoom[effectiveRoomId ?? ''] ?? []}
             messages={messages}
             activeThread={activeThread}
             threadRoot={activeThreadRoot}
@@ -3573,6 +3610,11 @@ export function Workspace({
               setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: nextDraft }));
             }}
             onSubmit={submitMessage}
+            onMentionSelected={(userId) => {
+              if (!effectiveRoomId) return;
+              const selected = mentionIdsByRoom.current[effectiveRoomId] ?? [];
+              if (!selected.includes(userId)) mentionIdsByRoom.current[effectiveRoomId] = [...selected, userId];
+            }}
             onThreadSubmit={submitThreadMessage}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onCollapseConversation={() => setPanelCollapsed('conversation', true)}
