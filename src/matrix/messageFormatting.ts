@@ -13,7 +13,7 @@ export function matrixFormattedMessage(body: string): { body: string; formattedB
   if (!/[`*_]/.test(body)) return { body };
   const blocks: string[] = [];
   let cursor = 0;
-  const fence = /```([a-z0-9+-]*)\n?([\s\S]*?)```/gi;
+  const fence = /```(?:(typescript|javascript|python|rust|bash|json|yaml)\n)?([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
   while ((match = fence.exec(body))) {
     const before = body.slice(cursor, match.index);
