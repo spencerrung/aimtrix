@@ -897,6 +897,12 @@
   .colon-complete__sticker img { max-width: 32px; max-height: 32px; }
   .colon-complete__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .colon-complete small { color: var(--text-faint); font-size: 0.58rem; font-weight: 700; text-transform: uppercase; }
+  .mention-complete { position: absolute; z-index: 12; bottom: 65px; left: 12px; display: grid; width: min(320px, calc(100% - 24px)); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 12px 35px rgba(28, 46, 60, 0.32); }
+  .mention-complete button { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); border: 0; background: transparent; text-align: left; }
+  .mention-complete button:hover, .mention-complete button:focus-visible { background: var(--blue-soft); outline: 0; }
+  .mention-complete span { display: grid; min-width: 0; }
+  .mention-complete strong, .mention-complete small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mention-complete small { color: var(--text-faint); font-size: 0.63rem; }
   .sticker-tray header, .emoji-tray header { display: flex; align-items: baseline; justify-content: space-between; padding: 2px 3px 9px; }
   .sticker-tray header strong, .emoji-tray header strong { font-size: 0.76rem; }
   .sticker-tray header span, .emoji-tray header span { color: var(--text-faint); font-size: 0.63rem; }
