@@ -117,6 +117,25 @@ function LinkifiedText({ body }: { body: string }) {
   })}</>;
 }
 
+function MessageText({ body }: { body: string }) {
+  const blocks = body.split(/```([a-z0-9+-]*)\n?([\s\S]*?)```/gi);
+  return <>{blocks.map((block, index) => {
+    if (index % 3 === 1) return null;
+    if (index % 3 === 2) {
+      const language = blocks[index - 1] || 'text';
+      return <section className="message-code" key={`code:${index}`}><header><span>{language}</span><button type="button" onClick={() => void navigator.clipboard?.writeText(block)}>Copy</button></header><pre><code>{block}</code></pre></section>;
+    }
+    if (!block) return null;
+    const inline = block.split(/(`[^`]+`|\*\*[^*]+\*\*|_[^_\n]+_)/g);
+    return <p key={`text:${index}`}>{inline.map((part, partIndex) => {
+      if (part.startsWith('`') && part.endsWith('`')) return <code key={partIndex}>{part.slice(1, -1)}</code>;
+      if (part.startsWith('**') && part.endsWith('**')) return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
+      if (part.startsWith('_') && part.endsWith('_')) return <em key={partIndex}>{part.slice(1, -1)}</em>;
+      return <LinkifiedText body={part} key={partIndex} />;
+    })}</p>;
+  })}</>;
+}
+
 interface WorkspaceProps {
   workspace: WorkspaceSnapshot;
   config: RuntimeConfig;
@@ -1279,9 +1298,9 @@ const TimelineMessage = memo(function TimelineMessage({
             onLoad={onMediaLoad}
           />
         ) : (
-          <p className={`message-kind--${message.kind}`}>
-            {message.kind === 'emote' ? `${message.senderName} ` : ''}<LinkifiedText body={message.body} />
-          </p>
+          <div className={`message-kind--${message.kind}`}>
+            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} />
+          </div>
         )}
         <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
         {message.reactions?.length ? (
@@ -1518,6 +1537,7 @@ function Conversation({
   const mainComposer = useRef<HTMLTextAreaElement>(null);
   const threadComposer = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [codeLanguage, setCodeLanguage] = useState('typescript');
   const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<Array<{ emoji: string; name: string }>>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
@@ -1612,6 +1632,19 @@ function Conversation({
     const extension = image.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
     const file = image.name ? image : new File([image], `pasted-image.${extension}`, { type: image.type });
     onUploadAttachment(file, threadRootId);
+  };
+
+  const insertCodeBlock = () => {
+    const element = mainComposer.current;
+    const start = element?.selectionStart ?? draft.length;
+    const end = element?.selectionEnd ?? start;
+    const selected = draft.slice(start, end) || 'code';
+    const insertion = `\`\`\`${codeLanguage}\n${selected}\n\`\`\``;
+    onDraftChange(`${draft.slice(0, start)}${insertion}${draft.slice(end)}`);
+    requestAnimationFrame(() => {
+      mainComposer.current?.focus();
+      mainComposer.current?.setSelectionRange(start + codeLanguage.length + 4, start + codeLanguage.length + 4 + selected.length);
+    });
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (colonResults.length) {
@@ -2268,6 +2301,10 @@ function Conversation({
         }}>
           <Smile size={19} />
         </IconButton>
+        <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => setCodeLanguage(event.target.value)}>
+          <option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="text">Text</option>
+        </select>
+        <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
         <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending}>
           <Send size={17} />
         </button>

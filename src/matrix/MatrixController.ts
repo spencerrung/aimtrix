@@ -26,6 +26,7 @@ import {
 } from '../settings/profilePersonalization';
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { resolveHomeserver } from './discovery';
+import { matrixFormattedMessage } from './messageFormatting';
 import {
   clearStoredSession,
   databaseNames,
@@ -1784,13 +1785,19 @@ export class MatrixController {
   public async sendMessage(roomId: string, body: string): Promise<void> {
     const message = body.trim();
     const client = this.client;
-    if (!client || !message) return;
+    const sdk = this.sdk;
+    if (!client || !sdk || !message) return;
     const room = client.getRoom(roomId);
     if (!room) throw new Error('Room is not available.');
     if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
       throw new Error('Encryption is not ready for this room.');
     }
-    await client.sendTextMessage(roomId, message);
+    const formatted = matrixFormattedMessage(message);
+    await client.sendMessage(roomId, {
+      msgtype: sdk.MsgType.Text,
+      body: formatted.body,
+      ...(formatted.formattedBody ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody } : {}),
+    });
     if (this.notificationPreferences.notificationSounds) this.playSendTone();
     this.scheduleWorkspacePublish();
   }
