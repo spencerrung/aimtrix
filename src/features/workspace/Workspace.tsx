@@ -1676,7 +1676,6 @@ function Conversation({
       }
     }
     if (event.key === 'Enter' && !event.shiftKey) {
-      if (codeDraft && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
     }
