@@ -1476,7 +1476,7 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: () => Promise<void>;
+  onSubmit: (body?: string) => Promise<void>;
   onThreadSubmit: () => Promise<void>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
@@ -1538,6 +1538,7 @@ function Conversation({
   const threadComposer = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('typescript');
+  const [codeDraftMode, setCodeDraftMode] = useState(false);
   const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<Array<{ emoji: string; name: string }>>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
@@ -1621,9 +1622,13 @@ function Conversation({
     });
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
+    const body = codeDraftMode ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\`` : undefined;
+    void onSubmit(body).finally(() => {
+      setCodeDraftMode(false);
+      requestAnimationFrame(() => mainComposer.current?.focus());
+    });
   };
-  const codeDraft = draft.startsWith('```');
+  const codeDraft = codeDraftMode || draft.startsWith('```');
 
   const uploadPastedImage = (event: ClipboardEvent<HTMLTextAreaElement>, threadRootId?: string) => {
     const item = [...event.clipboardData.items].find((candidate) => candidate.type.startsWith('image/'));
@@ -2270,7 +2275,12 @@ function Conversation({
             placeholder={`Message ${room.name}`}
             onChange={(event) => {
               setComposerCaret(event.target.selectionStart ?? event.target.value.length);
-              onDraftChange(event.target.value);
+              if (event.target.value === '```') {
+                setCodeDraftMode(true);
+                onDraftChange('');
+              } else {
+                onDraftChange(event.target.value);
+              }
             }}
             onSelect={(event) => setComposerCaret(event.currentTarget.selectionStart ?? 0)}
             onFocus={() => setComposerFocused(true)}
@@ -2280,7 +2290,7 @@ function Conversation({
             disabled={sending}
           />
         </label>
-        {codeDraft ? <div className="composer-code-preview" aria-label="Code block preview"><span>Code block preview</span><pre>{draft.replace(/^```(?:typescript|javascript|python|rust|bash|json|yaml)?\n?/, '')}</pre></div> : null}
+        {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
         {gifEndpoint ? (
           <IconButton label="Search GIFs" active={gifOpen} onClick={() => {
             setGifOpen((open) => !open);
@@ -3325,9 +3335,9 @@ export function Workspace({
     onPreferencesChange(nextPreferences);
   };
 
-  const submitMessage = async () => {
+  const submitMessage = async (draftOverride?: string) => {
     if (!effectiveRoomId || !draft.trim() || sending) return;
-    const body = draft.trim();
+    const body = (draftOverride ?? draft).trim();
     setDrafts((current) => ({ ...current, [effectiveRoomId]: '' }));
     setSending(true);
     setNotice(undefined);

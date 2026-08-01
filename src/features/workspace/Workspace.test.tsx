@@ -106,6 +106,19 @@ describe('Workspace demo', () => {
     expect(composer).toHaveValue('');
   });
 
+  it('turns a triple-backtick trigger into a multiline code draft without showing the fence', () => {
+    renderWorkspace();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.change(composer, { target: { value: '```' } });
+    expect(composer).toHaveValue('');
+    expect(screen.getByLabelText('Code block mode')).toHaveTextContent('typescript code');
+
+    fireEvent.change(composer, { target: { value: 'const hello = "world";' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(screen.getByText('typescript')).toBeInTheDocument();
+    expect(screen.getByText('const hello = "world";')).toBeInTheDocument();
+  });
+
   it('restores main composer focus after a delayed Matrix send settles', async () => {
     let resolveSend: (() => void) | undefined;
     const onSendMessage = vi.fn(() => new Promise<void>((resolve) => { resolveSend = resolve; }));
