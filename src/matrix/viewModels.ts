@@ -92,6 +92,7 @@ export interface MessageSummary {
   isOwn: boolean;
   pending?: boolean;
   edited?: boolean;
+  mentionUserIds?: string[];
   replyTo?: {
     eventId: string;
     senderName: string;

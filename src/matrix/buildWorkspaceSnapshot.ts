@@ -168,6 +168,7 @@ interface MessageContent {
   info?: { mimetype?: string };
   'm.new_content'?: MessageContent;
   'm.relates_to'?: RelationContent;
+  'm.mentions'?: { user_ids?: string[] };
 }
 
 function mapPresence(value?: string): PresenceState {
@@ -200,6 +201,7 @@ function eventBody(
   kind: MessageSummary['kind'];
   mediaUrl?: string;
   edited?: boolean;
+  mentionUserIds?: string[];
   encryptedFile?: MessageSummary['encryptedFile'];
   mimeType?: string;
   mediaKind?: MessageSummary['mediaKind'];
@@ -232,7 +234,14 @@ function eventBody(
 
   switch (content.msgtype) {
     case matrixMessageType.text:
-      return { body, kind: 'text', edited: Boolean(replacementContent) };
+      return {
+        body,
+        kind: 'text',
+        edited: Boolean(replacementContent),
+        mentionUserIds: Array.isArray(content['m.mentions']?.user_ids)
+          ? content['m.mentions']?.user_ids.filter((id): id is string => typeof id === 'string')
+          : undefined,
+      };
     case matrixMessageType.notice:
       return { body, kind: 'notice', edited: Boolean(replacementContent) };
     case matrixMessageType.emote:

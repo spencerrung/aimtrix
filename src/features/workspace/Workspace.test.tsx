@@ -117,6 +117,22 @@ describe('Workspace demo', () => {
     expect(onSendMessage).toHaveBeenCalledWith('welcome', '@Mara', ['@mara:example.com']);
   });
 
+  it('renders Matrix messages with mention metadata as visible mentions', () => {
+    const workspace = {
+      ...demoWorkspace,
+      messagesByRoom: {
+        ...demoWorkspace.messagesByRoom,
+        welcome: [{
+          id: 'mentioned-message', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+          body: '@Spencer can you check this?', timestamp: Date.now(), kind: 'text' as const, isOwn: false,
+          mentionUserIds: ['@you:example.com'],
+        }],
+      },
+    };
+    renderWorkspace({ workspace });
+    expect(screen.getByText('@Spencer')).toHaveClass('message-mention');
+  });
+
   it('turns a triple-backtick trigger into a multiline code draft without showing the fence', () => {
     renderWorkspace();
     const composer = screen.getByLabelText('Message Welcome Lounge');

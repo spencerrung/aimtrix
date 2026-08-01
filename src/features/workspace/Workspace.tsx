@@ -118,7 +118,7 @@ function LinkifiedText({ body }: { body: string }) {
   })}</>;
 }
 
-function MessageText({ body }: { body: string }) {
+function MessageText({ body, hasMentions = false }: { body: string; hasMentions?: boolean }) {
   const blocks = body.split(/```(?:(typescript|javascript|python|rust|bash|json|yaml)\n)?([\s\S]*?)```/gi);
   return <>{blocks.map((block, index) => {
     if (index % 3 === 1) return null;
@@ -132,7 +132,11 @@ function MessageText({ body }: { body: string }) {
       if (part.startsWith('`') && part.endsWith('`')) return <code key={partIndex}>{part.slice(1, -1)}</code>;
       if (part.startsWith('**') && part.endsWith('**')) return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
       if (part.startsWith('_') && part.endsWith('_')) return <em key={partIndex}>{part.slice(1, -1)}</em>;
-      return <LinkifiedText body={part} key={partIndex} />;
+      if (!hasMentions) return <LinkifiedText body={part} key={partIndex} />;
+      return <Fragment key={partIndex}>{part.split(/(@[\w.-]+)/g).map((token, tokenIndex) => token.startsWith('@')
+        ? <mark className="message-mention" key={tokenIndex}>{token}</mark>
+        : <LinkifiedText body={token} key={tokenIndex} />,
+      )}</Fragment>;
     })}</p>;
   })}</>;
 }
@@ -1300,7 +1304,7 @@ const TimelineMessage = memo(function TimelineMessage({
           />
         ) : (
           <div className={`message-kind--${message.kind}`}>
-            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} />
+            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} hasMentions={Boolean(message.mentionUserIds?.length)} />
           </div>
         )}
         <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
