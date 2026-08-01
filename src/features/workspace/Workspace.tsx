@@ -1622,7 +1622,10 @@ function Conversation({
     });
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const body = codeDraftMode ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\`` : undefined;
+    const isFencedDraft = draft.startsWith('```');
+    const body = codeDraftMode
+      ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\``
+      : isFencedDraft ? draft : undefined;
     void onSubmit(body).finally(() => {
       setCodeDraftMode(false);
       requestAnimationFrame(() => mainComposer.current?.focus());
