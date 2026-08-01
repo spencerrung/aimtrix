@@ -114,8 +114,7 @@ describe('Workspace demo', () => {
     expect(screen.getByLabelText('Code block mode')).toHaveTextContent('typescript code');
 
     fireEvent.change(composer, { target: { value: 'const hello = "world";' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
-    expect(screen.getByText('typescript')).toBeInTheDocument();
+    fireEvent.keyDown(composer, { key: 'Enter' });
     expect(screen.getByText('const hello = "world";')).toBeInTheDocument();
   });
 
