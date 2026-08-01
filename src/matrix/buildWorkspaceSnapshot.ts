@@ -365,6 +365,7 @@ function messagesForEvents(
       mimeType: rendered.mimeType,
       mediaKind: rendered.mediaKind,
       edited: rendered.edited,
+      mentionUserIds: rendered.mentionUserIds,
       threadRootId: threadRootByEventId.get(eventId),
       isThreadRoot: threadRootIds.has(eventId),
       replyTo: replyEventId && replyRendered

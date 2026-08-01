@@ -65,6 +65,16 @@ function fakeClient(
 }
 
 describe('buildWorkspaceSnapshot stickers', () => {
+  it('preserves standard Matrix mention user IDs for message rendering', () => {
+    const client = fakeClient([
+      fakeEvent('m.room.message', {
+        msgtype: 'm.text', body: '@Spencer hello', 'm.mentions': { user_ids: ['@me:test'] },
+      }),
+    ]);
+    const [message] = buildWorkspaceSnapshot(client, 'online').messagesByRoom['!room:test'];
+    expect(message.mentionUserIds).toEqual(['@me:test']);
+  });
+
   it('renders plain stickers from their original Matrix media URL', () => {
     const client = fakeClient([
       fakeEvent('m.sticker', {
