@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Ban,
+  BellRing,
   Check,
   ChevronDown,
   ChevronRight,
@@ -154,6 +155,7 @@ interface WorkspaceProps {
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
   onSendMessage?: (roomId: string, body: string, mentionUserIds?: string[]) => Promise<void>;
+  onSendNudge?: (roomId: string) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
   onSpaceSelected?: (spaceId: string) => Promise<void>;
@@ -1510,6 +1512,7 @@ function Conversation({
   dataSaver,
   autoplayMedia,
   onLoadLinkPreview,
+  onSendNudge,
 }: {
   room?: RoomSummary;
   members: MemberSummary[];
@@ -1563,6 +1566,7 @@ function Conversation({
   dataSaver: boolean;
   autoplayMedia: boolean;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
+  onSendNudge?: () => void;
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
@@ -2468,6 +2472,7 @@ function Conversation({
         }}>
           <Smile size={19} />
         </IconButton>
+        <IconButton label="Send a nudge" onClick={() => onSendNudge?.()}><BellRing size={18} /></IconButton>
         <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => setCodeLanguage(event.target.value)}>
           <option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="text">Text</option>
         </select>
@@ -3000,6 +3005,7 @@ export function Workspace({
   onUpdateProfile,
   matrixSettingsActions,
   onSendMessage,
+  onSendNudge,
   onLoadLinkPreview,
   onRoomSelected,
   onSpaceSelected,
@@ -3099,6 +3105,9 @@ export function Workspace({
   const [uploadInProgress, setUploadInProgress] = useState(false);
   const [failedUpload, setFailedUpload] = useState<File>();
   const [notice, setNotice] = useState<string>();
+  const [nudgeActive, setNudgeActive] = useState(false);
+  const latestNudgeId = useRef<string | undefined>(undefined);
+  const lastNudgeSentAt = useRef(0);
   const [roomOverrides, setRoomOverrides] = useState<Record<string, Partial<RoomSummary>>>({});
   const [spaceOverrides, setSpaceOverrides] = useState<Record<string, Partial<SpaceSummary>>>({});
 
@@ -3196,7 +3205,16 @@ export function Workspace({
       }
     : undefined;
   const messagesByRoom = workspace.mode === 'demo' ? demoMessages : workspace.messagesByRoom;
-  const messages = effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [];
+  const messages = useMemo(() => effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [], [effectiveRoomId, messagesByRoom]);
+  useEffect(() => {
+    const latest = messages.filter((message) => message.nudge && !message.isOwn).at(-1);
+    if (!latest || latestNudgeId.current === latest.id) return;
+    latestNudgeId.current = latest.id;
+    if (!preferences.nudgeEffects || preferences.motion === 'reduced' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const start = window.setTimeout(() => setNudgeActive(true), 0);
+    const stop = window.setTimeout(() => setNudgeActive(false), 520);
+    return () => { window.clearTimeout(start); window.clearTimeout(stop); };
+  }, [messages, preferences.motion, preferences.nudgeEffects]);
   const activeThreadBase = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] : undefined;
   const activeThread = activeThreadBase && activeThreadRootId
     ? {
@@ -3674,7 +3692,7 @@ export function Workspace({
 
   return (
     <div className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
-      <section className={`aimtrix-window${detailsOpen ? ' details-open' : ''}`}>
+      <section className={`aimtrix-window${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
           <div className="app-titlebar__identity">
             <BrandMark compact />
@@ -3825,6 +3843,15 @@ export function Workspace({
               }
             }}
             onReadLatest={markEffectiveRoomRead}
+            onSendNudge={() => {
+              if (!effectiveRoomId || !onSendNudge) return;
+              if (Date.now() - lastNudgeSentAt.current < 5_000) {
+                setNotice('Please wait a few seconds before sending another nudge.');
+                return;
+              }
+              lastNudgeSentAt.current = Date.now();
+              void onSendNudge(effectiveRoomId).catch(() => setNotice('That nudge could not be sent.'));
+            }}
             gifEndpoint={config.features.gifs ? config.gifProvider?.searchEndpoint : undefined}
             stickerPacks={availableStickerPacks}
             defaultStickerPack={profilePersonalization.defaultStickerPack}

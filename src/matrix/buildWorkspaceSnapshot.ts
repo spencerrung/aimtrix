@@ -169,6 +169,7 @@ interface MessageContent {
   'm.new_content'?: MessageContent;
   'm.relates_to'?: RelationContent;
   'm.mentions'?: { user_ids?: string[] };
+  'dev.alucard.aimtrix.nudge.v1'?: { version?: unknown };
 }
 
 function mapPresence(value?: string): PresenceState {
@@ -202,6 +203,7 @@ function eventBody(
   mediaUrl?: string;
   edited?: boolean;
   mentionUserIds?: string[];
+  nudge?: boolean;
   encryptedFile?: MessageSummary['encryptedFile'];
   mimeType?: string;
   mediaKind?: MessageSummary['mediaKind'];
@@ -243,7 +245,7 @@ function eventBody(
           : undefined,
       };
     case matrixMessageType.notice:
-      return { body, kind: 'notice', edited: Boolean(replacementContent) };
+      return { body, kind: 'notice', edited: Boolean(replacementContent), nudge: (content['dev.alucard.aimtrix.nudge.v1'] as { version?: unknown } | undefined)?.version === 1 };
     case matrixMessageType.emote:
       return { body, kind: 'emote', edited: Boolean(replacementContent) };
     case matrixMessageType.image:
@@ -366,6 +368,7 @@ function messagesForEvents(
       mediaKind: rendered.mediaKind,
       edited: rendered.edited,
       mentionUserIds: rendered.mentionUserIds,
+      nudge: rendered.nudge,
       threadRootId: threadRootByEventId.get(eventId),
       isThreadRoot: threadRootIds.has(eventId),
       replyTo: replyEventId && replyRendered

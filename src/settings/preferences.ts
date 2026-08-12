@@ -15,6 +15,7 @@ export interface UserPreferences {
   density: DensityName;
   messageScale: MessageScaleName;
   motion: MotionName;
+  nudgeEffects: boolean;
   messageSurface: MessageSurfaceName;
   detailsOpenByDefault: boolean;
   desktopNotifications: boolean;
@@ -34,6 +35,7 @@ export const defaultUserPreferences: UserPreferences = {
   density: 'comfortable',
   messageScale: 'medium',
   motion: 'system',
+  nudgeEffects: true,
   messageSurface: 'solid',
   detailsOpenByDefault: true,
   desktopNotifications: false,
@@ -66,6 +68,7 @@ export function parseUserPreferences(value: unknown): UserPreferences {
       ? candidate.messageScale
       : defaultUserPreferences.messageScale,
     motion: includes(motionNames, candidate.motion) ? candidate.motion : defaultUserPreferences.motion,
+    nudgeEffects: typeof candidate.nudgeEffects === 'boolean' ? candidate.nudgeEffects : defaultUserPreferences.nudgeEffects,
     messageSurface: includes(messageSurfaceNames, candidate.messageSurface)
       ? candidate.messageSurface
       : defaultUserPreferences.messageSurface,

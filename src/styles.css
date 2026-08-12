@@ -355,6 +355,9 @@
     overflow: hidden;
     background: var(--surface);
   }
+  .aimtrix-window.is-nudging { animation: aimtrix-nudge 520ms ease-out; }
+  @keyframes aimtrix-nudge { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px); } 45% { transform: translateX(6px); } 68% { transform: translateX(-3px); } }
+  @media (prefers-reduced-motion: reduce) { .aimtrix-window.is-nudging { animation: none; } }
   .app-titlebar {
     display: flex;
     min-width: 0;
