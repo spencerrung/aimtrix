@@ -482,6 +482,84 @@ describe('Workspace demo', () => {
     expect(timeline.scrollTop).toBe(400);
   });
 
+  it('returns to the local echo when sending after scrolling away from the tail', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+
+    renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+    expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.change(composer, { target: { value: 'Bring me back to this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(screen.getByText('Bring me back to this')).toBeInTheDocument());
+    await waitFor(() => expect(timeline.scrollTop).toBe(1000));
+    expect(screen.queryByRole('button', { name: 'Jump to latest messages' })).not.toBeInTheDocument();
+  });
+
+  it('keeps a detached viewport fixed when remote messages arrive', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+
+    const updatedWorkspace = structuredClone(workspace);
+    updatedWorkspace.messagesByRoom.welcome.push({
+      id: 'm6', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+      body: 'A remote message', timestamp: Date.now(), kind: 'text', isOwn: false,
+    });
+    rerenderWorkspace(updatedWorkspace);
+
+    expect(timeline.scrollTop).toBe(400);
+    expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+  });
+
+  it('keeps a detached viewport fixed when a Matrix send fails', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.mode = 'matrix';
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome');
+    if (!room) throw new Error('Welcome Lounge fixture is missing');
+    room.unreadCount = 0;
+    room.timelineUnreadCount = 0;
+    room.readUpToMessageId = 'm5';
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    renderWorkspace({ workspace, onSendMessage: vi.fn().mockRejectedValue(new Error('offline')) });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.change(composer, { target: { value: 'This should remain a draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+
+    await waitFor(() => expect(screen.getByText('That message did not send. Your draft has been restored.')).toBeInTheDocument());
+    expect(composer).toHaveValue('This should remain a draft');
+    expect(timeline.scrollTop).toBe(400);
+    expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+  });
+
   it('marks newer messages read only after a detached viewport returns to the bottom', async () => {
     installResizeObserver();
     const workspace = structuredClone(demoWorkspace);

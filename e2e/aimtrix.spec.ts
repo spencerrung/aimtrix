@@ -171,6 +171,29 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(page.getByRole('img', { name: 'Bubble Buddy' })).toBeVisible();
 });
 
+test('sending from history returns to the latest local echo', async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  }
+  const composer = page.getByLabel('Message Welcome Lounge');
+  await composer.fill('history\n'.repeat(32));
+  await page.getByRole('button', { name: 'Send message' }).click();
+  const timeline = page.getByRole('region', { name: 'Messages' });
+  await expect.poll(() => timeline.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
+
+  await timeline.evaluate((element) => {
+    element.scrollTop = 0;
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeVisible();
+
+  await composer.fill('Back at the tail');
+  await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByText('Back at the tail')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeHidden();
+  await expect.poll(() => timeline.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(48);
+});
+
 test('thread summaries open a resizable conversation with its own composer', async ({ page }, testInfo) => {
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();

@@ -1488,7 +1488,7 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: (body?: string, mentionUserIds?: string[]) => Promise<void>;
+  onSubmit: (body?: string, mentionUserIds?: string[]) => Promise<boolean>;
   onMentionSelected: (userId: string) => void;
   onThreadSubmit: () => Promise<void>;
   onToggleDetails: () => void;
@@ -1538,6 +1538,7 @@ function Conversation({
   const [colonDismissed, setColonDismissed] = useState<string>();
   const [composerCaret, setComposerCaret] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
+  const [timelineDetached, setTimelineDetached] = useState(false);
   const [threadPanelWidth, setThreadPanelWidth] = useState(() => {
     try {
       const stored = Number(localStorage.getItem('aimtrix.thread-panel-width.v1'));
@@ -1661,7 +1662,9 @@ function Conversation({
       .filter((member) => new RegExp(`(^|\\s)@${member.displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`, 'u').test(draft))
       .map((member) => member.id);
     const selectedMentionIds = [...new Set([...mentionUserIdsRef.current, ...resolvedMentionIds])];
-    void onSubmit(body, selectedMentionIds).finally(() => {
+    void onSubmit(body, selectedMentionIds).then((sent) => {
+      if (sent) returnToLatest();
+    }).finally(() => {
       setCodeDraftMode(false);
       setMentionUserIds([]);
       mentionUserIdsRef.current = [];
@@ -1743,7 +1746,9 @@ function Conversation({
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      void onSubmit().finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
+      void onSubmit().then((sent) => {
+        if (sent) returnToLatest();
+      }).finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
     }
   };
 
@@ -1788,6 +1793,7 @@ function Conversation({
       positionedUnreadMarker.current = undefined;
       unreadAnchorTop.current = undefined;
       viewportMode.current = activeEntryUnreadMarker ? 'unread' : 'bottom';
+      setTimelineDetached(false);
       previousTimelineMessages.current = undefined;
       historyRequestToken.current += 1;
       loadingHistory.current = false;
@@ -1858,6 +1864,20 @@ function Conversation({
     });
   }, [activeRoomId, latestMessageId, onReadLatest]);
 
+  const returnToLatest = useCallback(() => {
+    viewportMode.current = 'bottom';
+    unreadAnchorTop.current = undefined;
+    setTimelineDetached(false);
+    requestAnimationFrame(() => {
+      const element = timeline.current;
+      if (!element) return;
+      runProgrammaticScroll(() => {
+        element.scrollTop = element.scrollHeight;
+      });
+      reportLatestRead();
+    });
+  }, [reportLatestRead, runProgrammaticScroll]);
+
   useEffect(() => {
     const roomChanged = reportedRead.current?.roomId !== activeRoomId;
     if (roomChanged || viewportMode.current === 'bottom') reportLatestRead();
@@ -1873,6 +1893,7 @@ function Conversation({
     const atBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
     viewportMode.current = atBottom ? 'bottom' : 'detached';
+    setTimelineDetached(!atBottom);
     unreadAnchorTop.current = undefined;
     if (atBottom) reportLatestRead();
     if (element.scrollTop > 80 || loadingHistory.current) return;
@@ -2177,6 +2198,7 @@ function Conversation({
           )}
         </div>
       </section>
+      {timelineDetached ? <button className="jump-to-latest" type="button" onClick={returnToLatest}>Jump to latest messages</button> : null}
 
       {activeThread && threadRoot && !threadCollapsed ? (
         <aside className="thread-panel" aria-label="Thread" style={{ width: threadPanelWidth }}>
@@ -3435,8 +3457,8 @@ export function Workspace({
     onPreferencesChange(nextPreferences);
   };
 
-  const submitMessage = async (draftOverride?: string, mentionUserIds?: string[]) => {
-    if (!effectiveRoomId || !draft.trim() || sending) return;
+  const submitMessage = async (draftOverride?: string, mentionUserIds?: string[]): Promise<boolean> => {
+    if (!effectiveRoomId || !draft.trim() || sending) return false;
     const body = (draftOverride ?? draft).trim();
     const selectedMentionIds = [...new Set([
       ...(mentionIdsByRoom.current[effectiveRoomId] ?? []),
@@ -3446,6 +3468,7 @@ export function Workspace({
     setSending(true);
     setNotice(undefined);
 
+    let sentMessage = false;
     try {
       if (editingMessage) {
         if (workspace.mode === 'demo') {
@@ -3474,6 +3497,7 @@ export function Workspace({
           ...current,
           [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message],
         }));
+        sentMessage = true;
       } else if (replyTarget && onSendReply) {
         const threadRootId = replyThreadRootId ?? replyTarget.threadRootId;
         await onSendReply(effectiveRoomId, body, {
@@ -3482,18 +3506,22 @@ export function Workspace({
           body: replyTarget.body,
           threadRootId,
         });
+        sentMessage = true;
       } else if (onSendMessage) {
         if (selectedMentionIds.length) await onSendMessage(effectiveRoomId, body, selectedMentionIds);
         else await onSendMessage(effectiveRoomId, body);
+        sentMessage = true;
       }
       setReplyTarget(undefined);
       delete mentionIdsByRoom.current[effectiveRoomId];
       setReplyThreadRootId(undefined);
       setEditingMessage(undefined);
       if (preferences.sendTypingNotifications) void onSendTyping?.(effectiveRoomId, false);
+      return sentMessage;
     } catch {
       setDrafts((current) => ({ ...current, [effectiveRoomId]: body }));
       setNotice('That message did not send. Your draft has been restored.');
+      return false;
     } finally {
       setSending(false);
     }
