@@ -538,12 +538,13 @@
   .timeline-message + .timeline-message { border-top: 1px solid color-mix(in srgb, var(--border-soft) 48%, transparent); }
   .timeline-message:hover { background: color-mix(in srgb, var(--surface-soft) 70%, transparent); }
   .timeline-message__content { width: fit-content; max-width: min(100%, 680px); min-width: 0; justify-self: start; padding: 7px 10px 8px; border: 1px solid color-mix(in srgb, var(--border-soft) 72%, transparent); border-radius: 11px; background: var(--message-surface, var(--surface-raised)); box-shadow: 0 1px 2px rgba(25, 67, 86, 0.08); }
-  .timeline-message--own .timeline-message__content { justify-self: end; border-color: color-mix(in srgb, var(--blue) 32%, var(--border-soft)); }
+  .timeline-message--own { grid-template-columns: minmax(0, 1fr) 34px; }
+  .timeline-message--own > .avatar { grid-column: 2; }
+  .timeline-message--own .timeline-message__content { grid-column: 1; justify-self: end; border-color: color-mix(in srgb, var(--blue) 32%, var(--border-soft)); }
   :root[data-message-surface="solid"] { --message-surface: var(--surface-raised); }
   :root[data-message-surface="frosted"] { --message-surface: color-mix(in srgb, var(--surface-raised) 76%, transparent); }
   :root[data-message-surface="clear"] { --message-surface: color-mix(in srgb, var(--surface-raised) 42%, transparent); }
   :root[data-message-surface="frosted"] .timeline-message__content { backdrop-filter: blur(8px); }
-  :root[data-message-surface="clear"] .timeline-message__content { backdrop-filter: blur(3px); }
   @media (prefers-reduced-transparency: reduce) { :root { --message-surface: var(--surface-raised) !important; } }
   .timeline-message__content header { display: flex; align-items: baseline; gap: 7px; }
   .timeline-message__content header strong { color: var(--sender-color); font-size: 0.82rem; }
