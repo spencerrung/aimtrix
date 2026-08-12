@@ -615,6 +615,7 @@
   .cancel-upload { margin-left: 8px; padding: 1px 5px; color: #a12f38; border: 0; border-radius: 4px; background: rgba(161,47,56,0.1); font-size: 0.58rem; font-weight: 700; }
   @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-3px); } }
   .composer { display: flex; min-width: 0; align-items: flex-end; gap: 4px; margin: 0 11px 11px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-inset); box-shadow: inset 0 1px 3px rgba(30,50,65,0.14), 0 1px var(--chrome-highlight); }
+  .jump-to-latest { position: absolute; z-index: 4; right: 24px; bottom: 74px; padding: 7px 10px; color: var(--blue-deep); border: 1px solid var(--blue); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--small-shadow); font: inherit; font-size: 0.7rem; font-weight: 800; }
   .composer__tools { display: flex; gap: 1px; }
   .composer__field { min-width: 0; flex: 1; }
   .composer__code-language { max-width: 54px; padding: 4px; color: var(--text-soft); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-inset); font: 0.62rem ui-monospace, monospace; }
