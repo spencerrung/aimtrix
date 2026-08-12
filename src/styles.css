@@ -562,6 +562,17 @@
   .message-reply-context strong { color: var(--blue-deep); font-size: 0.66rem; }
   .message-reply-context span { overflow: hidden; color: var(--text-faint); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
   .message-media { width: min(480px, 100%); max-height: 380px; margin-top: 7px; object-fit: contain; object-position: left; border: 1px solid var(--border-soft); border-radius: 7px; background: var(--surface-inset); }
+  .message-media-button { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
+  .message-media-button .message-media { display: block; }
+  .media-viewer-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; padding: 24px; place-items: center; background: rgba(7, 16, 25, 0.78); }
+  .media-viewer { display: grid; width: min(1100px, 100%); max-height: 100%; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 18px 60px rgba(0,0,0,0.45); }
+  .media-viewer header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+  .media-viewer header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.76rem; }
+  .media-viewer header span { display: flex; gap: 5px; }
+  .media-viewer header button { padding: 5px 7px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); font: inherit; font-size: 0.67rem; }
+  .media-viewer > img { display: block; max-width: 100%; max-height: calc(100vh - 120px); margin: auto; object-fit: contain; }
+  .media-viewer > img.is-actual-size { max-width: none; max-height: none; }
+  .media-viewer > p { padding: 30px; color: var(--text-soft); text-align: center; }
   .message-sticker { width: min(180px, 45vw); max-height: 180px; margin-top: 7px; object-fit: contain; }
   .message-audio { width: min(420px, 100%); margin-top: 7px; }
   .message-media-gate { display: flex; width: fit-content; align-items: center; gap: 6px; margin-top: 7px; padding: 8px 10px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); font-size: 0.66rem; font-weight: 700; }

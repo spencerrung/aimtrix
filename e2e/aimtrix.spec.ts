@@ -214,6 +214,25 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
   await expect(picker).toBeHidden();
 });
 
+test('shared images open in an accessible viewer', async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+    await page.getByRole('button', { name: 'Back to buddy list' }).click();
+    await page.getByRole('button', { name: 'Direct Messages', exact: true }).click();
+  }
+  await page.getByRole('button', { name: /Mara Chen/ }).click();
+  const trigger = page.getByRole('button', { name: 'View aimtrix-mark.svg full size' });
+  await trigger.click();
+  const viewer = page.getByRole('dialog', { name: 'Viewing aimtrix-mark.svg' });
+  await expect(viewer).toBeVisible();
+  await expect(viewer).toBeFocused();
+  await viewer.getByRole('button', { name: 'Actual size' }).click();
+  await expect(viewer.getByRole('button', { name: 'Fit image' })).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape');
+  await expect(viewer).toBeHidden();
+  await expect(trigger).toBeFocused();
+});
+
 test('thread summaries open a resizable conversation with its own composer', async ({ page }, testInfo) => {
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();

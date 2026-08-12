@@ -137,6 +137,39 @@ describe('Workspace demo', () => {
     expect(screen.getByText('@Spencer')).toHaveClass('message-mention');
   });
 
+  it('opens an image attachment in a dialog and restores focus after closing', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome = [{
+      id: 'image-message', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+      body: 'sunset.png', timestamp: Date.now(), kind: 'media', isOwn: false,
+      mediaKind: 'image', mediaUrl: 'https://example.test/sunset.png', mimeType: 'image/png',
+    }];
+    renderWorkspace({ workspace });
+
+    const trigger = screen.getByRole('button', { name: 'View sunset.png full size' });
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole('dialog', { name: 'Viewing sunset.png' });
+    expect(dialog).toHaveFocus();
+    expect(within(dialog).getByRole('img', { name: 'sunset.png' })).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Actual size' }));
+    expect(within(dialog).getByRole('button', { name: 'Fit image' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.keyDown(dialog, { key: 'Escape' });
+
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Viewing sunset.png' })).not.toBeInTheDocument());
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
+  it('does not open stickers or non-image attachments in the image viewer', () => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome = [
+      { id: 'sticker', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara', body: 'hello sticker', timestamp: Date.now(), kind: 'sticker', isOwn: false, mediaKind: 'image', mediaUrl: 'https://example.test/sticker.png' },
+      { id: 'file', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara', body: 'notes.pdf', timestamp: Date.now(), kind: 'media', isOwn: false, mediaKind: 'file', mediaUrl: 'https://example.test/notes.pdf' },
+    ];
+    renderWorkspace({ workspace });
+
+    expect(screen.queryByRole('button', { name: /View .* full size/ })).not.toBeInTheDocument();
+  });
+
   it('turns a triple-backtick trigger into a multiline code draft without showing the fence', () => {
     renderWorkspace();
     const composer = screen.getByLabelText('Message Welcome Lounge');
@@ -397,7 +430,7 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
 
     expect(screen.queryByPlaceholderText('Search loaded messages')).not.toBeInTheDocument();
-    expect(screen.getByRole('separator', { name: '1 unread message below' })).toBeInTheDocument();
+    expect(screen.getByRole('separator', { name: '2 unread messages below' })).toBeInTheDocument();
   });
 
   it('lands at the latest message when the room has no unread messages', () => {
