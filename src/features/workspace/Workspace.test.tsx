@@ -54,6 +54,7 @@ function renderWorkspace(
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
     onSendMessage?: (roomId: string, body: string) => Promise<void>;
+    onEditMessage?: (roomId: string, eventId: string, body: string) => Promise<void>;
     onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
     onLoadLinkPreview?: (url: string) => Promise<{ title?: string; description?: string; imageUrl?: string; siteName?: string } | undefined>;
     workspace?: typeof demoWorkspace;
@@ -72,6 +73,7 @@ function renderWorkspace(
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onSendMessage={overrides.onSendMessage}
+      onEditMessage={overrides.onEditMessage}
       onUploadAttachment={overrides.onUploadAttachment}
       onLoadLinkPreview={overrides.onLoadLinkPreview}
       onSignOut={vi.fn()}
@@ -159,6 +161,71 @@ describe('Workspace demo', () => {
 
     resolveSend?.();
     await waitFor(() => expect(composer).toHaveFocus());
+  });
+
+  it('uses Up Arrow in an empty composer to edit the latest own text message', async () => {
+    const onEditMessage = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onEditMessage });
+
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    composer.focus();
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+
+    expect(composer).toHaveValue('The goal: 2006 in spirit, 2026 where it matters.');
+    expect(screen.getByText('Editing message')).toBeInTheDocument();
+    fireEvent.change(composer, { target: { value: 'The goal: old-school, without old bugs.' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+
+    await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2', 'The goal: old-school, without old bugs.'));
+  });
+
+  it('does not hijack Up Arrow when the composer has a draft', () => {
+    const onEditMessage = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onEditMessage });
+
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.change(composer, { target: { value: 'keep writing' } });
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+
+    expect(composer).toHaveValue('keep writing');
+    expect(onEditMessage).not.toHaveBeenCalled();
+    expect(screen.queryByText('Editing message')).not.toBeInTheDocument();
+  });
+
+  it('focuses the desktop composer when switching rooms', async () => {
+    renderWorkspace();
+
+    fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
+
+    await waitFor(() => expect(screen.getByLabelText('Message Mara Chen')).toHaveFocus());
+  });
+
+  it('restores the existing draft when cancelling an edit', () => {
+    renderWorkspace();
+
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.change(composer, { target: { value: 'do not lose this' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
+    expect(composer).toHaveValue('The goal: 2006 in spirit, 2026 where it matters.');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel reply or edit' }));
+
+    expect(composer).toHaveValue('do not lose this');
+  });
+
+  it('uses Up Arrow in an empty thread composer to edit the latest own thread reply', async () => {
+    const onEditMessage = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onEditMessage });
+
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const composer = screen.getByLabelText('Message thread');
+    composer.focus();
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+
+    expect(composer).toHaveValue('Keep the Aqua, lose the bad UX.');
+    fireEvent.change(composer, { target: { value: 'Keep Aqua; lose the bad UX.' } });
+    fireEvent.keyDown(composer, { key: 'Enter' });
+
+    await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2-thread-2', 'Keep Aqua; lose the bad UX.'));
   });
 
   it('links URLs, renders Matrix previews, and dismisses them locally', async () => {

@@ -141,11 +141,21 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
+  if (testInfo.project.name === 'desktop') {
+    await page.getByRole('button', { name: /Mara Chen/ }).click();
+    await expect(page.getByLabel('Message Mara Chen')).toBeFocused();
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  }
   const composer = page.getByLabel('Message Welcome Lounge');
   await composer.fill('Browser test message');
   await composer.press('Enter');
   await expect(page.getByText('Browser test message')).toBeVisible();
   await expect(composer).toBeFocused();
+  await composer.press('ArrowUp');
+  await expect(composer).toHaveValue('Browser test message');
+  await composer.fill('Edited browser test message');
+  await composer.press('Enter');
+  await expect(page.getByText('Edited browser test message')).toBeVisible();
 
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByRole('button', { name: 'Insert 🌈' }).click();
@@ -180,6 +190,11 @@ test('thread summaries open a resizable conversation with its own composer', asy
   await threadComposer.press('Enter');
   await expect(thread.getByText('Thread browser test message')).toBeVisible();
   await expect(threadComposer).toBeFocused();
+  await threadComposer.press('ArrowUp');
+  await expect(threadComposer).toHaveValue('Thread browser test message');
+  await threadComposer.fill('Edited thread browser test message');
+  await threadComposer.press('Enter');
+  await expect(thread.getByText('Edited thread browser test message')).toBeVisible();
   if (testInfo.project.name === 'desktop') {
     const before = await thread.boundingBox();
     await thread.getByRole('separator', { name: 'Resize thread panel' }).press('End');
