@@ -44,7 +44,7 @@ function ProfilePreview({
 }) {
   const bannerSource = useMediaSource(dataSaver ? undefined : profile.bannerMxc, 1200);
   const bannerStyle = bannerSource
-    ? ({ '--profile-banner-image': `url("${bannerSource}")` } as CSSProperties)
+    ? ({ '--profile-banner-image': `url("${bannerSource}")`, '--profile-banner-position': `${profile.bannerFocalPoint.x}% ${profile.bannerFocalPoint.y}%` } as CSSProperties)
     : undefined;
   return (
     <article className={`decorated-profile profile-card--${profile.card}`} aria-label={`${user.displayName}'s Aimtrix profile`}>
@@ -219,13 +219,13 @@ export function ProfileDialog({
               </button>
               {!editing ? <button className="aqua-button" type="button" onClick={onSignOut}><LogOut size={14} /> Sign out</button> : null}
             </div>
-            <p className="profile-privacy-note">Your name, picture, presence, and away message are standard Matrix profile fields that people you share rooms with can see in any client. Your profile note and page decorations are private Matrix account data—only you can see them, synced between your Aimtrix sessions. Account data and banner media are not end-to-end encrypted—keep them non-sensitive.</p>
+            <p className="profile-privacy-note"><strong>Visible to everyone:</strong> your name, picture, presence, and away message are standard Matrix profile fields. <strong>Only visible to you:</strong> this profile page’s banner, frame, colors, effects, note, and stickers are Aimtrix account data synced between your sessions—not a shared Matrix profile. Account data and banner media are not end-to-end encrypted; keep them non-sensitive.</p>
           </div>
 
           {editing ? (
             <div className="profile-decorator">
               <section>
-                <div className="profile-decorator__heading"><div><h3>Landscape banner</h3><p>Pick an original Aero scene or upload your own.</p></div><ImagePlus size={17} /></div>
+                <div className="profile-decorator__heading"><div><h3>Private Aimtrix banner</h3><p>Pick an original Aero scene or upload your own. Other people will not see this.</p></div><ImagePlus size={17} /></div>
                 <div className="banner-choice-grid">
                   {bannerPresetNames.map((preset) => <button type="button" key={preset} className={`profile-banner--${preset}${draft.bannerPreset === preset && !draft.bannerMxc ? ' is-active' : ''}`} aria-pressed={draft.bannerPreset === preset && !draft.bannerMxc} onClick={() => update({ bannerPreset: preset, bannerMxc: undefined })}><span>{labels.banner[preset]}</span></button>)}
                 </div>
@@ -234,6 +234,7 @@ export function ProfileDialog({
                   <button className="aqua-button" type="button" disabled={!canUpload} onClick={() => bannerInput.current?.click()}><ImagePlus size={13} /> Upload image</button>
                   {draft.bannerMxc ? <button className="text-button" type="button" onClick={() => update({ bannerMxc: undefined })}>Use preset instead</button> : null}
                 </div>
+                {draft.bannerMxc ? <fieldset className="banner-focal-point"><legend>Banner framing</legend><p>Preview matches the profile card crop.</p><label>Horizontal <input aria-label="Banner horizontal focus" type="range" min="0" max="100" value={draft.bannerFocalPoint.x} onChange={(event) => update({ bannerFocalPoint: { ...draft.bannerFocalPoint, x: Number(event.target.value) } })} /></label><label>Vertical <input aria-label="Banner vertical focus" type="range" min="0" max="100" value={draft.bannerFocalPoint.y} onChange={(event) => update({ bannerFocalPoint: { ...draft.bannerFocalPoint, y: Number(event.target.value) } })} /></label></fieldset> : null}
               </section>
 
               <section>

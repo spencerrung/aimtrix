@@ -826,6 +826,24 @@ describe('Workspace demo', () => {
     });
   });
 
+  it('labels decoration privacy and lets users frame a custom banner', () => {
+    renderWorkspace({
+      profilePersonalization: {
+        ...defaultProfilePersonalization,
+        bannerMxc: 'mxc://example.test/banner',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Spencer/ }));
+    const dialog = screen.getByRole('dialog', { name: 'My profile page' });
+    expect(within(dialog).getByText(/Only visible to you/)).toBeInTheDocument();
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Decorate my page' }));
+    const horizontal = within(dialog).getByLabelText('Banner horizontal focus');
+    fireEvent.change(horizontal, { target: { value: '24' } });
+    expect(horizontal).toHaveValue('24');
+    expect(within(dialog).getByText('Preview matches the profile card crop.')).toBeInTheDocument();
+  });
+
   it('opens the profile decorator from settings as well as the self card', () => {
     renderWorkspace();
 

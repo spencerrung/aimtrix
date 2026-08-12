@@ -721,7 +721,7 @@
   .profile-banner--citrus::after, .banner-choice-grid .profile-banner--citrus::after { background: linear-gradient(#b8dd52, #60a737); }
   .profile-banner--twilight { background: radial-gradient(circle at 75% 24%, #fff 0 2%, transparent 3%), radial-gradient(circle at 21% 32%, #fff 0 1.2%, transparent 2%), linear-gradient(#38569a, #8e6fc5 58%, #f39a9a); }
   .profile-banner--twilight::after, .banner-choice-grid .profile-banner--twilight::after { background: linear-gradient(#3f8a6e, #245b55); }
-  .decorated-profile__banner.has-custom-image { background-image: var(--profile-banner-image); }
+  .decorated-profile__banner.has-custom-image { background-image: var(--profile-banner-image); background-position: var(--profile-banner-position, center); }
   .decorated-profile__banner.has-custom-image::after { display: none; }
   .decorated-profile__avatar { position: absolute; z-index: 4; top: 132px; left: 24px; display: grid; width: 92px; height: 92px; place-items: center; border-radius: 20px; }
   .decorated-profile__avatar .avatar { width: 78px; height: 78px; border-width: 2px; }
@@ -765,6 +765,10 @@
   .banner-choice-grid button.is-active { border-color: var(--focus); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--focus); }
   .banner-choice-grid button span { position: absolute; z-index: 3; right: 2px; bottom: 2px; left: 2px; padding: 2px; color: white; border-radius: 4px; background: rgba(20,48,63,0.65); font-size: 0.51rem; font-weight: 800; text-shadow: 0 1px black; }
   .profile-inline-actions { display: flex; align-items: center; gap: 10px; margin-top: 11px; }
+  .banner-focal-point { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px 12px; margin: 12px 0 0; padding: 9px; border: 1px solid var(--border-soft); border-radius: 7px; }
+  .banner-focal-point legend { padding: 0 4px; color: var(--text-soft); font-size: 0.67rem; font-weight: 800; }
+  .banner-focal-point p { grid-column: 1 / -1; color: var(--text-faint); font-size: 0.61rem; }
+  .banner-focal-point label { display: grid; gap: 4px; color: var(--text-soft); font-size: 0.62rem; font-weight: 700; }
   .settings-field textarea { width: 100%; resize: vertical; color: var(--text); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); }
   .settings-field > span small { float: right; color: var(--text-faint); font-weight: 500; }
   .profile-option-row { display: grid; grid-template-columns: 90px minmax(0, 1fr); align-items: center; gap: 8px; margin-top: 10px; font-size: 0.68rem; font-weight: 700; }

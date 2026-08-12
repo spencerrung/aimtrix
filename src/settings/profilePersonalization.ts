@@ -23,6 +23,7 @@ export interface InstalledStickerPack {
 export interface ProfilePersonalization {
   bannerPreset: BannerPreset;
   bannerMxc?: string;
+  bannerFocalPoint: { x: number; y: number };
   avatarFrame: AvatarFrame;
   card: ProfileCard;
   effect: ProfileEffect;
@@ -34,6 +35,7 @@ export interface ProfilePersonalization {
 
 export const defaultProfilePersonalization: ProfilePersonalization = {
   bannerPreset: 'sky',
+  bannerFocalPoint: { x: 50, y: 50 },
   avatarFrame: 'chrome',
   card: 'glass',
   effect: 'bubbles',
@@ -59,6 +61,15 @@ function safeImageSource(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+function focalPoint(value: unknown): { x: number; y: number } {
+  if (!value || typeof value !== 'object') return { ...defaultProfilePersonalization.bannerFocalPoint };
+  const candidate = value as { x?: unknown; y?: unknown };
+  const clamp = (coordinate: unknown) => typeof coordinate === 'number' && Number.isFinite(coordinate)
+    ? Math.max(0, Math.min(100, Math.round(coordinate)))
+    : 50;
+  return { x: clamp(candidate.x), y: clamp(candidate.y) };
 }
 
 export function normalizeManifestUrl(value: string): string | undefined {
@@ -106,6 +117,7 @@ export function parseProfilePersonalization(value: unknown): ProfilePersonalizat
   return {
     bannerPreset: includes(bannerPresetNames, candidate.bannerPreset) ? candidate.bannerPreset : defaultProfilePersonalization.bannerPreset,
     bannerMxc: typeof candidate.bannerMxc === 'string' && candidate.bannerMxc.startsWith('mxc://') ? candidate.bannerMxc : undefined,
+    bannerFocalPoint: focalPoint(candidate.bannerFocalPoint),
     avatarFrame: includes(avatarFrameNames, candidate.avatarFrame) ? candidate.avatarFrame : defaultProfilePersonalization.avatarFrame,
     card: includes(profileCardNames, candidate.card) ? candidate.card : defaultProfilePersonalization.card,
     effect: includes(profileEffectNames, candidate.effect) ? candidate.effect : defaultProfilePersonalization.effect,
