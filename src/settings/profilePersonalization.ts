@@ -29,6 +29,7 @@ export interface ProfilePersonalization {
   bio: string;
   stickers: ProfileSticker[];
   installedStickerPacks: InstalledStickerPack[];
+  defaultStickerPack?: string;
 }
 
 export const defaultProfilePersonalization: ProfilePersonalization = {
@@ -37,8 +38,8 @@ export const defaultProfilePersonalization: ProfilePersonalization = {
   card: 'glass',
   effect: 'bubbles',
   bio: '',
-  stickers: [],
-  installedStickerPacks: [],
+    stickers: [],
+    installedStickerPacks: [],
 };
 
 const PROFILE_KEY = 'aimtrix.profile.v1';
@@ -111,6 +112,9 @@ export function parseProfilePersonalization(value: unknown): ProfilePersonalizat
     bio: typeof candidate.bio === 'string' ? candidate.bio.trim().slice(0, 180) : '',
     stickers,
     installedStickerPacks,
+    defaultStickerPack: typeof candidate.defaultStickerPack === 'string' && normalizeManifestUrl(candidate.defaultStickerPack)
+      ? normalizeManifestUrl(candidate.defaultStickerPack)
+      : undefined,
   };
 }
 

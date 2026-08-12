@@ -1503,6 +1503,7 @@ function Conversation({
   onReadLatest,
   gifEndpoint,
   stickerPacks,
+  defaultStickerPack,
   onSendGif,
   callsEnabled,
   onStartCall,
@@ -1555,6 +1556,7 @@ function Conversation({
   onReadLatest?: () => Promise<void>;
   gifEndpoint?: string;
   stickerPacks: Array<{ name: string; manifestUrl: string }>;
+  defaultStickerPack?: string;
   onSendGif: (gif: GifChoice) => void;
   callsEnabled: boolean;
   onStartCall: (video: boolean) => void;
@@ -1613,7 +1615,7 @@ function Conversation({
   const [stickerOpen, setStickerOpen] = useState(false);
   const [stickerPack, setStickerPack] = useState<Array<{ id: string; name: string; src: string }>>([]);
   const [stickerStatus, setStickerStatus] = useState<'idle' | 'loading' | 'error'>('idle');
-  const [stickerManifest, setStickerManifest] = useState('/stickers/aqua/manifest.json');
+  const [stickerManifest, setStickerManifest] = useState(defaultStickerPack ?? stickerPacks[0]?.manifestUrl ?? '');
   useEffect(() => {
     if (!room?.id || window.matchMedia?.('(max-width: 720px)').matches) return;
     requestAnimationFrame(() => mainComposer.current?.focus());
@@ -2451,6 +2453,9 @@ function Conversation({
           label="Open sticker pack"
           active={stickerOpen}
           onClick={() => {
+            if (!stickerOpen && defaultStickerPack && stickerPacks.some((pack) => pack.manifestUrl === defaultStickerPack)) {
+              setStickerManifest(defaultStickerPack);
+            }
             setStickerOpen((open) => !open);
             setEmojiOpen(false);
             setGifOpen(false);
@@ -3822,6 +3827,7 @@ export function Workspace({
             onReadLatest={markEffectiveRoomRead}
             gifEndpoint={config.features.gifs ? config.gifProvider?.searchEndpoint : undefined}
             stickerPacks={availableStickerPacks}
+            defaultStickerPack={profilePersonalization.defaultStickerPack}
             onSendGif={(gif) => void sendGif(gif)}
             callsEnabled={config.features.calls}
             onStartCall={(video) => {

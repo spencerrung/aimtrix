@@ -113,7 +113,7 @@ export function ProfileDialog({
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(personalization);
-  const [activePack, setActivePack] = useState(stickerPacks[0]?.manifestUrl ?? '');
+  const [activePack, setActivePack] = useState(personalization.defaultStickerPack ?? stickerPacks[0]?.manifestUrl ?? '');
   const [stickers, setStickers] = useState<ProfileSticker[]>([]);
   const [packStatus, setPackStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [newPackName, setNewPackName] = useState('');
@@ -245,13 +245,13 @@ export function ProfileDialog({
               </section>
 
               <section>
-                <div className="profile-decorator__heading"><div><h3>Profile stickers</h3><p>Pin up to three. Choosing a fourth replaces the oldest.</p></div><Sparkles size={17} /></div>
-                <label className="settings-field"><span>Sticker pack</span><select aria-label="Profile sticker pack" value={activePack} onChange={(event) => setActivePack(event.target.value)}>{availablePacks.map((pack) => <option value={pack.manifestUrl} key={pack.id}>{pack.name}{pack.source === 'operator' ? ' · Host' : pack.source === 'personal' ? ' · Mine' : ''}</option>)}</select></label>
+                <div className="profile-decorator__heading"><div><h3>Profile stickers</h3><p>Show up to three on your profile. Choosing a fourth replaces the oldest.</p></div><Sparkles size={17} /></div>
+                <label className="settings-field"><span>Default chat sticker pack</span><select aria-label="Profile sticker pack" value={activePack} onChange={(event) => { setActivePack(event.target.value); update({ defaultStickerPack: event.target.value }); }}>{availablePacks.map((pack) => <option value={pack.manifestUrl} key={pack.id}>{pack.name}{pack.source === 'operator' ? ' · Host' : pack.source === 'personal' ? ' · Mine' : ''}</option>)}</select></label>
                 {selectedPack?.description ? <p className="sticker-pack-description">{selectedPack.description}</p> : null}
                 <div className="profile-sticker-grid" aria-busy={packStatus === 'loading'}>
                   {packStatus === 'loading' ? <p><span className="spinner" /> Loading pack…</p> : packStatus === 'error' ? <p role="alert">This pack could not be loaded.</p> : stickers.map((sticker) => {
                     const selected = pinnedKeys.has(`${sticker.id}:${sticker.src}`);
-                    return <button type="button" className={selected ? 'is-active' : ''} aria-pressed={selected} aria-label={`${selected ? 'Unpin' : 'Pin'} ${sticker.name}`} title={sticker.name} key={`${sticker.id}:${sticker.src}`} onClick={() => toggleSticker(sticker)}><StickerImage sticker={sticker} dataSaver={dataSaver} />{selected ? <Check size={13} /> : null}</button>;
+                    return <button type="button" className={selected ? 'is-active' : ''} aria-pressed={selected} aria-label={`${selected ? 'Remove from profile' : 'Show on profile'} ${sticker.name}`} title={sticker.name} key={`${sticker.id}:${sticker.src}`} onClick={() => toggleSticker(sticker)}><StickerImage sticker={sticker} dataSaver={dataSaver} />{selected ? <Check size={13} /> : null}</button>;
                   })}
                 </div>
               </section>
