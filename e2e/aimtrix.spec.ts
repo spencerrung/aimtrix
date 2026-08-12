@@ -194,6 +194,26 @@ test('sending from history returns to the latest local echo', async ({ page }, t
   await expect.poll(() => timeline.evaluate((element) => element.scrollHeight - element.scrollTop - element.clientHeight)).toBeLessThanOrEqual(48);
 });
 
+test('message and thread reactions use an accessible emoji chooser', async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'mobile') {
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  }
+  await page.getByRole('button', { name: 'Add reaction' }).first().click();
+  let picker = page.getByRole('dialog', { name: 'Choose a reaction' });
+  await expect(picker).toBeVisible();
+  await expect(picker.getByRole('button', { name: 'React with 👍' })).toBeFocused();
+  await picker.getByRole('button', { name: 'React with 🎉' }).click();
+  await expect(picker).toBeHidden();
+
+  await page.getByRole('button', { name: /2 replies/ }).click();
+  const thread = page.getByRole('complementary', { name: 'Thread' });
+  await thread.getByRole('button', { name: 'Add reaction' }).first().click();
+  picker = page.getByRole('dialog', { name: 'Choose a reaction' });
+  await expect(picker).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(picker).toBeHidden();
+});
+
 test('thread summaries open a resizable conversation with its own composer', async ({ page }, testInfo) => {
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();

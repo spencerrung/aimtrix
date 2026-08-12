@@ -54,6 +54,7 @@ function renderWorkspace(
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
     onSendMessage?: (roomId: string, body: string) => Promise<void>;
+    onToggleReaction?: (roomId: string, eventId: string, key: string, ownReactionEventId?: string) => Promise<void>;
     onEditMessage?: (roomId: string, eventId: string, body: string) => Promise<void>;
     onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
     onLoadLinkPreview?: (url: string) => Promise<{ title?: string; description?: string; imageUrl?: string; siteName?: string } | undefined>;
@@ -73,6 +74,7 @@ function renderWorkspace(
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onSendMessage={overrides.onSendMessage}
+      onToggleReaction={overrides.onToggleReaction}
       onEditMessage={overrides.onEditMessage}
       onUploadAttachment={overrides.onUploadAttachment}
       onLoadLinkPreview={overrides.onLoadLinkPreview}
@@ -161,6 +163,32 @@ describe('Workspace demo', () => {
 
     resolveSend?.();
     await waitFor(() => expect(composer).toHaveFocus());
+  });
+
+  it('opens a reaction chooser before sending the selected Matrix reaction', async () => {
+    const onToggleReaction = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onToggleReaction });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
+    expect(onToggleReaction).not.toHaveBeenCalled();
+    const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
+    await waitFor(() => expect(within(picker).getByRole('button', { name: 'React with 👍' })).toHaveFocus());
+    fireEvent.click(within(picker).getByRole('button', { name: 'React with 🎉' }));
+
+    expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', '🎉', undefined);
+    expect(screen.queryByRole('dialog', { name: 'Choose a reaction' })).not.toBeInTheDocument();
+  });
+
+  it('dismisses the reaction chooser with Escape and outside clicks', () => {
+    renderWorkspace();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Choose a reaction' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('dialog', { name: 'Choose a reaction' })).not.toBeInTheDocument();
   });
 
   it('uses Up Arrow in an empty composer to edit the latest own text message', async () => {

@@ -1252,16 +1252,35 @@ const TimelineMessage = memo(function TimelineMessage({
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
   onMediaLoad: () => void;
 }) {
+  const reactionChoices = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
   const gatedMedia =
     Boolean(message.mediaUrl) &&
     (dataSaver || (!autoplayMedia && message.mimeType === 'image/gif'));
   const [mediaRevealed, setMediaRevealed] = useState(!gatedMedia);
+  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const reactionActions = useRef<HTMLDivElement>(null);
   const mediaSrc = useMediaSource(
     mediaRevealed ? message.mediaUrl : undefined,
     message.kind === 'sticker' ? 320 : 720,
     message.encryptedFile,
     message.mimeType,
   );
+  useEffect(() => {
+    if (!reactionPickerOpen) return;
+    reactionActions.current?.querySelector<HTMLButtonElement>('.reaction-picker button')?.focus();
+    const dismiss = (event: globalThis.PointerEvent) => {
+      if (!reactionActions.current?.contains(event.target as Node)) setReactionPickerOpen(false);
+    };
+    const onKeyDown = (event: globalThis.KeyboardEvent) => {
+      if (event.key === 'Escape') setReactionPickerOpen(false);
+    };
+    document.addEventListener('pointerdown', dismiss);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', dismiss);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [reactionPickerOpen]);
   return (
     <article className={`timeline-message${message.isOwn ? ' timeline-message--own' : ''}`}>
       <Avatar
@@ -1355,11 +1374,14 @@ const TimelineMessage = memo(function TimelineMessage({
           </button>
         ) : null}
       </div>
-      <div className="message-actions">
+      <div className="message-actions" ref={reactionActions}>
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
         <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
         {message.isThreadRoot ? <button type="button" aria-label="Open thread" title="Open thread" onClick={() => onOpenThread(message)}><MessageCircle size={14} /></button> : null}
-        <button type="button" aria-label="React with thumbs up" title="React" onClick={() => onReact(message, '👍')}><SmilePlus size={14} /></button>
+        <button type="button" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={reactionPickerOpen} title="React" onClick={() => setReactionPickerOpen((open) => !open)}><SmilePlus size={14} /></button>
+        {reactionPickerOpen ? <div className="reaction-picker" role="dialog" aria-label="Choose a reaction">
+          {reactionChoices.map((reaction) => <button type="button" key={reaction} aria-label={`React with ${reaction}`} onClick={() => { onReact(message, reaction); setReactionPickerOpen(false); }}>{reaction}</button>)}
+        </div> : null}
         {canPin ? <button type="button" aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(message)}><Pin size={14} /></button> : null}
         {message.isOwn && message.kind === 'text' ? (
           <><button type="button" aria-label="Edit message" title="Edit" onClick={() => onEdit(message)}><Pencil size={14} /></button><button type="button" aria-label="Delete message" title="Delete" onClick={() => onDelete(message)}><Trash2 size={14} /></button></>
