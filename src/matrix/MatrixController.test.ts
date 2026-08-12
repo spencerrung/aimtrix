@@ -22,6 +22,23 @@ function inject(
 }
 
 describe('MatrixController protocol integration', () => {
+  it('sends a readable Matrix notice with the Aimtrix nudge marker', async () => {
+    const sendEvent = vi.fn().mockResolvedValue({});
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, {
+      getRoom: () => ({ hasEncryptionStateEvent: () => false } as unknown as import('matrix-js-sdk').Room),
+      sendEvent,
+    }, { EventType: { RoomMessage: 'm.room.message' }, MsgType: { Notice: 'm.notice' } });
+
+    await controller.sendNudge('!room:test');
+
+    expect(sendEvent).toHaveBeenCalledWith('!room:test', 'm.room.message', {
+      msgtype: 'm.notice',
+      body: 'Sent a nudge.',
+      'dev.alucard.aimtrix.nudge.v1': { version: 1 },
+    });
+  });
+
   it('republishes when the SDK creates a thread after the timeline event', () => {
     const listeners = new Map<string, (thread: { room: { roomId: string } }) => void>();
     const room = {

@@ -13,6 +13,7 @@ describe('user preferences', () => {
       density: 'wall-to-wall',
       messageScale: 'large',
       motion: 'reduced',
+      nudgeEffects: false,
       messageSurface: 'frosted',
       detailsOpenByDefault: false,
     })).toEqual({
@@ -21,6 +22,7 @@ describe('user preferences', () => {
       density: defaultUserPreferences.density,
       messageScale: 'large',
       motion: 'reduced',
+      nudgeEffects: false,
       messageSurface: 'frosted',
       detailsOpenByDefault: false,
     });

@@ -1805,6 +1805,22 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
+  public async sendNudge(roomId: string): Promise<void> {
+    const client = this.client;
+    const sdk = this.sdk;
+    if (!client || !sdk) return;
+    const room = client.getRoom(roomId);
+    if (!room) throw new Error('Room is not available.');
+    if (room.hasEncryptionStateEvent() && !client.getCrypto()) throw new Error('Encryption is not ready for this room.');
+    const eventClient = client as unknown as { sendEvent: (roomId: string, type: string, content: Record<string, unknown>) => Promise<unknown> };
+    await eventClient.sendEvent(roomId, sdk.EventType.RoomMessage, {
+      msgtype: sdk.MsgType.Notice,
+      body: 'Sent a nudge.',
+      'dev.alucard.aimtrix.nudge.v1': { version: 1 },
+    });
+    this.scheduleWorkspacePublish();
+  }
+
   private async connect(session: StoredMatrixSession): Promise<void> {
     await this.stopCurrentClient();
     const names = databaseNames(session);

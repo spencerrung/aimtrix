@@ -311,6 +311,14 @@ export function SettingsDialog({
                   </select>
                 </div>
                 <label className="settings-toggle-row">
+                  <span><strong>Play nudge effects</strong><small>Still show the readable Matrix notice when this is off.</small></span>
+                  <input type="checkbox" checked={preferences.nudgeEffects} onChange={(event) => updatePreferences({ nudgeEffects: event.target.checked })} />
+                </label>
+                <label className="settings-toggle-row">
+                  <span><strong>Play nudge effects</strong><small>Still show the readable Matrix notice when this is off.</small></span>
+                  <input type="checkbox" checked={preferences.nudgeEffects} onChange={(event) => updatePreferences({ nudgeEffects: event.target.checked })} />
+                </label>
+                <label className="settings-toggle-row">
                   <span><strong>Open the buddy drawer</strong><small>Show the personality panel when Aimtrix starts.</small></span>
                   <input
                     type="checkbox"
