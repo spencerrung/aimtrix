@@ -42,6 +42,12 @@ describe('profile personalization', () => {
     expect(parsed.installedStickerPacks).toHaveLength(1);
   });
 
+  it('clamps saved banner focal points to the visible crop range', () => {
+    expect(parseProfilePersonalization({
+      bannerFocalPoint: { x: -20, y: 140 },
+    }).bannerFocalPoint).toEqual({ x: 0, y: 100 });
+  });
+
   it('round-trips through local storage', () => {
     const storage = window.localStorage;
     storage.clear();
