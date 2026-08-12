@@ -52,6 +52,7 @@ function renderWorkspace(
   overrides: {
     onPreferencesChange?: (preferences: UserPreferences) => void;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
+    profilePersonalization?: ProfilePersonalization;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
     onSendMessage?: (roomId: string, body: string) => Promise<void>;
     onToggleReaction?: (roomId: string, eventId: string, key: string, ownReactionEventId?: string) => Promise<void>;
@@ -69,6 +70,7 @@ function renderWorkspace(
       config={defaultRuntimeConfig}
       theme="aqua"
       preferences={defaultUserPreferences}
+      profilePersonalization={overrides.profilePersonalization}
       onThemeChange={vi.fn()}
       onPreferencesChange={onPreferencesChange}
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
@@ -669,6 +671,19 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Insert 🌈' }));
 
     expect(screen.getByLabelText('Message Welcome Lounge')).toHaveValue('🌈');
+  });
+
+  it('uses the saved default profile pack when opening the chat sticker picker', () => {
+    renderWorkspace({
+      profilePersonalization: {
+        ...defaultProfilePersonalization,
+        defaultStickerPack: '/stickers/aero/manifest.json',
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Open sticker pack' }));
+
+    expect(screen.getByLabelText('Sticker pack')).toHaveValue('/stickers/aero/manifest.json');
   });
 
   it('filters rooms when a Matrix space is selected', () => {

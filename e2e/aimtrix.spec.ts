@@ -282,7 +282,7 @@ test('profile page supports banners, frames, bios, and pinned stickers', async (
   await dialog.getByRole('button', { name: 'Twilight' }).click();
   await dialog.getByRole('button', { name: 'Fresh leaf' }).click();
   await dialog.getByLabel('Profile sticker pack').selectOption({ label: 'Aero Days' });
-  await dialog.getByRole('button', { name: 'Pin Good Morning' }).click();
+  await dialog.getByRole('button', { name: 'Show on profile Good Morning' }).click();
   await dialog.getByLabel('Sticker pack name').fill('My Sunny Pack');
   await dialog.getByLabel('Sticker manifest URL').fill('https://stickers.example.test/manifest.json');
   await dialog.getByRole('button', { name: 'Check & install' }).click();
