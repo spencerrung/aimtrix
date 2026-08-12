@@ -1258,13 +1258,32 @@ const TimelineMessage = memo(function TimelineMessage({
     (dataSaver || (!autoplayMedia && message.mimeType === 'image/gif'));
   const [mediaRevealed, setMediaRevealed] = useState(!gatedMedia);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [mediaViewerOpen, setMediaViewerOpen] = useState(false);
+  const [actualSize, setActualSize] = useState(false);
   const reactionActions = useRef<HTMLDivElement>(null);
+  const mediaTrigger = useRef<HTMLButtonElement>(null);
+  const mediaViewer = useRef<HTMLElement>(null);
   const mediaSrc = useMediaSource(
     mediaRevealed ? message.mediaUrl : undefined,
     message.kind === 'sticker' ? 320 : 720,
     message.encryptedFile,
     message.mimeType,
   );
+  const viewerSource = useMediaSource(
+    mediaViewerOpen ? message.mediaUrl : undefined,
+    2400,
+    message.encryptedFile,
+    message.mimeType,
+  );
+  const canViewImage = message.mediaKind === 'image' && message.kind !== 'sticker';
+  const closeMediaViewer = () => {
+    setMediaViewerOpen(false);
+    setActualSize(false);
+    requestAnimationFrame(() => mediaTrigger.current?.focus());
+  };
+  useEffect(() => {
+    if (mediaViewerOpen) mediaViewer.current?.focus();
+  }, [mediaViewerOpen]);
   useEffect(() => {
     if (!reactionPickerOpen) return;
     reactionActions.current?.querySelector<HTMLButtonElement>('.reaction-picker button')?.focus();
@@ -1314,13 +1333,7 @@ const TimelineMessage = memo(function TimelineMessage({
         ) : mediaSrc && message.mediaKind === 'file' ? (
           <a className="message-file" href={mediaSrc} download={message.body}><Paperclip size={15} /> {message.body}</a>
         ) : mediaSrc ? (
-          <img
-            className={message.kind === 'sticker' ? 'message-sticker' : 'message-media'}
-            src={mediaSrc}
-            alt={message.body}
-            loading="lazy"
-            onLoad={onMediaLoad}
-          />
+          canViewImage ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => setMediaViewerOpen(true)}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button> : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
         ) : (
           <div className={`message-kind--${message.kind}`}>
             {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} hasMentions={Boolean(message.mentionUserIds?.length)} />
@@ -1374,6 +1387,12 @@ const TimelineMessage = memo(function TimelineMessage({
           </button>
         ) : null}
       </div>
+      {mediaViewerOpen ? <div className="media-viewer-backdrop" role="presentation" onMouseDown={closeMediaViewer}>
+        <section ref={mediaViewer} className="media-viewer" role="dialog" aria-modal="true" aria-label={`Viewing ${message.body}`} onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') closeMediaViewer(); }} tabIndex={-1}>
+          <header><strong>{message.body}</strong><span><button type="button" aria-pressed={actualSize} onClick={() => setActualSize((value) => !value)}>{actualSize ? 'Fit image' : 'Actual size'}</button><button type="button" aria-label="Close image viewer" onClick={closeMediaViewer}><X size={18} /></button></span></header>
+          {viewerSource ? <img className={actualSize ? 'is-actual-size' : undefined} src={viewerSource} alt={message.body} /> : <p role="status">Loading image…</p>}
+        </section>
+      </div> : null}
       <div className="message-actions" ref={reactionActions}>
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
         <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
