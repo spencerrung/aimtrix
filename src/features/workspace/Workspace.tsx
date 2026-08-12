@@ -1432,6 +1432,7 @@ function Conversation({
   failedUploadName,
   replyTarget,
   editingMessage,
+  editingThreadMessage,
   onBack,
   onDraftChange,
   onMentionSelected,
@@ -1447,9 +1448,11 @@ function Conversation({
   onCloseThread,
   onToggleThreadCollapsed,
   onStartEdit,
+  onStartThreadEdit,
   onDeleteMessage,
   onTogglePin,
   onCancelContext,
+  onCancelThreadEdit,
   onReact,
   onSendSticker,
   onUploadAttachment,
@@ -1481,6 +1484,7 @@ function Conversation({
   failedUploadName?: string;
   replyTarget?: MessageSummary;
   editingMessage?: MessageSummary;
+  editingThreadMessage?: MessageSummary;
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
@@ -1496,9 +1500,11 @@ function Conversation({
   onCloseThread: () => void;
   onToggleThreadCollapsed: () => void;
   onStartEdit: (message: MessageSummary) => void;
+  onStartThreadEdit: (message: MessageSummary) => void;
   onDeleteMessage: (message: MessageSummary) => void;
   onTogglePin: (message: MessageSummary) => void;
   onCancelContext: () => void;
+  onCancelThreadEdit: () => void;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
   onSendSticker: (sticker: { id: string; name: string; src: string }) => void;
   onUploadAttachment: (file: File, threadRootId?: string) => void;
@@ -1566,6 +1572,16 @@ function Conversation({
   const [stickerPack, setStickerPack] = useState<Array<{ id: string; name: string; src: string }>>([]);
   const [stickerStatus, setStickerStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [stickerManifest, setStickerManifest] = useState('/stickers/aqua/manifest.json');
+  useEffect(() => {
+    if (!room?.id || window.matchMedia?.('(max-width: 720px)').matches) return;
+    requestAnimationFrame(() => mainComposer.current?.focus());
+  }, [room?.id]);
+  useEffect(() => {
+    if (editingMessage) requestAnimationFrame(() => mainComposer.current?.focus());
+  }, [editingMessage]);
+  useEffect(() => {
+    if (editingThreadMessage) requestAnimationFrame(() => threadComposer.current?.focus());
+  }, [editingThreadMessage]);
   const roomBackgroundSource = useMediaSource(
     dataSaver ? undefined : room?.background?.mxcUrl,
     1600,
@@ -1707,6 +1723,23 @@ function Conversation({
         setColonDismissed(colon?.query);
         return;
       }
+    }
+    if (
+      event.key === 'ArrowUp'
+      && !event.shiftKey
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && !draft
+      && event.currentTarget.selectionStart === 0
+      && event.currentTarget.selectionEnd === 0
+    ) {
+      const latestOwnText = [...messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
+      if (latestOwnText) {
+        event.preventDefault();
+        onStartEdit(latestOwnText);
+      }
+      return;
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
@@ -2008,6 +2041,23 @@ function Conversation({
   const stopPanelResize = () => { resizeStart.current = undefined; };
 
   const handleThreadComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (
+      event.key === 'ArrowUp'
+      && !event.shiftKey
+      && !event.altKey
+      && !event.ctrlKey
+      && !event.metaKey
+      && !threadDraft
+      && event.currentTarget.selectionStart === 0
+      && event.currentTarget.selectionEnd === 0
+    ) {
+      const latestOwnText = activeThread && [...activeThread.messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
+      if (latestOwnText) {
+        event.preventDefault();
+        onStartThreadEdit(latestOwnText);
+      }
+      return;
+    }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       void onThreadSubmit().finally(() => requestAnimationFrame(() => threadComposer.current?.focus()));
@@ -2168,7 +2218,7 @@ function Conversation({
                 onReply={onStartReply}
                 onOpenThread={onOpenThread}
                 onStartThread={onStartThread}
-                onEdit={onStartEdit}
+                onEdit={onStartThreadEdit}
                 onDelete={onDeleteMessage}
                 onPin={onTogglePin}
                 canPin={Boolean(room?.canManage)}
@@ -2179,6 +2229,7 @@ function Conversation({
             ))}
           </div>
           <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); void onThreadSubmit().finally(() => requestAnimationFrame(() => threadComposer.current?.focus())); }}>
+            {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={onCancelThreadEdit}><X size={14} /></button></div> : null}
             <label>
               <span className="sr-only">Message thread</span>
               <textarea
@@ -3018,7 +3069,8 @@ export function Workspace({
   }
   const [memberPowerOverrides, setMemberPowerOverrides] = useState<Record<string, Record<string, number>>>({});
   const [replyTarget, setReplyTarget] = useState<MessageSummary>();
-  const [editingMessage, setEditingMessage] = useState<MessageSummary>();
+  const [editingMessage, setEditingMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
+  const [editingThreadMessage, setEditingThreadMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
   const typingTimer = useRef<number | undefined>(undefined);
   const mentionIdsByRoom = useRef<Record<string, string[]>>({});
   const lastTypingSentAt = useRef(0);
@@ -3145,6 +3197,7 @@ export function Workspace({
     setReplyTarget(undefined);
     setReplyThreadRootId(undefined);
     setEditingMessage(undefined);
+    setEditingThreadMessage(undefined);
     setActiveThreadRootId(undefined);
   }, []);
 
@@ -3325,22 +3378,33 @@ export function Workspace({
     setReplyTarget(message);
     setReplyThreadRootId(message.threadRootId ?? (message.isThreadRoot ? message.id : undefined));
     setEditingMessage(undefined);
+    setEditingThreadMessage(undefined);
   }, []);
 
   const handleStartThread = useCallback((message: MessageSummary) => {
     setReplyTarget(message);
     setReplyThreadRootId(message.threadRootId ?? message.id);
     setEditingMessage(undefined);
+    setEditingThreadMessage(undefined);
   }, []);
 
   const handleStartEdit = useCallback((message: MessageSummary) => {
-    setEditingMessage(message);
+    if (!effectiveRoomId) return;
+    setEditingMessage({ message, originalDraft: drafts[effectiveRoomId] ?? '' });
+    setEditingThreadMessage(undefined);
     setReplyTarget(undefined);
     setReplyThreadRootId(undefined);
-    if (effectiveRoomId) {
-      setDrafts((current) => ({ ...current, [effectiveRoomId]: message.body }));
-    }
-  }, [effectiveRoomId]);
+    setDrafts((current) => ({ ...current, [effectiveRoomId]: message.body }));
+  }, [drafts, effectiveRoomId]);
+
+  const handleStartThreadEdit = useCallback((message: MessageSummary) => {
+    if (!activeThreadRootId) return;
+    setEditingThreadMessage({ message, originalDraft: threadDrafts[activeThreadRootId] ?? '' });
+    setEditingMessage(undefined);
+    setReplyTarget(undefined);
+    setReplyThreadRootId(undefined);
+    setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: message.body }));
+  }, [activeThreadRootId, threadDrafts]);
 
   const handleTogglePin = useCallback((message: MessageSummary) => {
     if (workspace.mode === 'matrix') {
@@ -3383,7 +3447,18 @@ export function Workspace({
     setNotice(undefined);
 
     try {
-      if (workspace.mode === 'demo') {
+      if (editingMessage) {
+        if (workspace.mode === 'demo') {
+          setDemoMessages((current) => ({
+            ...current,
+            [effectiveRoomId]: (current[effectiveRoomId] ?? []).map((message) =>
+              message.id === editingMessage.message.id ? { ...message, body, edited: true } : message,
+            ),
+          }));
+        } else if (onEditMessage) {
+          await onEditMessage(effectiveRoomId, editingMessage.message.id, body);
+        }
+      } else if (workspace.mode === 'demo') {
         const message: MessageSummary = {
           id: `demo-${Date.now()}`,
           roomId: effectiveRoomId,
@@ -3399,8 +3474,6 @@ export function Workspace({
           ...current,
           [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message],
         }));
-      } else if (editingMessage && onEditMessage) {
-        await onEditMessage(effectiveRoomId, editingMessage.id, body);
       } else if (replyTarget && onSendReply) {
         const threadRootId = replyThreadRootId ?? replyTarget.threadRootId;
         await onSendReply(effectiveRoomId, body, {
@@ -3432,7 +3505,18 @@ export function Workspace({
     setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: '' }));
     setThreadSending(true);
     try {
-      if (workspace.mode === 'demo') {
+      if (editingThreadMessage) {
+        if (workspace.mode === 'demo') {
+          setDemoThreadMessages((current) => ({
+            ...current,
+            [activeThreadRoot.id]: (current[activeThreadRoot.id] ?? []).map((message) =>
+              message.id === editingThreadMessage.message.id ? { ...message, body, edited: true } : message,
+            ),
+          }));
+        } else if (onEditMessage) {
+          await onEditMessage(effectiveRoomId, editingThreadMessage.message.id, body);
+        }
+      } else if (workspace.mode === 'demo') {
         const message: MessageSummary = {
           id: `demo-thread-${Date.now()}`,
           roomId: effectiveRoomId,
@@ -3457,6 +3541,7 @@ export function Workspace({
           threadRootId: activeThreadRoot.id,
         });
       }
+      setEditingThreadMessage(undefined);
     } catch {
       setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: body }));
       setNotice('That thread reply did not send. Your draft has been restored.');
@@ -3589,7 +3674,8 @@ export function Workspace({
             failedUploadName={failedUpload?.name}
             onBack={() => setMobileChatOpen(false)}
             replyTarget={replyTarget}
-            editingMessage={editingMessage}
+            editingMessage={editingMessage?.message}
+            editingThreadMessage={editingThreadMessage?.message}
             onDraftChange={(nextDraft) => {
               if (!effectiveRoomId) return;
               setDrafts((current) => ({ ...current, [effectiveRoomId]: nextDraft }));
@@ -3637,12 +3723,22 @@ export function Workspace({
             onCloseThread={() => { setActiveThreadRootId(undefined); setThreadCollapsed(false); }}
             onToggleThreadCollapsed={() => setThreadCollapsed((collapsed) => !collapsed)}
             onStartEdit={handleStartEdit}
+            onStartThreadEdit={handleStartThreadEdit}
             onTogglePin={handleTogglePin}
             onDeleteMessage={handleDeleteMessage}
             onCancelContext={() => {
+              if (editingMessage && effectiveRoomId) {
+                setDrafts((current) => ({ ...current, [effectiveRoomId]: editingMessage.originalDraft }));
+              }
               setReplyTarget(undefined);
               setReplyThreadRootId(undefined);
               setEditingMessage(undefined);
+            }}
+            onCancelThreadEdit={() => {
+              if (editingThreadMessage && activeThreadRootId) {
+                setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: editingThreadMessage.originalDraft }));
+              }
+              setEditingThreadMessage(undefined);
             }}
             onReact={handleReact}
             onSendSticker={(sticker) => void sendSticker(sticker)}

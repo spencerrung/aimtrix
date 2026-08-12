@@ -588,6 +588,8 @@
   .thread-panel__root strong { color: var(--blue-deep); font-size: 0.77rem; }
   .thread-panel__root p { margin: 5px 0 0; color: var(--text); font-size: 0.78rem; line-height: 1.45; white-space: pre-wrap; }
   .thread-panel__composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px; padding: 10px; border-top: 1px solid var(--border); background: var(--surface-soft); }
+  .thread-panel__composer-context { display: flex; grid-column: 1 / -1; align-items: center; justify-content: space-between; gap: 8px; color: var(--blue-deep); font-size: 0.68rem; }
+  .thread-panel__composer-context button { display: grid; width: 24px; height: 24px; padding: 0; place-items: center; color: var(--text-soft); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-raised); }
   .thread-panel__composer textarea { width: 100%; min-height: 42px; resize: vertical; padding: 8px; color: var(--text); border: 1px solid var(--border); border-radius: 7px; outline-color: var(--focus); background: var(--surface-raised); font: inherit; font-size: 0.74rem; }
   .thread-panel__composer button { align-self: end; display: inline-flex; align-items: center; gap: 5px; padding: 8px 9px; color: white; border: 1px solid var(--blue-deep); border-radius: 7px; background: var(--blue); font: inherit; font-size: 0.7rem; font-weight: 800; }
   .thread-panel__composer button:disabled { cursor: not-allowed; opacity: 0.52; }
