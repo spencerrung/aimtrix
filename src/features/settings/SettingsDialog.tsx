@@ -21,6 +21,7 @@ import {
   accentNames,
   densityNames,
   messageScaleNames,
+  messageSurfaceNames,
   motionNames,
   type AccentName,
   type UserPreferences,
@@ -289,6 +290,14 @@ export function SettingsDialog({
                         className={preferences.messageScale === messageScale ? 'is-active' : ''}
                         onClick={() => updatePreferences({ messageScale })}
                       >{messageScale}</button>
+                    ))}
+                  </div>
+                </div>
+                <div className="settings-control-row">
+                  <label>Message surface <small>Only on this device</small></label>
+                  <div className="aqua-segmented">
+                    {messageSurfaceNames.map((messageSurface) => (
+                      <button type="button" key={messageSurface} className={preferences.messageSurface === messageSurface ? 'is-active' : ''} onClick={() => updatePreferences({ messageSurface })}>{messageSurface}</button>
                     ))}
                   </div>
                 </div>

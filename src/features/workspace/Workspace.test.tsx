@@ -867,6 +867,13 @@ describe('Workspace demo', () => {
       ...defaultUserPreferences,
       accent: 'grape',
     });
+
+    fireEvent.click(screen.getByRole('button', { name: /Appearance/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'clear' }));
+    expect(onPreferencesChange).toHaveBeenLastCalledWith({
+      ...defaultUserPreferences,
+      messageSurface: 'clear',
+    });
   });
 
   it('restores the last selected room from local storage', () => {

@@ -80,6 +80,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
     root.dataset.density = preferences.density;
     root.dataset.messageScale = preferences.messageScale;
     root.dataset.motion = preferences.motion;
+    root.dataset.messageSurface = preferences.messageSurface;
     saveUserPreferences(preferences);
     controller.setCallDevices({
       microphoneId: preferences.microphoneId,
@@ -102,6 +103,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         microphoneId: current.microphoneId,
         cameraId: current.cameraId,
         speakerId: current.speakerId,
+        messageSurface: current.messageSurface,
       })));
     } else {
       controller.savePersonalization(loadUserPreferences());
