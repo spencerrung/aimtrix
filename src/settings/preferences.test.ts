@@ -13,6 +13,7 @@ describe('user preferences', () => {
       density: 'wall-to-wall',
       messageScale: 'large',
       motion: 'reduced',
+      messageSurface: 'frosted',
       detailsOpenByDefault: false,
     })).toEqual({
       ...defaultUserPreferences,
@@ -20,12 +21,13 @@ describe('user preferences', () => {
       density: defaultUserPreferences.density,
       messageScale: 'large',
       motion: 'reduced',
+      messageSurface: 'frosted',
       detailsOpenByDefault: false,
     });
   });
 
   it('persists preferences locally', () => {
-    const preferences = { ...defaultUserPreferences, accent: 'rose' as const };
+    const preferences = { ...defaultUserPreferences, accent: 'rose' as const, messageSurface: 'clear' as const };
     saveUserPreferences(preferences);
     expect(loadUserPreferences()).toEqual(preferences);
   });

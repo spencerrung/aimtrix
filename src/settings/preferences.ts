@@ -2,17 +2,20 @@ export const accentNames = ['blue', 'grape', 'rose', 'tangerine', 'lime'] as con
 export const densityNames = ['compact', 'comfortable', 'roomy'] as const;
 export const messageScaleNames = ['small', 'medium', 'large'] as const;
 export const motionNames = ['system', 'reduced', 'full'] as const;
+export const messageSurfaceNames = ['solid', 'frosted', 'clear'] as const;
 
 export type AccentName = (typeof accentNames)[number];
 export type DensityName = (typeof densityNames)[number];
 export type MessageScaleName = (typeof messageScaleNames)[number];
 export type MotionName = (typeof motionNames)[number];
+export type MessageSurfaceName = (typeof messageSurfaceNames)[number];
 
 export interface UserPreferences {
   accent: AccentName;
   density: DensityName;
   messageScale: MessageScaleName;
   motion: MotionName;
+  messageSurface: MessageSurfaceName;
   detailsOpenByDefault: boolean;
   desktopNotifications: boolean;
   notificationSounds: boolean;
@@ -31,6 +34,7 @@ export const defaultUserPreferences: UserPreferences = {
   density: 'comfortable',
   messageScale: 'medium',
   motion: 'system',
+  messageSurface: 'solid',
   detailsOpenByDefault: true,
   desktopNotifications: false,
   notificationSounds: true,
@@ -62,6 +66,9 @@ export function parseUserPreferences(value: unknown): UserPreferences {
       ? candidate.messageScale
       : defaultUserPreferences.messageScale,
     motion: includes(motionNames, candidate.motion) ? candidate.motion : defaultUserPreferences.motion,
+    messageSurface: includes(messageSurfaceNames, candidate.messageSurface)
+      ? candidate.messageSurface
+      : defaultUserPreferences.messageSurface,
     detailsOpenByDefault:
       typeof candidate.detailsOpenByDefault === 'boolean'
         ? candidate.detailsOpenByDefault

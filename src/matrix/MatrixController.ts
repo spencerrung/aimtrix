@@ -1078,11 +1078,13 @@ export class MatrixController {
         microphoneId: _microphoneId,
         cameraId: _cameraId,
         speakerId: _speakerId,
+        messageSurface: _messageSurface,
         ...portable
       } = preferences;
       void _microphoneId;
       void _cameraId;
       void _speakerId;
+      void _messageSurface;
       const accountClient = client as unknown as {
         setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
       };
