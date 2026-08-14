@@ -501,18 +501,25 @@ export class MatrixController {
         crypto?.getKeyBackupInfo() ?? Promise.resolve(null),
       ]);
     const devices = await Promise.all(
-      deviceResponse.devices.map(async (device) => ({
-        id: device.device_id,
-        displayName: device.display_name || 'Unnamed Matrix session',
-        lastSeenAt: device.last_seen_ts,
-        lastSeenIp: device.last_seen_ip,
-        userAgent:
-          device['org.matrix.msc3852.last_seen_user_agent'] || device.last_seen_user_agent,
-        current: device.device_id === session.deviceId,
-        verified:
-          (await crypto?.getDeviceVerificationStatus(session.userId, device.device_id))?.isVerified() ??
-          false,
-      })),
+      deviceResponse.devices.map(async (device) => {
+        const deviceWithUserAgent = device as typeof device & {
+          'org.matrix.msc3852.last_seen_user_agent'?: string;
+          last_seen_user_agent?: string;
+        };
+        return {
+          id: device.device_id,
+          displayName: device.display_name || 'Unnamed Matrix session',
+          lastSeenAt: device.last_seen_ts,
+          lastSeenIp: device.last_seen_ip,
+          userAgent:
+            deviceWithUserAgent['org.matrix.msc3852.last_seen_user_agent'] ||
+            deviceWithUserAgent.last_seen_user_agent,
+          current: device.device_id === session.deviceId,
+          verified:
+            (await crypto?.getDeviceVerificationStatus(session.userId, device.device_id))?.isVerified() ??
+            false,
+        };
+      }),
     );
 
     const wellKnown = client.getClientWellKnown() as Record<string, unknown> | undefined;
