@@ -2050,6 +2050,7 @@ export class MatrixController {
 
   private notifyForMessage(event: MatrixEvent, room: Room): void {
     if (event.getType() !== 'm.room.message') return;
+    if (!this.client?.getPushActionsForEvent(event)?.notify) return;
     const muted = this.client
       ?.getRoomPushRule('global', room.roomId)
       ?.actions.some((action) => action === 'dont_notify');
