@@ -8,7 +8,10 @@ type ControllerInternals = {
   client?: MatrixClient;
   sdk?: typeof import('matrix-js-sdk');
   snapshotCache: { roomVersions: Map<string, number> };
+  connection: 'connecting' | 'online' | 'catching-up' | 'offline';
   attachThreadListeners: (room: unknown) => void;
+  notifyForMessage: (event: unknown, room: unknown) => void;
+  playMessageTone: () => void;
 };
 
 function inject(
@@ -22,6 +25,44 @@ function inject(
 }
 
 describe('MatrixController protocol integration', () => {
+  it('only plays a message tone for Matrix events allowed by push rules', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const playMessageTone = vi.fn();
+    const internals = controller as unknown as ControllerInternals;
+    internals.playMessageTone = playMessageTone;
+    internals.connection = 'online';
+    inject(controller, {
+      getPushActionsForEvent: vi.fn().mockReturnValue({ notify: false }),
+      getRoomPushRule: vi.fn(),
+    });
+
+    internals.notifyForMessage(
+      { getType: () => 'm.room.message' },
+      { roomId: '!room:test' },
+    );
+
+    expect(playMessageTone).not.toHaveBeenCalled();
+  });
+
+  it('plays a message tone when Matrix push rules notify', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const playMessageTone = vi.fn();
+    const internals = controller as unknown as ControllerInternals;
+    internals.playMessageTone = playMessageTone;
+    internals.connection = 'online';
+    inject(controller, {
+      getPushActionsForEvent: vi.fn().mockReturnValue({ notify: true }),
+      getRoomPushRule: vi.fn(),
+    });
+
+    internals.notifyForMessage(
+      { getType: () => 'm.room.message' },
+      { roomId: '!room:test' },
+    );
+
+    expect(playMessageTone).toHaveBeenCalledOnce();
+  });
+
   it('sends a readable Matrix notice with the Aimtrix nudge marker', async () => {
     const sendEvent = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
