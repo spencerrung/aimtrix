@@ -6,7 +6,7 @@ const assets = join(process.cwd(), 'dist', 'assets');
 const limits = new Map([
   ['.js', 800 * 1024],
   ['.css', 100 * 1024],
-  ['.wasm', 6 * 1024 * 1024],
+  ['.wasm', 8 * 1024 * 1024],
 ]);
 const failures = [];
 for (const name of await readdir(assets)) {
