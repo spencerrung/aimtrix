@@ -1,3 +1,5 @@
+import type { EmojiPackConfig } from '../features/media/emojiPacks';
+
 export const themeNames = ['aqua', 'graphite', 'midnight'] as const;
 
 export type ThemeName = (typeof themeNames)[number];
@@ -27,6 +29,7 @@ export interface RuntimeConfig {
     name: string;
     manifestUrl: string;
   }>;
+  emojiPacks: EmojiPackConfig;
 }
 
 export interface RuntimeConfigResult {
@@ -53,6 +56,13 @@ export const defaultRuntimeConfig: RuntimeConfig = {
     autoplayAnimations: true,
   },
   stickerPacks: [],
+  emojiPacks: {
+    enabled: true,
+    standard: true,
+    bufo: true,
+    assetBaseUrl: undefined,
+    packs: [],
+  },
 };
 
 const MIN_UPLOAD_BYTES = 1024 * 1024;
@@ -93,6 +103,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
   const features = optionalRecord(root.features);
   const media = optionalRecord(root.media);
   const gifProvider = optionalRecord(root.gifProvider);
+  const emojiPacks = optionalRecord(root.emojiPacks);
 
   const brandName =
     typeof root.brandName === 'string' && root.brandName.trim().length > 0
@@ -150,6 +161,30 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
       }).filter((pack) => pack.name)
     : [];
 
+  let assetBaseUrl: string | undefined;
+  if (typeof emojiPacks.assetBaseUrl === 'string') {
+    try {
+      const url = new URL(emojiPacks.assetBaseUrl, window.location.origin);
+      if (url.protocol !== 'https:' && url.origin !== window.location.origin) throw new Error('insecure emoji asset base');
+      assetBaseUrl = url.toString();
+    } catch {
+      warnings.push('emojiPacks.assetBaseUrl is invalid; project-local emoji assets will be used.');
+    }
+  }
+  const configuredEmojiPacks = Array.isArray(emojiPacks.packs)
+    ? emojiPacks.packs.flatMap((value) => {
+        if (!isRecord(value) || typeof value.name !== 'string' || typeof value.manifestUrl !== 'string') return [];
+        try {
+          const url = new URL(value.manifestUrl, window.location.origin);
+          if (url.protocol !== 'https:' && url.origin !== window.location.origin) return [];
+          const name = value.name.trim().slice(0, 40);
+          return name ? [{ name, manifestUrl: url.toString() }] : [];
+        } catch {
+          return [];
+        }
+      })
+    : [];
+
   return {
     config: {
       brandName,
@@ -177,6 +212,13 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
       },
       gifProvider: parsedGifProvider,
       stickerPacks,
+      emojiPacks: {
+        enabled: readBoolean(emojiPacks.enabled, defaultRuntimeConfig.emojiPacks.enabled),
+        standard: readBoolean(emojiPacks.standard, defaultRuntimeConfig.emojiPacks.standard),
+        bufo: readBoolean(emojiPacks.bufo, defaultRuntimeConfig.emojiPacks.bufo),
+        assetBaseUrl,
+        packs: configuredEmojiPacks,
+      },
     },
     warnings,
   };

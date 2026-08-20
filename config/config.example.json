@@ -16,5 +16,12 @@
     "maxUploadBytes": 52428800,
     "autoplayAnimations": true
   },
-  "stickerPacks": []
+  "stickerPacks": [],
+  "emojiPacks": {
+    "enabled": true,
+    "standard": true,
+    "bufo": true,
+    "assetBaseUrl": "",
+    "packs": []
+  }
 }
