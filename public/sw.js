@@ -37,7 +37,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/stickers/')) {
+  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/stickers/') || url.pathname.startsWith('/emoji/')) {
     event.respondWith(
       caches.match(request).then(
         (cached) =>

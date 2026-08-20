@@ -83,6 +83,40 @@ Aimtrix accepts at most 48 valid, uniquely identified items per pack. Sticker so
 
 Configured and personally registered manifests are an artwork trust boundary: they can cause a browser to request images from their declared HTTPS origins and may reveal the user's IP address to those hosts. Install packs only from trusted authors. Packs should contain original or properly licensed art; do not redistribute third-party chat artwork without permission.
 
+### Emoji packs
+
+Aimtrix ships two lazy emoji packs from the repository: the Unicode standard pack and the imported Bufo pack. They are enabled by default, but pack loading is deployment-configurable:
+
+```json
+{
+  "emojiPacks": {
+    "enabled": true,
+    "standard": true,
+    "bufo": true,
+    "assetBaseUrl": "",
+    "packs": []
+  }
+}
+```
+
+Leave `assetBaseUrl` empty to load the manifests and Bufo artwork from the Aimtrix deployment itself. Set it to an HTTPS CDN or static host to load the same `/emoji/...` paths from elsewhere. Set `standard` to `false` to opt out of the standard catalog, or set `enabled` to `false` to disable all built-in and configured emoji packs; disabled packs are not fetched or loaded. `packs` accepts additional operator-managed manifests with a `name` and same-origin or HTTPS `manifestUrl`.
+
+Emoji pack manifests use `entries` with stable IDs, searchable names/aliases, optional Unicode `emoji`, and optional image `src` values:
+
+```json
+{
+  "id": "my-pack",
+  "name": "My emoji",
+  "version": "1.0.0",
+  "entries": [
+    { "id": "wave", "name": "Wave", "aliases": ["hello"], "src": "./wave.png" },
+    { "id": "sparkles", "name": "Sparkles", "emoji": "✨" }
+  ]
+}
+```
+
+Image-backed entries react using a stable `:pack-entry-id:` key and render in Aimtrix when the corresponding pack is available. Other Matrix clients safely see that key as the standard reaction event's plain text. The standard pack is generated from Unicode emoji metadata; the Bufo pack is the user-provided import and its redistribution rights should be confirmed before publishing a public deployment.
+
 ## Kubernetes shape
 
 A typical homelab deployment needs only:

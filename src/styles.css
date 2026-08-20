@@ -585,6 +585,7 @@
   .media-viewer > img.is-actual-size { max-width: none; max-height: none; }
   .media-viewer > p { padding: 30px; color: var(--text-soft); text-align: center; }
   .message-sticker { width: min(180px, 45vw); max-height: 180px; margin-top: 7px; object-fit: contain; }
+  .emoji-asset { width: 1.6em; height: 1.6em; object-fit: contain; }
   .message-audio { width: min(420px, 100%); margin-top: 7px; }
   .message-media-gate { display: flex; width: fit-content; align-items: center; gap: 6px; margin-top: 7px; padding: 8px 10px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); font-size: 0.66rem; font-weight: 700; }
   .message-file { display: flex; width: fit-content; align-items: center; gap: 7px; margin-top: 7px; padding: 9px 11px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); font-size: 0.72rem; font-weight: 700; text-decoration: none; }
@@ -594,8 +595,7 @@
   .message-actions button:last-child { border-right: 0; }
   .message-actions button:hover { color: var(--blue-deep); background: var(--blue-soft); }
   .reaction-picker { top: 31px; right: 0; bottom: auto; width: min(292px, calc(100vw - 28px)); }
-  .reaction-picker__section { display: block; margin: 7px 2px 4px; color: var(--text-faint); font-size: 0.59rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
-  .reaction-picker__grid--quick { max-height: none !important; }
+  .reaction-picker__section { display: block; margin: 7px 2px 4px; color: var(--text-faint); font-size: 0.59rem; font-weight: 800; }
   .reaction-picker__grid button { width: auto; height: 32px; }
   .thread-summary { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 7px; color: var(--blue-deep); border: 1px solid color-mix(in srgb, var(--blue) 38%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--blue-soft) 72%, var(--surface-raised)); font: inherit; font-size: 0.68rem; }
   .thread-summary:hover { background: var(--blue-soft); }

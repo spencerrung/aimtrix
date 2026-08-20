@@ -60,6 +60,13 @@ import {
 } from 'react';
 import { Avatar } from '../../components/Avatar';
 import { CallShelf } from '../calls/CallShelf';
+import {
+  emojiReactionKey,
+  loadEmojiPacks,
+  selectEmojiPacks,
+  type EmojiPackDefinition,
+  type EmojiPackEntry,
+} from '../media/emojiPacks';
 import { GifPicker, type GifChoice } from '../media/GifPicker';
 import { loadStickerPack, mergeStickerPacks } from '../media/stickerPacks';
 import { ProfileDialog } from '../profile/ProfileDialog';
@@ -102,13 +109,14 @@ type LinkPreview = {
   siteName?: string;
 };
 
-type EmojiCatalogEntry = {
-  emoji: string;
-  name: string;
-  aliases?: string[];
-};
-
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
+const MAX_VISIBLE_EMOJI_RESULTS = 240;
+
+function EmojiAsset({ entry }: { entry: Pick<EmojiPackEntry, 'emoji' | 'name' | 'src'> }) {
+  return entry.src ? <img className="emoji-asset" src={entry.src} alt="" loading="lazy" /> : entry.emoji;
+}
+
+type TextEmojiEntry = EmojiPackEntry & { emoji: string };
 
 const URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
 const linkPreviewRequests = new Map<string, Promise<LinkPreview | undefined>>();
@@ -1264,7 +1272,7 @@ const TimelineMessage = memo(function TimelineMessage({
   onPin: (message: MessageSummary) => void;
   canPin: boolean;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
-  emojiCatalog: EmojiCatalogEntry[];
+  emojiCatalog: EmojiPackEntry[];
   recentEmojis: string[];
   onLoadEmojiCatalog: () => void;
   onEmojiUsed: (emoji: string) => void;
@@ -1295,21 +1303,24 @@ const TimelineMessage = memo(function TimelineMessage({
   );
   const canViewImage = message.mediaKind === 'image' && message.kind !== 'sticker';
   const reactionEmojis = useMemo(() => {
+    const fallback = reactionFallback.map<EmojiPackEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
     const source = emojiCatalog.length
-      ? emojiCatalog
-      : reactionFallback.map<EmojiCatalogEntry>((emoji) => ({ emoji, name: emoji }));
+      ? [...emojiCatalog, ...fallback.filter((fallbackEntry) => !emojiCatalog.some((entry) => entry.emoji === fallbackEntry.emoji))]
+      : fallback;
     const query = reactionQuery.trim().toLowerCase().replace(/^:/, '').replace(/:$/, '').replace(/[_-]+/g, ' ');
     const matches = source.filter((entry) =>
-      !query || `${entry.name} ${entry.emoji} ${entry.aliases?.join(' ') ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ').includes(query),
+      !query || `${entry.name} ${entry.emoji ?? ''} ${entry.aliases?.join(' ') ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ').includes(query),
     );
-    if (query) return { quick: [], matches };
-    const quick = recentEmojis
-      .map((emoji) => source.find((entry) => entry.emoji === emoji))
-      .filter((entry): entry is EmojiCatalogEntry => Boolean(entry));
-    const quickEmojis = new Set(quick.map((entry) => entry.emoji));
+    if (query) return { quick: [], matches: matches.slice(0, MAX_VISIBLE_EMOJI_RESULTS) };
+    const quick = [...recentEmojis, ...reactionFallback]
+      .map((emoji) => source.find((entry) => emojiReactionKey(entry) === emoji))
+      .filter((entry): entry is EmojiPackEntry => Boolean(entry));
+    const uniqueQuick = quick.filter((entry, index) => quick.findIndex((candidate) => candidate.id === entry.id) === index);
+    const quickEmojis = new Set(uniqueQuick.map((entry) => emojiReactionKey(entry)));
     return {
-      quick,
-      matches: quick.length ? matches.filter((entry) => !quickEmojis.has(entry.emoji)) : matches,
+      quick: uniqueQuick,
+      matches: (uniqueQuick.length ? matches.filter((entry) => !quickEmojis.has(emojiReactionKey(entry))) : matches)
+        .slice(0, MAX_VISIBLE_EMOJI_RESULTS),
     };
   }, [emojiCatalog, reactionQuery, recentEmojis]);
   const closeMediaViewer = () => {
@@ -1393,7 +1404,9 @@ const TimelineMessage = memo(function TimelineMessage({
                 aria-label={`${reaction.key}, ${reaction.count} reactions`}
                 onClick={() => onReact(message, reaction.key, reaction.ownEventId)}
               >
-                {reaction.key} <span>{reaction.count}</span>
+                {emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key) ? (
+                  <EmojiAsset entry={emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key)!} />
+                ) : reaction.key} <span>{reaction.count}</span>
               </button>
             ))}
           </div>
@@ -1448,13 +1461,13 @@ const TimelineMessage = memo(function TimelineMessage({
           <header><strong>React</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
           <label className="emoji-search"><Search size={13} /><span className="sr-only">Search reaction emoji</span><input value={reactionQuery} placeholder="Search emoji" onChange={(event) => setReactionQuery(event.target.value)} /></label>
           {reactionEmojis.quick.length ? <>
-            <span className="reaction-picker__section">Recent</span>
+            <span className="reaction-picker__section">{recentEmojis.length ? 'Recent' : 'Quick picks'}</span>
             <div className="reaction-picker__grid reaction-picker__grid--quick">
-              {reactionEmojis.quick.map(({ emoji, name }) => <button type="button" key={emoji} aria-label={`React with ${emoji}`} title={name} onClick={() => chooseReaction(emoji)}>{emoji}</button>)}
+              {reactionEmojis.quick.map((entry) => <button type="button" key={emojiReactionKey(entry)} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
             </div>
           </> : null}
           <div className="reaction-picker__grid">
-            {reactionEmojis.matches.map(({ emoji, name }) => <button type="button" key={emoji} aria-label={`React with ${emoji}`} title={name} onClick={() => chooseReaction(emoji)}>{emoji}</button>)}
+            {reactionEmojis.matches.map((entry) => <button type="button" key={entry.id} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
           </div>
           {!reactionEmojis.quick.length && !reactionEmojis.matches.length ? <p className="reaction-picker__empty">No emoji match that search.</p> : null}
         </div> : null}
@@ -1552,6 +1565,8 @@ function Conversation({
   onCancelContext,
   onCancelThreadEdit,
   onReact,
+  emojiPacks,
+  emojiAssetBaseUrl,
   onSendSticker,
   onUploadAttachment,
   onCancelUpload,
@@ -1606,6 +1621,8 @@ function Conversation({
   onCancelContext: () => void;
   onCancelThreadEdit: () => void;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
+  emojiPacks: EmojiPackDefinition[];
+  emojiAssetBaseUrl?: string;
   onSendSticker: (sticker: { id: string; name: string; src: string }) => void;
   onUploadAttachment: (file: File, threadRootId?: string) => void;
   onCancelUpload: () => void;
@@ -1664,7 +1681,7 @@ function Conversation({
     member.id.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery),
   ).slice(0, 6);
   const [emojiQuery, setEmojiQuery] = useState('');
-  const [emojiCatalog, setEmojiCatalog] = useState<EmojiCatalogEntry[]>([]);
+  const [emojiCatalog, setEmojiCatalog] = useState<EmojiPackEntry[]>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]') as string[]; } catch { return []; }
   });
@@ -1752,15 +1769,20 @@ function Conversation({
   }
   const activeEntryUnreadMarker = entryUnreadState.marker;
   const fallbackEmojis = ['😀', '😂', '🥹', '😍', '😎', '🤔', '😭', '😡', '👍', '👀', '✨', '💙', '🎉', '🔥', '🫧', '☕', '💾', '🌈'];
-  const visibleEmojis = (emojiCatalog.length
-    ? emojiCatalog
-    : fallbackEmojis.map((emoji) => ({ emoji, name: emoji })))
+  const fallbackEmojiEntries = fallbackEmojis.map<TextEmojiEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
+  const visibleEmojis = ([
+    ...fallbackEmojiEntries,
+    ...emojiCatalog.filter((entry): entry is TextEmojiEntry =>
+      typeof entry.emoji === 'string' && entry.emoji.length > 0 && !fallbackEmojis.includes(entry.emoji),
+    ),
+  ])
     .filter((item) => !emojiQuery.trim() || `${item.name} ${item.emoji}`.toLowerCase().includes(emojiQuery.toLowerCase()))
     .sort((left, right) => {
       const leftRank = recentEmojis.indexOf(left.emoji);
       const rightRank = recentEmojis.indexOf(right.emoji);
       return (leftRank < 0 ? 999 : leftRank) - (rightRank < 0 ? 999 : rightRank);
-    });
+    })
+    .slice(0, MAX_VISIBLE_EMOJI_RESULTS);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const isFencedDraft = draft.startsWith('```');
@@ -2057,16 +2079,14 @@ function Conversation({
 
   const loadEmojiCatalog = useCallback(() => {
     if (catalogRequested.current) return;
+    if (!emojiPacks.length) return;
     catalogRequested.current = true;
-    void fetch('/emoji/catalog.json')
-      .then((response) => response.json())
-      .then((catalog: EmojiCatalogEntry[]) => {
-        if (Array.isArray(catalog)) setEmojiCatalog(catalog);
-      })
+    void loadEmojiPacks(emojiPacks, emojiAssetBaseUrl)
+      .then((catalog) => setEmojiCatalog(catalog))
       .catch(() => {
         catalogRequested.current = false;
       });
-  }, []);
+  }, [emojiAssetBaseUrl, emojiPacks]);
 
   useEffect(() => {
     if (emojiOpen) loadEmojiCatalog();
@@ -2101,6 +2121,7 @@ function Conversation({
       return normalized.startsWith(query) ? 0 : 1;
     };
     const emojiMatches = emojiCatalog
+      .filter((entry): entry is EmojiPackEntry & { emoji: string } => Boolean(entry.emoji))
       .map((entry) => ({ entry, score: rank(entry.name) }))
       .filter((candidate) => candidate.score >= 0)
       .sort((left, right) => left.score - right.score)
@@ -3341,6 +3362,10 @@ export function Workspace({
     () => mergeStickerPacks(config.stickerPacks, profilePersonalization.installedStickerPacks),
     [config.stickerPacks, profilePersonalization.installedStickerPacks],
   );
+  const availableEmojiPacks = useMemo(
+    () => selectEmojiPacks(config.emojiPacks),
+    [config.emojiPacks],
+  );
 
   const selectRoom = useCallback((roomId: string) => {
     setSelectedRoomId(roomId);
@@ -3899,6 +3924,8 @@ export function Workspace({
               setEditingThreadMessage(undefined);
             }}
             onReact={handleReact}
+            emojiPacks={availableEmojiPacks}
+            emojiAssetBaseUrl={config.emojiPacks.assetBaseUrl}
             onSendSticker={(sticker) => void sendSticker(sticker)}
             onUploadAttachment={(file, threadRootId) => void uploadAttachment(file, threadRootId)}
             onCancelUpload={() => onCancelUpload?.()}

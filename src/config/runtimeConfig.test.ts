@@ -25,6 +25,8 @@ describe('parseRuntimeConfig', () => {
     expect(result.config.defaultTheme).toBe('midnight');
     expect(result.config.features.demoMode).toBe(false);
     expect(result.config.features.stickers).toBe(true);
+    expect(result.config.emojiPacks.standard).toBe(true);
+    expect(result.config.emojiPacks.bufo).toBe(true);
     expect(result.warnings).toEqual([]);
   });
 
@@ -54,6 +56,27 @@ describe('parseRuntimeConfig', () => {
     expect(result.config.media.maxUploadBytes).toBe(500 * 1024 * 1024);
     expect(result.config.defaultTheme).toBe('aqua');
     expect(result.warnings).toHaveLength(3);
+  });
+
+  it('accepts configurable emoji pack sources and preserves opt-out settings', () => {
+    const result = parseRuntimeConfig({
+      emojiPacks: {
+        enabled: true,
+        standard: false,
+        bufo: true,
+        assetBaseUrl: 'https://cdn.example.test/aimtrix/',
+        packs: [{ name: 'Team', manifestUrl: 'https://cdn.example.test/team.json' }],
+      },
+    });
+
+    expect(result.config.emojiPacks).toEqual({
+      enabled: true,
+      standard: false,
+      bufo: true,
+      assetBaseUrl: 'https://cdn.example.test/aimtrix/',
+      packs: [{ name: 'Team', manifestUrl: 'https://cdn.example.test/team.json' }],
+    });
+    expect(result.warnings).toEqual([]);
   });
 });
 

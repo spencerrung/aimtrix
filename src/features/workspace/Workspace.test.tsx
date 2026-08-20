@@ -216,10 +216,12 @@ describe('Workspace demo', () => {
 
   it('searches the lazy emoji catalog and remembers a selected reaction', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      json: () => Promise.resolve([
-        { emoji: '🎉', name: 'party popper' },
-        { emoji: '🎊', name: 'confetti' },
-      ]),
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ entries: [
+        { id: 'party-popper', emoji: '🎉', name: 'party popper' },
+        { id: 'confetti', emoji: '🎊', name: 'confetti' },
+      ] }),
     }));
     const onToggleReaction = vi.fn().mockResolvedValue(undefined);
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onToggleReaction });
@@ -235,6 +237,28 @@ describe('Workspace demo', () => {
 
     expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', '🎊', undefined);
     expect(JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]')).toContain('🎊');
+  });
+
+  it('shows image-backed pack entries and sends their stable reaction key', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ entries: [{ id: 'bufo-wave', name: 'Bufo wave', src: './bufo-wave.png' }] }),
+    }));
+    const onToggleReaction = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onToggleReaction });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
+    const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
+    fireEvent.change(within(picker).getByRole('textbox', { name: 'Search reaction emoji' }), {
+      target: { value: 'bufo' },
+    });
+
+    const bufoButton = await within(picker).findByRole('button', { name: 'React with :bufo-wave:' });
+    expect(bufoButton.querySelector('img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
+    fireEvent.click(bufoButton);
+
+    expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', ':bufo-wave:', undefined);
   });
 
   it('dismisses the reaction chooser with Escape and outside clicks', () => {
@@ -925,10 +949,12 @@ describe('Workspace demo', () => {
 
   it('completes an emoji shortcode from the composer with Enter', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      json: () => Promise.resolve([
-        { emoji: '😄', name: 'smile' },
-        { emoji: '😂', name: 'tears of joy' },
-      ]),
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ entries: [
+        { id: 'smile', emoji: '😄', name: 'smile' },
+        { id: 'tears-of-joy', emoji: '😂', name: 'tears of joy' },
+      ] }),
     }));
     try {
       renderWorkspace();
