@@ -207,6 +207,7 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
     expect(onToggleReaction).not.toHaveBeenCalled();
     const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
+    expect(picker.parentElement).toBe(document.body);
     await waitFor(() => expect(within(picker).getByRole('button', { name: 'React with 👍' })).toHaveFocus());
     fireEvent.click(within(picker).getByRole('button', { name: 'React with 🎉' }));
 
