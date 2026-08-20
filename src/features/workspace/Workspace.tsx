@@ -58,6 +58,7 @@ import {
   type PointerEvent,
   type ReactNode,
 } from 'react';
+import { createPortal } from 'react-dom';
 import { Avatar } from '../../components/Avatar';
 import { CallShelf } from '../calls/CallShelf';
 import {
@@ -1284,9 +1285,12 @@ const TimelineMessage = memo(function TimelineMessage({
   const [mediaRevealed, setMediaRevealed] = useState(!gatedMedia);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [reactionQuery, setReactionQuery] = useState('');
+  const [reactionPickerPosition, setReactionPickerPosition] = useState({ top: 0, left: 0 });
   const [mediaViewerOpen, setMediaViewerOpen] = useState(false);
   const [actualSize, setActualSize] = useState(false);
   const reactionActions = useRef<HTMLDivElement>(null);
+  const reactionTrigger = useRef<HTMLButtonElement>(null);
+  const reactionPicker = useRef<HTMLDivElement>(null);
   const mediaTrigger = useRef<HTMLButtonElement>(null);
   const mediaViewer = useRef<HTMLElement>(null);
   const mediaSrc = useMediaSource(
@@ -1333,9 +1337,12 @@ const TimelineMessage = memo(function TimelineMessage({
   }, [mediaViewerOpen]);
   useEffect(() => {
     if (!reactionPickerOpen) return;
-    reactionActions.current?.querySelector<HTMLButtonElement>('.reaction-picker button')?.focus();
+    reactionPicker.current?.querySelector<HTMLButtonElement>('.reaction-picker__grid button')?.focus();
     const dismiss = (event: globalThis.PointerEvent) => {
-      if (!reactionActions.current?.contains(event.target as Node)) setReactionPickerOpen(false);
+      if (
+        !reactionActions.current?.contains(event.target as Node) &&
+        !reactionPicker.current?.contains(event.target as Node)
+      ) setReactionPickerOpen(false);
     };
     const onKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === 'Escape') setReactionPickerOpen(false);
@@ -1347,6 +1354,21 @@ const TimelineMessage = memo(function TimelineMessage({
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [reactionPickerOpen]);
+
+  useLayoutEffect(() => {
+    if (!reactionPickerOpen || !reactionPicker.current || !reactionTrigger.current) return;
+    const trigger = reactionTrigger.current.getBoundingClientRect();
+    const picker = reactionPicker.current.getBoundingClientRect();
+    const left = Math.min(
+      Math.max(12, trigger.right - picker.width),
+      Math.max(12, window.innerWidth - picker.width - 12),
+    );
+    const below = trigger.bottom + 8;
+    const top = below + picker.height <= window.innerHeight - 12
+      ? below
+      : Math.max(12, trigger.top - picker.height - 8);
+    setReactionPickerPosition({ top, left });
+  }, [reactionPickerOpen, reactionQuery, emojiCatalog]);
 
   const chooseReaction = (reaction: string) => {
     onEmojiUsed(reaction);
@@ -1453,11 +1475,11 @@ const TimelineMessage = memo(function TimelineMessage({
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
         <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
         {message.isThreadRoot ? <button type="button" aria-label="Open thread" title="Open thread" onClick={() => onOpenThread(message)}><MessageCircle size={14} /></button> : null}
-        <button type="button" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={reactionPickerOpen} title="React" onClick={() => {
+        <button ref={reactionTrigger} type="button" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={reactionPickerOpen} title="React" onClick={() => {
           setReactionPickerOpen((open) => !open);
           if (!reactionPickerOpen) onLoadEmojiCatalog();
         }}><SmilePlus size={14} /></button>
-        {reactionPickerOpen ? <div className="reaction-picker emoji-tray" role="dialog" aria-label="Choose a reaction">
+        {reactionPickerOpen ? createPortal(<div ref={reactionPicker} className="reaction-picker emoji-tray" role="dialog" aria-label="Choose a reaction" style={{ top: reactionPickerPosition.top, left: reactionPickerPosition.left }}>
           <header><strong>React</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
           <label className="emoji-search"><Search size={13} /><span className="sr-only">Search reaction emoji</span><input value={reactionQuery} placeholder="Search emoji" onChange={(event) => setReactionQuery(event.target.value)} /></label>
           {reactionEmojis.quick.length ? <>
@@ -1470,7 +1492,7 @@ const TimelineMessage = memo(function TimelineMessage({
             {reactionEmojis.matches.map((entry) => <button type="button" key={entry.id} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
           </div>
           {!reactionEmojis.quick.length && !reactionEmojis.matches.length ? <p className="reaction-picker__empty">No emoji match that search.</p> : null}
-        </div> : null}
+        </div>, document.body) : null}
         {canPin ? <button type="button" aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(message)}><Pin size={14} /></button> : null}
         {message.isOwn && message.kind === 'text' ? (
           <><button type="button" aria-label="Edit message" title="Edit" onClick={() => onEdit(message)}><Pencil size={14} /></button><button type="button" aria-label="Delete message" title="Delete" onClick={() => onDelete(message)}><Trash2 size={14} /></button></>
