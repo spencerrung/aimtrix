@@ -721,6 +721,30 @@ describe('Workspace demo', () => {
     expect(screen.getByLabelText('Message Welcome Lounge')).toHaveValue('🌈');
   });
 
+  it('inserts an image-backed pack entry into the composer as a stable shortcode', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ entries: [{ id: 'bufo-wave', name: 'Bufo wave', src: './bufo-wave.png' }] }),
+    }));
+    try {
+      renderWorkspace();
+      fireEvent.click(screen.getByRole('button', { name: 'Add emoji' }));
+      const picker = screen.getByLabelText('Emoji picker');
+      fireEvent.change(within(picker).getByRole('textbox', { name: 'Search emoji' }), {
+        target: { value: 'bufo' },
+      });
+
+      const bufoButton = await within(picker).findByRole('button', { name: 'Insert :bufo-wave:' });
+      expect(bufoButton.querySelector('img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
+      fireEvent.click(bufoButton);
+
+      expect(screen.getByLabelText('Message Welcome Lounge')).toHaveValue(':bufo-wave:');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('uses the saved default profile pack when opening the chat sticker picker', () => {
     renderWorkspace({
       profilePersonalization: {
@@ -955,6 +979,7 @@ describe('Workspace demo', () => {
       json: () => Promise.resolve({ entries: [
         { id: 'smile', emoji: '😄', name: 'smile' },
         { id: 'tears-of-joy', emoji: '😂', name: 'tears of joy' },
+        { id: 'bufo-wave', name: 'bufo wave', src: './bufo-wave.png' },
       ] }),
     }));
     try {
@@ -968,6 +993,12 @@ describe('Workspace demo', () => {
 
       fireEvent.keyDown(composer, { key: 'Enter' });
       expect(composer).toHaveValue('hello 😄');
+
+      fireEvent.change(composer, { target: { value: 'hello :bufo' } });
+      const bufoListbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
+      expect(within(bufoListbox).getByText(':bufowave:')).toBeInTheDocument();
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      expect(composer).toHaveValue('hello :bufo-wave:');
     } finally {
       vi.unstubAllGlobals();
     }

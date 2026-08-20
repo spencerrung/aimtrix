@@ -1794,17 +1794,15 @@ function Conversation({
   const fallbackEmojiEntries = fallbackEmojis.map<TextEmojiEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
   const visibleEmojis = ([
     ...fallbackEmojiEntries,
-    ...emojiCatalog.filter((entry): entry is TextEmojiEntry =>
-      typeof entry.emoji === 'string' && entry.emoji.length > 0 && !fallbackEmojis.includes(entry.emoji),
-    ),
+    ...emojiCatalog.filter((entry) => !entry.emoji || !fallbackEmojis.includes(entry.emoji)),
   ])
-    .filter((item) => !emojiQuery.trim() || `${item.name} ${item.emoji}`.toLowerCase().includes(emojiQuery.toLowerCase()))
+    .filter((item) => !emojiQuery.trim() || `${item.name} ${item.emoji ?? ''} ${item.aliases?.join(' ') ?? ''}`.toLowerCase().includes(emojiQuery.toLowerCase()))
     .sort((left, right) => {
-      const leftRank = recentEmojis.indexOf(left.emoji);
-      const rightRank = recentEmojis.indexOf(right.emoji);
+      const leftRank = recentEmojis.indexOf(emojiReactionKey(left));
+      const rightRank = recentEmojis.indexOf(emojiReactionKey(right));
       return (leftRank < 0 ? 999 : leftRank) - (rightRank < 0 ? 999 : rightRank);
     })
-    .slice(0, MAX_VISIBLE_EMOJI_RESULTS);
+    .slice(0, emojiQuery.trim() ? 48 : MAX_VISIBLE_EMOJI_RESULTS);
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const isFencedDraft = draft.startsWith('```');
@@ -2133,18 +2131,18 @@ function Conversation({
 
   const colonResults = (() => {
     if (!colon || colonDismissed === colon.query) return [] as Array<
-      ({ type: 'emoji' } & { emoji: string; name: string }) |
+      ({ type: 'emoji' } & EmojiPackEntry) |
       ({ type: 'sticker' } & { id: string; name: string; src: string })
     >;
     const query = colon.query;
     const rank = (name: string) => {
       const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      if (!normalized.includes(query)) return -1;
-      return normalized.startsWith(query) ? 0 : 1;
+      const normalizedQuery = query.replace(/[^a-z0-9]/g, '');
+      if (!normalized.includes(normalizedQuery)) return -1;
+      return normalized.startsWith(normalizedQuery) ? 0 : 1;
     };
     const emojiMatches = emojiCatalog
-      .filter((entry): entry is EmojiPackEntry & { emoji: string } => Boolean(entry.emoji))
-      .map((entry) => ({ entry, score: rank(entry.name) }))
+      .map((entry) => ({ entry, score: rank(`${entry.name} ${entry.aliases?.join(' ') ?? ''}`) }))
       .filter((candidate) => candidate.score >= 0)
       .sort((left, right) => left.score - right.score)
       .slice(0, 6)
@@ -2162,8 +2160,9 @@ function Conversation({
     const before = draft.slice(0, colon.start);
     const after = draft.slice(colon.caret);
     if (result.type === 'emoji') {
-      onDraftChange(`${before}${result.emoji}${after}`);
-      rememberEmoji(result.emoji);
+      const key = emojiReactionKey(result);
+      onDraftChange(`${before}${key}${after}`);
+      rememberEmoji(key);
     } else {
       onDraftChange(`${before}${after}`);
       onSendSticker({ id: result.id, name: result.name, src: result.src });
@@ -2469,19 +2468,20 @@ function Conversation({
           <header><strong>Emoji</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
           <label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input autoFocus value={emojiQuery} placeholder="Search emoji" onChange={(event) => setEmojiQuery(event.target.value)} /></label>
           <div>
-            {visibleEmojis.map(({ emoji, name }) => (
+            {visibleEmojis.map((entry) => (
               <button
                 type="button"
-                key={emoji}
-                aria-label={`Insert ${emoji}`}
-                title={name}
+                key={emojiReactionKey(entry)}
+                aria-label={`Insert ${emojiReactionKey(entry)}`}
+                title={entry.name}
                 onClick={() => {
-                  onDraftChange(`${draft}${emoji}`);
-                  rememberEmoji(emoji);
+                  const key = emojiReactionKey(entry);
+                  onDraftChange(`${draft}${key}`);
+                  rememberEmoji(key);
                   setEmojiOpen(false);
                   setEmojiQuery('');
                 }}
-              >{emoji}</button>
+              ><EmojiAsset entry={entry} /></button>
             ))}
           </div>
         </div>
@@ -2494,7 +2494,7 @@ function Conversation({
               role="option"
               aria-selected={index === colonIndex % colonResults.length}
               className={index === colonIndex % colonResults.length ? 'is-active' : ''}
-              key={result.type === 'emoji' ? result.emoji : `${result.id}:${result.src}`}
+              key={result.type === 'emoji' ? emojiReactionKey(result) : `${result.id}:${result.src}`}
               onMouseDown={(event) => {
                 event.preventDefault();
                 pickColonResult(result);
@@ -2502,7 +2502,7 @@ function Conversation({
               onMouseEnter={() => setColonIndex(index)}
             >
               {result.type === 'emoji' ? (
-                <span className="colon-complete__emoji">{result.emoji}</span>
+                <span className="colon-complete__emoji"><EmojiAsset entry={result} /></span>
               ) : (
                 <span className="colon-complete__sticker"><ResolvedStickerImage sticker={result} /></span>
               )}
