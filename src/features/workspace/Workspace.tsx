@@ -102,6 +102,14 @@ type LinkPreview = {
   siteName?: string;
 };
 
+type EmojiCatalogEntry = {
+  emoji: string;
+  name: string;
+  aliases?: string[];
+};
+
+const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
+
 const URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
 const linkPreviewRequests = new Map<string, Promise<LinkPreview | undefined>>();
 
@@ -1238,6 +1246,10 @@ const TimelineMessage = memo(function TimelineMessage({
   onPin,
   canPin,
   onReact,
+  emojiCatalog,
+  recentEmojis,
+  onLoadEmojiCatalog,
+  onEmojiUsed,
   onMediaLoad,
 }: {
   message: MessageSummary;
@@ -1252,14 +1264,18 @@ const TimelineMessage = memo(function TimelineMessage({
   onPin: (message: MessageSummary) => void;
   canPin: boolean;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
+  emojiCatalog: EmojiCatalogEntry[];
+  recentEmojis: string[];
+  onLoadEmojiCatalog: () => void;
+  onEmojiUsed: (emoji: string) => void;
   onMediaLoad: () => void;
 }) {
-  const reactionChoices = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
   const gatedMedia =
     Boolean(message.mediaUrl) &&
     (dataSaver || (!autoplayMedia && message.mimeType === 'image/gif'));
   const [mediaRevealed, setMediaRevealed] = useState(!gatedMedia);
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
+  const [reactionQuery, setReactionQuery] = useState('');
   const [mediaViewerOpen, setMediaViewerOpen] = useState(false);
   const [actualSize, setActualSize] = useState(false);
   const reactionActions = useRef<HTMLDivElement>(null);
@@ -1278,6 +1294,24 @@ const TimelineMessage = memo(function TimelineMessage({
     message.mimeType,
   );
   const canViewImage = message.mediaKind === 'image' && message.kind !== 'sticker';
+  const reactionEmojis = useMemo(() => {
+    const source = emojiCatalog.length
+      ? emojiCatalog
+      : reactionFallback.map<EmojiCatalogEntry>((emoji) => ({ emoji, name: emoji }));
+    const query = reactionQuery.trim().toLowerCase().replace(/^:/, '').replace(/:$/, '').replace(/[_-]+/g, ' ');
+    const matches = source.filter((entry) =>
+      !query || `${entry.name} ${entry.emoji} ${entry.aliases?.join(' ') ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ').includes(query),
+    );
+    if (query) return { quick: [], matches };
+    const quick = recentEmojis
+      .map((emoji) => source.find((entry) => entry.emoji === emoji))
+      .filter((entry): entry is EmojiCatalogEntry => Boolean(entry));
+    const quickEmojis = new Set(quick.map((entry) => entry.emoji));
+    return {
+      quick,
+      matches: quick.length ? matches.filter((entry) => !quickEmojis.has(entry.emoji)) : matches,
+    };
+  }, [emojiCatalog, reactionQuery, recentEmojis]);
   const closeMediaViewer = () => {
     setMediaViewerOpen(false);
     setActualSize(false);
@@ -1302,6 +1336,13 @@ const TimelineMessage = memo(function TimelineMessage({
       document.removeEventListener('keydown', onKeyDown);
     };
   }, [reactionPickerOpen]);
+
+  const chooseReaction = (reaction: string) => {
+    onEmojiUsed(reaction);
+    onReact(message, reaction);
+    setReactionPickerOpen(false);
+    setReactionQuery('');
+  };
   return (
     <article className={`timeline-message${message.isOwn ? ' timeline-message--own' : ''}`}>
       <Avatar
@@ -1399,9 +1440,23 @@ const TimelineMessage = memo(function TimelineMessage({
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
         <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
         {message.isThreadRoot ? <button type="button" aria-label="Open thread" title="Open thread" onClick={() => onOpenThread(message)}><MessageCircle size={14} /></button> : null}
-        <button type="button" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={reactionPickerOpen} title="React" onClick={() => setReactionPickerOpen((open) => !open)}><SmilePlus size={14} /></button>
-        {reactionPickerOpen ? <div className="reaction-picker" role="dialog" aria-label="Choose a reaction">
-          {reactionChoices.map((reaction) => <button type="button" key={reaction} aria-label={`React with ${reaction}`} onClick={() => { onReact(message, reaction); setReactionPickerOpen(false); }}>{reaction}</button>)}
+        <button type="button" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={reactionPickerOpen} title="React" onClick={() => {
+          setReactionPickerOpen((open) => !open);
+          if (!reactionPickerOpen) onLoadEmojiCatalog();
+        }}><SmilePlus size={14} /></button>
+        {reactionPickerOpen ? <div className="reaction-picker emoji-tray" role="dialog" aria-label="Choose a reaction">
+          <header><strong>React</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
+          <label className="emoji-search"><Search size={13} /><span className="sr-only">Search reaction emoji</span><input value={reactionQuery} placeholder="Search emoji" onChange={(event) => setReactionQuery(event.target.value)} /></label>
+          {reactionEmojis.quick.length ? <>
+            <span className="reaction-picker__section">Recent</span>
+            <div className="reaction-picker__grid reaction-picker__grid--quick">
+              {reactionEmojis.quick.map(({ emoji, name }) => <button type="button" key={emoji} aria-label={`React with ${emoji}`} title={name} onClick={() => chooseReaction(emoji)}>{emoji}</button>)}
+            </div>
+          </> : null}
+          <div className="reaction-picker__grid">
+            {reactionEmojis.matches.map(({ emoji, name }) => <button type="button" key={emoji} aria-label={`React with ${emoji}`} title={name} onClick={() => chooseReaction(emoji)}>{emoji}</button>)}
+          </div>
+          {!reactionEmojis.quick.length && !reactionEmojis.matches.length ? <p className="reaction-picker__empty">No emoji match that search.</p> : null}
         </div> : null}
         {canPin ? <button type="button" aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(message)}><Pin size={14} /></button> : null}
         {message.isOwn && message.kind === 'text' ? (
@@ -1609,10 +1664,17 @@ function Conversation({
     member.id.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery),
   ).slice(0, 6);
   const [emojiQuery, setEmojiQuery] = useState('');
-  const [emojiCatalog, setEmojiCatalog] = useState<Array<{ emoji: string; name: string }>>([]);
+  const [emojiCatalog, setEmojiCatalog] = useState<EmojiCatalogEntry[]>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]') as string[]; } catch { return []; }
   });
+  const rememberEmoji = useCallback((emoji: string) => {
+    setRecentEmojis((current) => {
+      const next = [emoji, ...current.filter((recent) => recent !== emoji)].slice(0, 18);
+      localStorage.setItem('aimtrix.recent-emoji.v1', JSON.stringify(next));
+      return next;
+    });
+  }, []);
   const [searchOpen, setSearchOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
   const [messageQuery, setMessageQuery] = useState('');
@@ -1998,7 +2060,7 @@ function Conversation({
     catalogRequested.current = true;
     void fetch('/emoji/catalog.json')
       .then((response) => response.json())
-      .then((catalog: Array<{ emoji: string; name: string }>) => {
+      .then((catalog: EmojiCatalogEntry[]) => {
         if (Array.isArray(catalog)) setEmojiCatalog(catalog);
       })
       .catch(() => {
@@ -2058,9 +2120,7 @@ function Conversation({
     const after = draft.slice(colon.caret);
     if (result.type === 'emoji') {
       onDraftChange(`${before}${result.emoji}${after}`);
-      const next = [result.emoji, ...recentEmojis.filter((recent) => recent !== result.emoji)].slice(0, 18);
-      setRecentEmojis(next);
-      localStorage.setItem('aimtrix.recent-emoji.v1', JSON.stringify(next));
+      rememberEmoji(result.emoji);
     } else {
       onDraftChange(`${before}${after}`);
       onSendSticker({ id: result.id, name: result.name, src: result.src });
@@ -2235,6 +2295,10 @@ function Conversation({
                   onPin={onTogglePin}
                   canPin={Boolean(room.canManage)}
                   onReact={onReact}
+                  emojiCatalog={emojiCatalog}
+                  recentEmojis={recentEmojis}
+                  onLoadEmojiCatalog={loadEmojiCatalog}
+                  onEmojiUsed={rememberEmoji}
                   onMediaLoad={handleMediaLoad}
                   onLoadLinkPreview={onLoadLinkPreview}
                 />
@@ -2292,6 +2356,10 @@ function Conversation({
                 onPin={onTogglePin}
                 canPin={Boolean(room?.canManage)}
                 onReact={onReact}
+                emojiCatalog={emojiCatalog}
+                recentEmojis={recentEmojis}
+                onLoadEmojiCatalog={loadEmojiCatalog}
+                onEmojiUsed={rememberEmoji}
                 onMediaLoad={handleMediaLoad}
                 onLoadLinkPreview={onLoadLinkPreview}
               />
@@ -2366,9 +2434,7 @@ function Conversation({
                 title={name}
                 onClick={() => {
                   onDraftChange(`${draft}${emoji}`);
-                  const next = [emoji, ...recentEmojis.filter((recent) => recent !== emoji)].slice(0, 18);
-                  setRecentEmojis(next);
-                  localStorage.setItem('aimtrix.recent-emoji.v1', JSON.stringify(next));
+                  rememberEmoji(emoji);
                   setEmojiOpen(false);
                   setEmojiQuery('');
                 }}
