@@ -593,8 +593,10 @@
   .message-actions button { display: grid; width: 28px; height: 26px; padding: 0; place-items: center; color: var(--text-soft); border: 0; border-right: 1px solid var(--border-soft); background: transparent; }
   .message-actions button:last-child { border-right: 0; }
   .message-actions button:hover { color: var(--blue-deep); background: var(--blue-soft); }
-  .reaction-picker { position: absolute; z-index: 3; top: 31px; right: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; width: 104px; padding: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--small-shadow); }
-  .message-actions .reaction-picker button { width: 31px; border: 0; border-radius: 4px; font-size: 1rem; }
+  .reaction-picker { top: 31px; right: 0; bottom: auto; width: min(292px, calc(100vw - 28px)); }
+  .reaction-picker__section { display: block; margin: 7px 2px 4px; color: var(--text-faint); font-size: 0.59rem; font-weight: 800; letter-spacing: 0.04em; text-transform: uppercase; }
+  .reaction-picker__grid--quick { max-height: none !important; }
+  .reaction-picker__grid button { width: auto; height: 32px; }
   .thread-summary { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 5px 7px; color: var(--blue-deep); border: 1px solid color-mix(in srgb, var(--blue) 38%, var(--border)); border-radius: 7px; background: color-mix(in srgb, var(--blue-soft) 72%, var(--surface-raised)); font: inherit; font-size: 0.68rem; }
   .thread-summary:hover { background: var(--blue-soft); }
   .thread-summary strong { font-size: inherit; }

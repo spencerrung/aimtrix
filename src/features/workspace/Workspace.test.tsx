@@ -214,6 +214,29 @@ describe('Workspace demo', () => {
     expect(screen.queryByRole('dialog', { name: 'Choose a reaction' })).not.toBeInTheDocument();
   });
 
+  it('searches the lazy emoji catalog and remembers a selected reaction', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      json: () => Promise.resolve([
+        { emoji: '🎉', name: 'party popper' },
+        { emoji: '🎊', name: 'confetti' },
+      ]),
+    }));
+    const onToggleReaction = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onToggleReaction });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
+    const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
+    fireEvent.change(within(picker).getByRole('textbox', { name: 'Search reaction emoji' }), {
+      target: { value: ':confetti:' },
+    });
+
+    await within(picker).findByRole('button', { name: 'React with 🎊' });
+    fireEvent.click(within(picker).getByRole('button', { name: 'React with 🎊' }));
+
+    expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', '🎊', undefined);
+    expect(JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]')).toContain('🎊');
+  });
+
   it('dismisses the reaction chooser with Escape and outside clicks', () => {
     renderWorkspace();
 
