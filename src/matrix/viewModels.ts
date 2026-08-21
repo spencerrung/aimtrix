@@ -109,6 +109,8 @@ export interface MessageSummary {
   encryptedFile?: EncryptedMediaInfo;
   mimeType?: string;
   mediaKind?: 'image' | 'video' | 'audio' | 'file';
+  codeFile?: boolean;
+  codeLanguage?: string;
   pinned?: boolean;
   readBy?: ReadReceiptSummary[];
   threadRootId?: string;

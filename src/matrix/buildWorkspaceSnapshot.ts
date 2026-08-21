@@ -131,6 +131,8 @@ function messagesEqual(left: MessageSummary, right: MessageSummary): boolean {
     left.mediaUrl === right.mediaUrl &&
     left.mimeType === right.mimeType &&
     left.mediaKind === right.mediaKind &&
+    left.codeFile === right.codeFile &&
+    left.codeLanguage === right.codeLanguage &&
     left.edited === right.edited &&
     left.pinned === right.pinned &&
     left.pending === right.pending &&
@@ -207,6 +209,8 @@ function eventBody(
   encryptedFile?: MessageSummary['encryptedFile'];
   mimeType?: string;
   mediaKind?: MessageSummary['mediaKind'];
+  codeFile?: boolean;
+  codeLanguage?: string;
 } | undefined {
   if (event.isRedacted()) return undefined;
   const type = event.getType();
@@ -267,6 +271,10 @@ function eventBody(
         encryptedFile: content.file,
         mimeType: content.info?.mimetype,
         mediaKind,
+        codeFile: Boolean(content['dev.alucard.aimtrix.code.v1']),
+        codeLanguage: typeof (content['dev.alucard.aimtrix.code.v1'] as { language?: unknown } | undefined)?.language === 'string'
+          ? (content['dev.alucard.aimtrix.code.v1'] as { language: string }).language
+          : undefined,
       };
     }
     default:
@@ -366,6 +374,8 @@ function messagesForEvents(
       encryptedFile: rendered.encryptedFile,
       mimeType: rendered.mimeType,
       mediaKind: rendered.mediaKind,
+      codeFile: rendered.codeFile,
+      codeLanguage: rendered.codeLanguage,
       edited: rendered.edited,
       mentionUserIds: rendered.mentionUserIds,
       nudge: rendered.nudge,

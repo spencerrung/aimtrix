@@ -1474,6 +1474,7 @@ export class MatrixController {
     file: File,
     onProgress?: (loaded: number, total: number) => void,
     threadRootId?: string,
+    codeLanguage?: string,
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
@@ -1514,6 +1515,7 @@ export class MatrixController {
           msgtype,
           body: file.name,
           info,
+          ...(codeLanguage ? { 'dev.alucard.aimtrix.code.v1': { language: codeLanguage } } : {}),
           file: {
             ...encrypted.info,
             hashes: encrypted.info.hashes ?? {},
@@ -1530,6 +1532,7 @@ export class MatrixController {
           msgtype,
           body: file.name,
           info,
+          ...(codeLanguage ? { 'dev.alucard.aimtrix.code.v1': { language: codeLanguage } } : {}),
           url: uploaded.content_uri,
         } as RoomMessageEventContent);
       }

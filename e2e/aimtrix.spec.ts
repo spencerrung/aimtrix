@@ -138,6 +138,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
 });
 
 test('composer sends messages, emoji, and starter stickers', async ({ page }, testInfo) => {
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
@@ -156,6 +157,24 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await composer.fill('Edited browser test message');
   await composer.press('Enter');
   await expect(page.getByText('Edited browser test message')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Insert code block' }).click();
+  await expect(page.getByLabel('Code block mode')).toHaveText('text code');
+  await page.getByRole('combobox', { name: 'Code language' }).selectOption('javascript');
+  await composer.fill('const answer = 42;');
+  await composer.press('Enter');
+  const codeBlock = page.getByRole('region', { name: 'javascript code block' });
+  await expect(codeBlock).toBeVisible();
+  await codeBlock.getByRole('button', { name: 'Copy' }).click();
+  await expect(codeBlock.getByRole('button', { name: 'Copied' })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Insert code block' }).click();
+  await composer.fill('line one\nline two\nline three\nline four\nline five\nline six');
+  await page.getByRole('button', { name: 'Send code as file' }).click();
+  const codeFile = page.getByRole('region', { name: /snippet\.js code file/ });
+  await expect(codeFile).toBeVisible();
+  await codeFile.getByRole('button', { name: 'Expand' }).click();
+  await expect(codeFile).toContainText('line six');
 
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByRole('button', { name: 'Insert 🌈' }).click();

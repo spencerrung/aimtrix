@@ -118,6 +118,27 @@ describe('buildWorkspaceSnapshot stickers', () => {
     expect((message.encryptedFile as unknown as { url?: string })?.url).toBe('mxc://test/encrypted-sticker');
     expect(message.encryptedFile?.key.k).toBe('key');
   });
+
+  it('preserves code-file metadata on standard Matrix file messages', () => {
+    const client = fakeClient([
+      fakeEvent('m.room.message', {
+        msgtype: 'm.file',
+        body: 'snippet.ts',
+        url: 'mxc://test/snippet',
+        info: { mimetype: 'text/plain' },
+        'dev.alucard.aimtrix.code.v1': { language: 'typescript' },
+      }),
+    ]);
+
+    const [message] = buildWorkspaceSnapshot(client, 'online').messagesByRoom['!room:test'];
+    expect(message).toMatchObject({
+      kind: 'media',
+      mediaKind: 'file',
+      codeFile: true,
+      codeLanguage: 'typescript',
+      mediaUrl: 'mxc://test/snippet',
+    });
+  });
 });
 
 describe('buildWorkspaceSnapshot read position', () => {
