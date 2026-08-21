@@ -1,10 +1,18 @@
-/* global self, caches, fetch, URL */
-const CACHE = 'aimtrix-shell-v1';
-const SHELL = ['/', '/aimtrix-mark.svg', '/manifest.webmanifest'];
+/* global self, caches, fetch, URL, Response */
+const CACHE = 'aimtrix-shell-v2';
+const SHELL = [
+  '/',
+  '/aimtrix-mark.svg',
+  '/manifest.webmanifest',
+  '/icons/aimtrix-192.png',
+  '/icons/aimtrix-512.png',
+  '/icons/aimtrix-512-maskable.png',
+  '/icons/apple-touch-icon.png',
+  '/screenshots/aimtrix-desktop.png',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -37,7 +45,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (url.pathname.startsWith('/assets/') || url.pathname.startsWith('/stickers/') || url.pathname.startsWith('/emoji/')) {
+  if (
+    url.pathname.startsWith('/assets/') ||
+    url.pathname.startsWith('/stickers/') ||
+    url.pathname.startsWith('/emoji/') ||
+    url.pathname.startsWith('/icons/') ||
+    url.pathname.startsWith('/screenshots/')
+  ) {
     event.respondWith(
       caches.match(request).then(
         (cached) =>
@@ -48,7 +62,7 @@ self.addEventListener('fetch', (event) => {
               void caches.open(CACHE).then((cache) => cache.put(request, copy));
             }
             return response;
-          }),
+          }).catch(() => new Response('', { status: 503, statusText: 'Offline' })),
       ),
     );
   }

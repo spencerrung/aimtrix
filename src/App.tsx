@@ -7,6 +7,8 @@ import {
 import { demoWorkspace } from './demo/demoWorkspace';
 import { ConnectionError } from './features/auth/ConnectionError';
 import { LoginWindow } from './features/auth/LoginWindow';
+import { InstallPrompt } from './features/pwa/InstallPrompt';
+import { NetworkStatus } from './features/pwa/NetworkStatus';
 import { StartupScreen } from './features/auth/StartupScreen';
 import { Workspace } from './features/workspace/Workspace';
 import { MatrixController } from './matrix/MatrixController';
@@ -260,13 +262,42 @@ export default function App() {
   return (
     <>
       {!result ? <StartupScreen /> : <ConfiguredApp result={result} />}
+      <NetworkStatus />
+      <InstallPrompt />
       {updateWorker ? (
-        <div className="update-prompt" role="status">
-          <span><strong>Aimtrix update ready</strong><small>Reload when you are ready to use it.</small></span>
-          <button className="aqua-button aqua-button--primary" type="button" onClick={() => {
-            navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
-            updateWorker.postMessage('SKIP_WAITING');
-          }}>Reload</button>
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            position: 'fixed',
+            zIndex: 100,
+            right: 18,
+            bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
+            display: 'flex',
+            width: 'min(540px, calc(100vw - 36px))',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 14,
+            padding: '11px 12px',
+            color: 'var(--text)',
+            border: '1px solid var(--border-strong)',
+            borderRadius: 9,
+            background: 'var(--surface-raised)',
+            boxShadow: '0 14px 40px rgba(20,35,46,0.36)',
+          }}
+        >
+          <span style={{ display: 'grid', minWidth: 0, gap: 2 }}>
+            <strong>Aimtrix update ready</strong>
+            <small style={{ color: 'var(--text-faint)', fontSize: '0.62rem' }}>Finish any draft, then reload. Encrypted account storage is preserved.</small>
+          </span>
+          <div style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', gap: 7 }}>
+            <button className="text-button" type="button" onClick={() => setUpdateWorker(undefined)}>Later</button>
+            <button className="aqua-button aqua-button--primary" type="button" onClick={() => {
+              navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
+              updateWorker.postMessage('SKIP_WAITING');
+            }}>Reload</button>
+          </div>
         </div>
       ) : null}
     </>
