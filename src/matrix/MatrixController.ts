@@ -28,12 +28,11 @@ import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWor
 import { resolveHomeserver } from './discovery';
 import { matrixFormattedMessage } from './messageFormatting';
 import {
-  clearStoredSession,
   databaseNames,
-  loadStoredSession,
-  saveStoredSession,
   type StoredMatrixSession,
 } from './sessionStore';
+import { createBrowserPlatform } from '../platform/browserPlatform';
+import type { AimtrixPlatform } from '../platform/platform';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { SpaceHierarchyRoomData } from './spaceHierarchy';
 import {
@@ -170,7 +169,14 @@ export class MatrixController {
     soundVolume: 0.55,
   };
 
-  public constructor(private readonly config: RuntimeConfig) {}
+  private readonly platform: AimtrixPlatform;
+
+  public constructor(
+    private readonly config: RuntimeConfig,
+    platform: AimtrixPlatform = createBrowserPlatform(),
+  ) {
+    this.platform = platform;
+  }
 
   public getSnapshot = (): MatrixControllerSnapshot => this.snapshot;
 
@@ -211,7 +217,7 @@ export class MatrixController {
         return;
       }
     }
-    const session = loadStoredSession();
+    const session = await this.platform.credentials.load();
     if (!session) {
       this.setSnapshot({ status: 'signed-out' });
       return;
@@ -223,7 +229,7 @@ export class MatrixController {
     } catch (error) {
       if (isUnknownToken(error)) {
         await deleteAccountDatabases(session);
-        clearStoredSession();
+        await this.platform.credentials.clear();
         this.setSnapshot({ status: 'signed-out', error: friendlyError(error) });
       } else {
         this.setSnapshot({ status: 'error', error: friendlyError(error), canRetry: true });
@@ -276,7 +282,7 @@ export class MatrixController {
     };
     sessionStorage.removeItem(SSO_PENDING_KEY);
     window.history.replaceState({}, '', window.location.pathname);
-    saveStoredSession(session);
+    await this.platform.credentials.save(session);
     await this.connect(session);
   }
 
@@ -308,7 +314,7 @@ export class MatrixController {
         userId: response.user_id,
         deviceId: response.device_id,
       };
-      saveStoredSession(session);
+      await this.platform.credentials.save(session);
       this.setSnapshot({ status: 'connecting', message: 'Opening encrypted message storage…' });
       await this.connect(session);
     } catch (error) {
@@ -317,7 +323,7 @@ export class MatrixController {
   }
 
   public async retry(): Promise<void> {
-    const session = loadStoredSession();
+    const session = await this.platform.credentials.load();
     if (!session) {
       this.setSnapshot({ status: 'signed-out' });
       return;
@@ -332,7 +338,7 @@ export class MatrixController {
 
   public async forgetSession(): Promise<void> {
     const client = this.client;
-    const session = this.activeSession ?? loadStoredSession();
+    const session = this.activeSession ?? (await this.platform.credentials.load());
     this.detachClientListeners();
     client?.stopClient();
     this.client = undefined;
@@ -351,7 +357,7 @@ export class MatrixController {
       await deleteAccountDatabases(session);
     }
 
-    clearStoredSession();
+    await this.platform.credentials.clear();
     this.setSnapshot({ status: 'signed-out' });
   }
 
@@ -380,7 +386,7 @@ export class MatrixController {
       }
     }
 
-    clearStoredSession();
+    await this.platform.credentials.clear();
     this.setSnapshot({ status: 'signed-out' });
   }
 
@@ -653,7 +659,7 @@ export class MatrixController {
       erase,
     );
     await this.stopCurrentClient();
-    clearStoredSession();
+    await this.platform.credentials.clear();
     this.setSnapshot({ status: 'signed-out' });
   }
 

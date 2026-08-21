@@ -1,3 +1,5 @@
+import type { CredentialStore } from '../platform/platform';
+
 export interface StoredMatrixSession {
   baseUrl: string;
   serverName: string;
@@ -29,28 +31,29 @@ function isStoredSession(value: unknown): value is StoredMatrixSession {
   }
 }
 
-export function loadStoredSession(storage: Storage = localStorage): StoredMatrixSession | undefined {
-  try {
-    const serialized = storage.getItem(SESSION_KEY);
-    if (!serialized) return undefined;
-    const parsed: unknown = JSON.parse(serialized);
-    if (isStoredSession(parsed)) return parsed;
-    storage.removeItem(SESSION_KEY);
-  } catch {
-    storage.removeItem(SESSION_KEY);
-  }
-  return undefined;
-}
-
-export function saveStoredSession(
-  session: StoredMatrixSession,
+export function createBrowserCredentialStore(
   storage: Storage = localStorage,
-): void {
-  storage.setItem(SESSION_KEY, JSON.stringify(session));
-}
-
-export function clearStoredSession(storage: Storage = localStorage): void {
-  storage.removeItem(SESSION_KEY);
+): CredentialStore<StoredMatrixSession> {
+  return {
+    async load() {
+      try {
+        const serialized = storage.getItem(SESSION_KEY);
+        if (!serialized) return undefined;
+        const parsed: unknown = JSON.parse(serialized);
+        if (isStoredSession(parsed)) return parsed;
+        storage.removeItem(SESSION_KEY);
+      } catch {
+        storage.removeItem(SESSION_KEY);
+      }
+      return undefined;
+    },
+    async save(session) {
+      storage.setItem(SESSION_KEY, JSON.stringify(session));
+    },
+    async clear() {
+      storage.removeItem(SESSION_KEY);
+    },
+  };
 }
 
 function stableHash(value: string): string {
