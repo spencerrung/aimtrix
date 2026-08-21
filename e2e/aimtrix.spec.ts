@@ -166,6 +166,8 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
   await emojiPicker.getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
   await expect(composer).toHaveValue('🌈:bufo-add-bufo:');
+  await composer.press('Enter');
+  await expect(page.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByRole('button', { name: 'Send Aqua hello' }).click();
