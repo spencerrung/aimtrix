@@ -136,7 +136,26 @@ function LinkifiedText({ body }: { body: string }) {
   })}</>;
 }
 
-function MessageText({ body, hasMentions = false }: { body: string; hasMentions?: boolean }) {
+const CUSTOM_EMOJI_PATTERN = /(:[a-z0-9][a-z0-9_+-]*:)/gi;
+
+function InlineMessageText({ body, emojiCatalog, hasMentions }: { body: string; emojiCatalog: EmojiPackEntry[]; hasMentions: boolean }) {
+  const renderPlainText = (text: string, keyPrefix: string) => text.split(CUSTOM_EMOJI_PATTERN).map((token, tokenIndex) => {
+    const entry = token.startsWith(':') && token.endsWith(':')
+      ? emojiCatalog.find((candidate) => candidate.src && emojiReactionKey(candidate).toLowerCase() === token.toLowerCase())
+      : undefined;
+    if (entry?.src) {
+      return <img className="emoji-asset" style={{ verticalAlign: 'middle' }} src={entry.src} alt={entry.name} title={entry.name} loading="lazy" key={`${keyPrefix}:emoji:${tokenIndex}`} />;
+    }
+    if (!hasMentions) return <LinkifiedText body={token} key={`${keyPrefix}:text:${tokenIndex}`} />;
+    return <Fragment key={`${keyPrefix}:mentions:${tokenIndex}`}>{token.split(/(@[\w.-]+)/g).map((mentionToken, mentionIndex) => mentionToken.startsWith('@')
+      ? <mark className="message-mention" key={mentionIndex}>{mentionToken}</mark>
+      : <LinkifiedText body={mentionToken} key={mentionIndex} />,
+    )}</Fragment>;
+  });
+  return <>{renderPlainText(body, 'inline')}</>;
+}
+
+function MessageText({ body, emojiCatalog, hasMentions = false }: { body: string; emojiCatalog: EmojiPackEntry[]; hasMentions?: boolean }) {
   const blocks = body.split(/```(?:(typescript|javascript|python|rust|bash|json|yaml)\n)?([\s\S]*?)```/gi);
   return <>{blocks.map((block, index) => {
     if (index % 3 === 1) return null;
@@ -150,11 +169,7 @@ function MessageText({ body, hasMentions = false }: { body: string; hasMentions?
       if (part.startsWith('`') && part.endsWith('`')) return <code key={partIndex}>{part.slice(1, -1)}</code>;
       if (part.startsWith('**') && part.endsWith('**')) return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
       if (part.startsWith('_') && part.endsWith('_')) return <em key={partIndex}>{part.slice(1, -1)}</em>;
-      if (!hasMentions) return <LinkifiedText body={part} key={partIndex} />;
-      return <Fragment key={partIndex}>{part.split(/(@[\w.-]+)/g).map((token, tokenIndex) => token.startsWith('@')
-        ? <mark className="message-mention" key={tokenIndex}>{token}</mark>
-        : <LinkifiedText body={token} key={tokenIndex} />,
-      )}</Fragment>;
+      return <InlineMessageText body={part} emojiCatalog={emojiCatalog} hasMentions={hasMentions} key={partIndex} />;
     })}</p>;
   })}</>;
 }
@@ -1412,7 +1427,7 @@ const TimelineMessage = memo(function TimelineMessage({
           canViewImage ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => setMediaViewerOpen(true)}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button> : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
         ) : (
           <div className={`message-kind--${message.kind}`}>
-            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} hasMentions={Boolean(message.mentionUserIds?.length)} />
+            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} emojiCatalog={emojiCatalog} hasMentions={Boolean(message.mentionUserIds?.length)} />
           </div>
         )}
         <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
@@ -2107,6 +2122,10 @@ function Conversation({
         catalogRequested.current = false;
       });
   }, [emojiAssetBaseUrl, emojiPacks]);
+
+  useEffect(() => {
+    if (messages.some((message) => /:[a-z0-9][a-z0-9_+-]*:/i.test(message.body))) loadEmojiCatalog();
+  }, [messages, loadEmojiCatalog]);
 
   useEffect(() => {
     if (emojiOpen) loadEmojiCatalog();

@@ -262,6 +262,28 @@ describe('Workspace demo', () => {
     expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', ':bufo-wave:', undefined);
   });
 
+  it('renders image-backed pack shortcodes inline in messages', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ entries: [{ id: 'bufo-wave', name: 'Bufo wave', src: './bufo-wave.png' }] }),
+    }));
+    try {
+      const workspace = structuredClone(demoWorkspace);
+      workspace.messagesByRoom.welcome = [{
+        id: 'bufo-message', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+        body: 'Look :bufo-wave:!', timestamp: Date.now(), kind: 'text', isOwn: false,
+      }];
+      renderWorkspace({ workspace });
+
+      const bufo = await screen.findByRole('img', { name: 'Bufo wave' });
+      expect(bufo).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
+      expect(screen.getByText('Look ', { exact: false })).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('dismisses the reaction chooser with Escape and outside clicks', () => {
     renderWorkspace();
 
