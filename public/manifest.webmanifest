@@ -2,16 +2,50 @@
   "name": "Aimtrix",
   "short_name": "Aimtrix",
   "description": "A nostalgic, modern Matrix client.",
+  "id": "/",
   "start_url": "/",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#dce9f3",
   "theme_color": "#72aee6",
+  "categories": ["social", "communication"],
   "icons": [
     {
-      "src": "/aimtrix-mark.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "/icons/aimtrix-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "/icons/aimtrix-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icons/aimtrix-512-maskable.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Open Aimtrix",
+      "short_name": "Aimtrix",
+      "url": "/",
+      "icons": [{ "src": "/icons/aimtrix-192.png", "sizes": "192x192", "type": "image/png" }]
+    }
+  ],
+  "screenshots": [
+    {
+      "src": "/screenshots/aimtrix-desktop.png",
+      "sizes": "1600x1000",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "Aimtrix desktop workspace"
     }
   ]
 }

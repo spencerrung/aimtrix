@@ -10,11 +10,18 @@ createRoot(root).render(<App />);
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('/sw.js').then((registration) => {
+      const announceWaitingWorker = () => {
+        if (registration.waiting && navigator.serviceWorker.controller) {
+          window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: registration.waiting }));
+        }
+      };
+
+      announceWaitingWorker();
       registration.addEventListener('updatefound', () => {
         const worker = registration.installing;
         worker?.addEventListener('statechange', () => {
           if (worker.state === 'installed' && navigator.serviceWorker.controller) {
-            window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: worker }));
+            announceWaitingWorker();
           }
         });
       });

@@ -46,6 +46,12 @@ Logging out stops the client, attempts server logout, clears local credentials, 
 
 Configuration is validated and merged with conservative defaults. Invalid URLs, unsupported themes, negative sizes, or unknown feature values fall back safely and produce a user-readable startup warning rather than arbitrary script behavior.
 
+## PWA lifecycle
+
+The production shell is served from `public/sw.js`. Navigations use a network-first strategy and cache only the latest application shell; static assets, icons, and screenshots use a cache-first strategy. `/config.json` is never cached, and an offline banner explicitly says that Matrix history may be unavailable—the shell is not an offline Matrix sync client.
+
+Service-worker updates remain waiting until the user chooses **Reload**. Aimtrix explains that active drafts should be finished first, then sends `SKIP_WAITING` and reloads after `controllerchange`. The encrypted account store and Matrix credentials are not part of the shell cache. Install guidance uses the browser install event when available and gives iOS/iPadOS users the manual Share → Add to Home Screen path.
+
 ## Space hierarchy
 
 Joined-space state provides the immediate `m.space.child` and `m.space.parent` graph. When a user selects a top-level space, Aimtrix also queries the standard room-hierarchy endpoint so nested subspaces and rooms that are visible but not yet joined can appear in the buddy sidebar. The UI keeps subspaces out of the top-level rail, resolves descendant rooms cycle-safely, preserves Matrix `order` values, aggregates unread state, and offers an explicit join action for hierarchy previews.
