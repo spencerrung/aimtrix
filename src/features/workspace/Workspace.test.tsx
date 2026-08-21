@@ -177,11 +177,63 @@ describe('Workspace demo', () => {
     const composer = screen.getByLabelText('Message Welcome Lounge');
     fireEvent.change(composer, { target: { value: '```' } });
     expect(composer).toHaveValue('');
-    expect(screen.getByLabelText('Code block mode')).toHaveTextContent('typescript code');
+    expect(screen.getByLabelText('Code block mode')).toHaveTextContent('text code');
 
     fireEvent.change(composer, { target: { value: 'const hello = "world";' } });
     fireEvent.keyDown(composer, { key: 'Enter' });
-    expect(screen.getByText('const hello = "world";')).toBeInTheDocument();
+    const codeBlock = screen.getByRole('region', { name: 'text code block' });
+    expect(codeBlock).toHaveTextContent('const hello = "world";');
+  });
+
+  it('starts code mode from the toolbar without inserting fence characters', () => {
+    renderWorkspace();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.click(screen.getByRole('button', { name: 'Insert code block' }));
+    expect(composer).toHaveValue('');
+    expect(screen.getByLabelText('Code block mode')).toHaveTextContent('text code');
+
+    fireEvent.change(screen.getByRole('combobox', { name: 'Code language' }), { target: { value: 'javascript' } });
+    fireEvent.change(composer, { target: { value: 'const answer = 42;' } });
+    expect(composer).not.toHaveValue(expect.stringContaining('```'));
+    expect(screen.getByLabelText('Code block mode')).toHaveTextContent('javascript code');
+  });
+
+  it('copies rendered fenced code through the clipboard API', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome = [{
+      id: 'code-message', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+      body: '```javascript\nconst answer = 42;\n```', timestamp: Date.now(), kind: 'text', isOwn: false,
+    }];
+    renderWorkspace({ workspace });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('const answer = 42;\n'));
+    expect(screen.getByRole('button', { name: 'Copied' })).toBeInTheDocument();
+  });
+
+  it('renders code files collapsed with expand, copy, and download actions', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('line one\nline two\nline three\nline four\nline five\nline six', { status: 200 })));
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome = [{
+      id: 'code-file', roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+      body: 'snippet.ts', timestamp: Date.now(), kind: 'media', isOwn: false,
+      mediaKind: 'file', mediaUrl: 'https://example.test/snippet.ts', mimeType: 'text/plain',
+      codeFile: true, codeLanguage: 'typescript',
+    }];
+    renderWorkspace({ workspace });
+
+    const file = await screen.findByRole('region', { name: 'snippet.ts code file' });
+    expect(file).toHaveTextContent('line one');
+    expect(file).not.toHaveTextContent('line six');
+    fireEvent.click(within(file).getByRole('button', { name: 'Expand' }));
+    expect(file).toHaveTextContent('line six');
+    fireEvent.click(within(file).getByRole('button', { name: 'Copy' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('line one\nline two\nline three\nline four\nline five\nline six'));
+    expect(within(file).getByRole('link', { name: 'Download' })).toHaveAttribute('download', 'snippet.ts');
   });
 
   it('restores main composer focus after a delayed Matrix send settles', async () => {

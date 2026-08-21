@@ -553,9 +553,10 @@
   .timeline-message__content p { margin: 5px 0 0; color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: var(--message-font-size); line-height: 1.48; white-space: pre-wrap; overflow-wrap: anywhere; }
   .timeline-message__content p a { color: var(--blue-deep); text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 2px; }
   .message-kind--text > p, .message-kind--notice > p, .message-kind--emote > p { margin: 5px 0 0; color: var(--text); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: var(--message-font-size); line-height: 1.48; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .message-kind--text code { color: #b85c18; }
   .message-code { margin: 8px 0 0; overflow: hidden; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-inset); }
   .message-code header { display: flex; align-items: center; justify-content: space-between; padding: 5px 8px; border-bottom: 1px solid var(--border-soft); color: var(--text-faint); font: 700 0.62rem ui-monospace, SFMono-Regular, Menlo, monospace; text-transform: uppercase; }
-  .message-code button { padding: 2px 5px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 4px; background: var(--surface-raised); font: inherit; text-transform: none; }
+  .message-code button { padding: 2px 5px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 4px; background: var(--surface-raised); }
   .message-code pre { max-width: 100%; margin: 0; padding: 9px; overflow: auto; font: 0.75rem/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre; }
   .message-mention { padding: 1px 3px; color: var(--blue-deep); border-radius: 3px; background: var(--blue-soft); font-weight: 800; }
   .link-preview { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; max-width: 510px; margin-top: 9px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-soft); }

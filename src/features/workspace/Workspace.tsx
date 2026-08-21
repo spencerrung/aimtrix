@@ -136,6 +136,113 @@ function LinkifiedText({ body }: { body: string }) {
   })}</>;
 }
 
+const codeKeywords: Record<string, string[]> = {
+  typescript: ['as', 'async', 'await', 'class', 'const', 'else', 'export', 'extends', 'false', 'for', 'from', 'function', 'if', 'import', 'interface', 'let', 'new', 'null', 'of', 'return', 'this', 'throw', 'true', 'type', 'undefined', 'while'],
+  javascript: ['async', 'await', 'class', 'const', 'else', 'export', 'extends', 'false', 'for', 'from', 'function', 'if', 'import', 'let', 'new', 'null', 'of', 'return', 'this', 'throw', 'true', 'undefined', 'while'],
+  python: ['and', 'as', 'class', 'def', 'elif', 'else', 'False', 'for', 'from', 'if', 'import', 'in', 'is', 'None', 'not', 'or', 'return', 'True', 'while', 'with'],
+  rust: ['as', 'async', 'const', 'else', 'enum', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'pub', 'return', 'self', 'struct', 'trait', 'true', 'type', 'use', 'while'],
+  bash: ['case', 'do', 'done', 'elif', 'else', 'esac', 'fi', 'for', 'function', 'if', 'in', 'then', 'while'],
+  json: [],
+  yaml: [],
+  text: [],
+};
+const codeTokenPattern = /(\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$]*)/g;
+
+function HighlightedCode({ code, language }: { code: string; language: string }) {
+  const keywords = new Set(codeKeywords[language] ?? []);
+  const hashComments = ['bash', 'python', 'yaml'].includes(language);
+  let cursor = 0;
+  const parts: ReactNode[] = [];
+  for (const match of code.matchAll(codeTokenPattern)) {
+    const token = match[0];
+    const index = match.index ?? 0;
+    if (index > cursor) parts.push(code.slice(cursor, index));
+    const isComment = token.startsWith('//') || (hashComments && token.startsWith('#'));
+    const className = isComment
+      ? 'code-token--comment'
+      : token.startsWith('"') || token.startsWith("'")
+        ? 'code-token--string'
+        : /^\d/.test(token)
+          ? 'code-token--number'
+          : keywords.has(token)
+            ? 'code-token--keyword'
+            : undefined;
+    const color = className === 'code-token--keyword' ? '#a044a9' : className === 'code-token--string' ? '#b85c18' : undefined;
+    parts.push(className ? <span className={className} style={color ? { color } : undefined} key={`${index}:${token}`}>{token}</span> : token);
+    cursor = index + token.length;
+  }
+  if (cursor < code.length) parts.push(code.slice(cursor));
+  return <>{parts}</>;
+}
+
+async function copyText(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // Fall through to the legacy clipboard path.
+  }
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.setAttribute('readonly', '');
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  try {
+    return document.execCommand('copy');
+  } catch {
+    return false;
+  } finally {
+    input.remove();
+  }
+}
+
+function CodeSnippet({ code, language }: { code: string; language: string }) {
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  const copy = async () => {
+    setCopyState(await copyText(code) ? 'copied' : 'failed');
+    window.setTimeout(() => setCopyState('idle'), 1800);
+  };
+  return <section className="message-code" aria-label={`${language} code block`}>
+    <header><span>{language}</span><button type="button" onClick={() => void copy()}>{copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}</button></header>
+    <pre><code><HighlightedCode code={code} language={language} /></code></pre>
+  </section>;
+}
+
+function CodeFileMessage({ message, source }: { message: MessageSummary; source: string }) {
+  const [expanded, setExpanded] = useState(false);
+  const [contents, setContents] = useState<string>();
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
+  useEffect(() => {
+    let active = true;
+    void fetch(source).then((response) => response.text()).then((text) => {
+      if (active) setContents(text);
+    }).catch(() => {
+      if (active) setLoadFailed(true);
+    });
+    return () => { active = false; };
+  }, [source]);
+  const language = message.codeLanguage ?? 'text';
+  const preview = contents?.split('\n').slice(0, 5).join('\n') ?? '';
+  const copy = async () => {
+    setCopyState(await copyText(contents ?? '') ? 'copied' : 'failed');
+    window.setTimeout(() => setCopyState('idle'), 1800);
+  };
+  return <section className="message-code code-file" aria-label={`${message.body} code file`}>
+    <header style={{ gap: 8 }}><span style={{ display: 'grid', minWidth: 0, gap: 2 }}><strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.72rem' }}>{message.body}</strong><small style={{ color: 'var(--text-faint)', font: '700 0.58rem ui-monospace, monospace', textTransform: 'uppercase' }}>{language}</small></span><span style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4 }}>
+      <button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>{expanded ? 'Collapse' : 'Expand'}</button>
+      <button type="button" onClick={() => void copy()} disabled={!contents}>{copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}</button>
+      <a href={source} download={message.body} style={{ padding: '2px 5px', color: 'var(--blue-deep)', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface-raised)', font: 'inherit', textDecoration: 'none' }}>Download</a>
+    </span></header>
+    {loadFailed ? <p role="status">This code file could not be loaded.</p> : <pre><code><HighlightedCode code={expanded ? contents ?? '' : preview} language={language} /></code></pre>}
+    {!expanded && contents && contents.split('\n').length > 5 ? <button type="button" style={{ margin: '0 9px 8px' }} onClick={() => setExpanded(true)}>Show full file</button> : null}
+  </section>;
+}
+
 const CUSTOM_EMOJI_PATTERN = /(:[a-z0-9][a-z0-9_+-]*:)/gi;
 
 function InlineMessageText({ body, emojiCatalog, hasMentions }: { body: string; emojiCatalog: EmojiPackEntry[]; hasMentions: boolean }) {
@@ -161,7 +268,7 @@ function MessageText({ body, emojiCatalog, hasMentions = false }: { body: string
     if (index % 3 === 1) return null;
     if (index % 3 === 2) {
       const language = blocks[index - 1] || 'text';
-      return <section className="message-code" key={`code:${index}`}><header><span>{language}</span><button type="button" onClick={() => void navigator.clipboard?.writeText(block)}>Copy</button></header><pre><code>{block}</code></pre></section>;
+      return <CodeSnippet code={block} language={language} key={`code:${index}`} />;
     }
     if (!block) return null;
     const inline = block.split(/(`[^`]+`|\*\*[^*]+\*\*|_[^_\n]+_)/g);
@@ -218,7 +325,7 @@ interface WorkspaceProps {
     roomId: string,
     sticker: { id: string; name: string; src: string },
   ) => Promise<void>;
-  onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
+  onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string, codeLanguage?: string) => Promise<void>;
   onCancelUpload?: () => void;
   onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
   onMarkRoomRead?: (roomId: string) => Promise<void>;
@@ -1422,7 +1529,7 @@ const TimelineMessage = memo(function TimelineMessage({
         ) : mediaSrc && message.mediaKind === 'audio' ? (
           <audio className="message-audio" src={mediaSrc} controls preload="metadata" />
         ) : mediaSrc && message.mediaKind === 'file' ? (
-          <a className="message-file" href={mediaSrc} download={message.body}><Paperclip size={15} /> {message.body}</a>
+          message.codeFile ? <CodeFileMessage message={message} source={mediaSrc} /> : <a className="message-file" href={mediaSrc} download={message.body}><Paperclip size={15} /> {message.body}</a>
         ) : mediaSrc ? (
           canViewImage ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => setMediaViewerOpen(true)}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button> : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
         ) : (
@@ -1661,7 +1768,7 @@ function Conversation({
   emojiPacks: EmojiPackDefinition[];
   emojiAssetBaseUrl?: string;
   onSendSticker: (sticker: { id: string; name: string; src: string }) => void;
-  onUploadAttachment: (file: File, threadRootId?: string) => void;
+  onUploadAttachment: (file: File, threadRootId?: string, codeLanguage?: string) => Promise<boolean>;
   onCancelUpload: () => void;
   onRetryUpload: () => void;
   onLoadMore: () => Promise<void>;
@@ -1709,7 +1816,7 @@ function Conversation({
   const mainComposer = useRef<HTMLTextAreaElement>(null);
   const threadComposer = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
-  const [codeLanguage, setCodeLanguage] = useState('typescript');
+  const [codeLanguage, setCodeLanguage] = useState('text');
   const [codeDraftMode, setCodeDraftMode] = useState(false);
   const [, setMentionUserIds] = useState<string[]>([]);
   const mentionUserIdsRef = useRef<string[]>([]);
@@ -1847,6 +1954,16 @@ function Conversation({
     requestAnimationFrame(() => mainComposer.current?.focus());
   };
   const codeDraft = codeDraftMode || draft.startsWith('```');
+  const resizeComposer = useCallback(() => {
+    const element = mainComposer.current;
+    if (!element) return;
+    element.style.height = 'auto';
+    element.style.height = `${Math.min(element.scrollHeight, 130)}px`;
+  }, []);
+
+  useLayoutEffect(() => {
+    resizeComposer();
+  }, [draft, resizeComposer]);
 
   const uploadPastedImage = (event: ClipboardEvent<HTMLTextAreaElement>, threadRootId?: string) => {
     const item = [...event.clipboardData.items].find((candidate) => candidate.type.startsWith('image/'));
@@ -1862,12 +1979,25 @@ function Conversation({
     const element = mainComposer.current;
     const start = element?.selectionStart ?? draft.length;
     const end = element?.selectionEnd ?? start;
-    const selected = draft.slice(start, end) || 'code';
-    const insertion = `\`\`\`${codeLanguage}\n${selected}\n\`\`\``;
-    onDraftChange(`${draft.slice(0, start)}${insertion}${draft.slice(end)}`);
+    const selected = draft.slice(start, end) || draft;
+    setCodeDraftMode(true);
+    onDraftChange(selected);
     requestAnimationFrame(() => {
       mainComposer.current?.focus();
-      mainComposer.current?.setSelectionRange(start + codeLanguage.length + 4, start + codeLanguage.length + 4 + selected.length);
+      mainComposer.current?.setSelectionRange(0, selected.length);
+    });
+  };
+  const sendCodeFile = () => {
+    if (!draft.trim()) return;
+    const extensions: Record<string, string> = {
+      bash: 'sh', javascript: 'js', json: 'json', python: 'py', rust: 'rs', text: 'txt', typescript: 'ts', yaml: 'yaml',
+    };
+    const file = new File([draft], `snippet.${extensions[codeLanguage] ?? 'txt'}`, { type: 'text/plain' });
+    void onUploadAttachment(file, undefined, codeLanguage).then((sent) => {
+      if (sent) {
+        onDraftChange('');
+        setCodeDraftMode(false);
+      }
     });
   };
   const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1912,9 +2042,7 @@ function Conversation({
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      void onSubmit().then((sent) => {
-        if (sent) returnToLatest();
-      }).finally(() => requestAnimationFrame(() => mainComposer.current?.focus()));
+      event.currentTarget.form?.requestSubmit();
     }
   };
 
@@ -2553,13 +2681,14 @@ function Conversation({
           <span className="sr-only">Message {room.name}</span>
           <textarea
             ref={mainComposer}
-            rows={codeDraft ? 6 : 1}
+            rows={1}
             value={draft}
             placeholder={`Message ${room.name}`}
             onChange={(event) => {
               setComposerCaret(event.target.selectionStart ?? event.target.value.length);
               if (event.target.value === '```') {
                 setCodeDraftMode(true);
+                setCodeLanguage('text');
                 onDraftChange('');
               } else {
                 onDraftChange(event.target.value);
@@ -2602,9 +2731,10 @@ function Conversation({
         </IconButton>
         <IconButton label="Send a nudge" onClick={() => onSendNudge?.()}><BellRing size={18} /></IconButton>
         <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => setCodeLanguage(event.target.value)}>
-          <option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="text">Text</option>
+          <option value="text">Text</option><option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="yaml">YAML</option>
         </select>
         <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
+        {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
         <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending}>
           <Send size={17} />
         </button>
@@ -3442,18 +3572,45 @@ export function Workspace({
     if (typingTimer.current !== undefined) window.clearTimeout(typingTimer.current);
   }, []);
 
-  const uploadAttachment = async (file: File, threadRootId?: string) => {
-    if (!effectiveRoomId || workspace.mode !== 'matrix' || !onUploadAttachment) return;
+  const uploadAttachment = async (file: File, threadRootId?: string, codeLanguage?: string): Promise<boolean> => {
+    if (!effectiveRoomId) return false;
+    if (workspace.mode === 'demo') {
+      const message: MessageSummary = {
+        id: `demo-code-file-${Date.now()}`,
+        roomId: effectiveRoomId,
+        senderId: workspace.user.id,
+        senderName: workspace.user.displayName,
+        body: file.name,
+        timestamp: Date.now(),
+        kind: 'media',
+        mediaKind: 'file',
+        mediaUrl: URL.createObjectURL(file),
+        mimeType: file.type,
+        codeFile: Boolean(codeLanguage),
+        codeLanguage,
+        isOwn: true,
+      };
+      setDemoMessages((current) => ({ ...current, [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message] }));
+      return true;
+    }
+    if (!onUploadAttachment) return false;
     setSending(true);
     setUploadInProgress(true);
     setFailedUpload(undefined);
     setNotice(`Encrypting ${file.name}…`);
+    let uploaded = false;
     try {
-      await onUploadAttachment(effectiveRoomId, file, (loaded, total) => {
+      const progress = (loaded: number, total: number) => {
         const percent = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
         setNotice(`Uploading ${file.name} — ${percent}%`);
-      }, threadRootId);
+      };
+      if (codeLanguage) {
+        await onUploadAttachment(effectiveRoomId, file, progress, threadRootId, codeLanguage);
+      } else {
+        await onUploadAttachment(effectiveRoomId, file, progress, threadRootId);
+      }
       setNotice(undefined);
+      uploaded = true;
     } catch {
       setFailedUpload(file);
       setNotice('That attachment could not be encrypted and uploaded.');
@@ -3461,6 +3618,7 @@ export function Workspace({
       setUploadInProgress(false);
       setSending(false);
     }
+    return uploaded;
   };
 
   const sendGif = async (gif: GifChoice) => {
@@ -3968,7 +4126,7 @@ export function Workspace({
             emojiPacks={availableEmojiPacks}
             emojiAssetBaseUrl={config.emojiPacks.assetBaseUrl}
             onSendSticker={(sticker) => void sendSticker(sticker)}
-            onUploadAttachment={(file, threadRootId) => void uploadAttachment(file, threadRootId)}
+            onUploadAttachment={(file, threadRootId, codeLanguage) => uploadAttachment(file, threadRootId, codeLanguage)}
             onCancelUpload={() => onCancelUpload?.()}
             onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload); }}
             onLoadMore={async () => {

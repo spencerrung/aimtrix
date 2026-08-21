@@ -197,6 +197,8 @@ describe('MatrixController protocol integration', () => {
       '!room:test',
       new File(['data'], 'notes.txt', { type: 'text/plain' }),
       progress,
+      undefined,
+      'typescript',
     );
 
     expect(progress).toHaveBeenCalledWith(4, 4);
@@ -206,6 +208,7 @@ describe('MatrixController protocol integration', () => {
         msgtype: 'm.file',
         body: 'notes.txt',
         url: 'mxc://test/file',
+        'dev.alucard.aimtrix.code.v1': { language: 'typescript' },
       }),
     );
   });
