@@ -88,6 +88,7 @@ import {
   type RoomBackgroundPermission,
 } from '../../matrix/roomBackgrounds';
 import type { UserPreferences } from '../../settings/preferences';
+import type { PushRoute } from '../../pwa/pushRouting';
 import {
   defaultProfilePersonalization,
   type ProfilePersonalization,
@@ -293,6 +294,7 @@ interface WorkspaceProps {
   onUploadProfileBanner?: (file: File) => Promise<string>;
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
+  pushRoute?: PushRoute;
   onSendMessage?: (roomId: string, body: string, mentionUserIds?: string[]) => Promise<void>;
   onSendNudge?: (roomId: string) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
@@ -3262,6 +3264,7 @@ export function Workspace({
   onUploadProfileBanner,
   onUpdateProfile,
   matrixSettingsActions,
+  pushRoute,
   onSendMessage,
   onSendNudge,
   onLoadLinkPreview,
@@ -3310,7 +3313,9 @@ export function Workspace({
   const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(locationKey) || '{}') as { roomId?: string };
-      return stored.roomId ?? workspace.rooms[0]?.id;
+      return pushRoute?.roomId && workspace.rooms.some((room) => room.id === pushRoute.roomId)
+        ? pushRoute.roomId
+        : stored.roomId ?? workspace.rooms[0]?.id;
     } catch {
       return workspace.rooms[0]?.id;
     }
@@ -3548,6 +3553,18 @@ export function Workspace({
     setEditingThreadMessage(undefined);
     setActiveThreadRootId(undefined);
   }, []);
+
+  useEffect(() => {
+    if (!pushRoute?.roomId || !workspace.rooms.some((room) => room.id === pushRoute.roomId)) return;
+    const targetSpace = workspace.spaces.find((space) => space.roomIds.includes(pushRoute.roomId!));
+    queueMicrotask(() => {
+      if (targetSpace && targetSpace.id !== activeSpace) {
+        setActiveSpace(targetSpace.id);
+        void onSpaceSelected?.(targetSpace.id).catch(() => undefined);
+      }
+      selectRoom(pushRoute.roomId!);
+    });
+  }, [activeSpace, onSpaceSelected, pushRoute?.roomId, selectRoom, workspace.rooms, workspace.spaces]);
 
   useEffect(() => {
     try {

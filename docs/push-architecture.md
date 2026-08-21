@@ -41,9 +41,10 @@ Each Matrix device opts in independently. Push registration is never inferred fr
      "data": {
        "url": "https://push.example.org/_matrix/push/v1/notify",
        "format": "event_id_only",
-       "default_payload": {
-         "aps": { "content-available": 1 }
-       }
+       "endpoint": "https://push-service.example/subscription",
+       "auth": "browser-subscription-auth",
+       "events_only": true,
+       "only_last_per_room": true
      }
    }
    ```
@@ -66,6 +67,8 @@ The event ID is a routing hint, not trusted notification content. The client mus
 | Call invite | Event ID/count metadata only | SDP, call credentials, access tokens, or a promise of native CallKit presentation |
 
 The first release shows a generic notification such as “New Matrix activity” until the app has synced and locally evaluated the event. User-configurable sounds, previews, and badges are applied locally. A future native notification service extension may replace the generic text only if it can preserve this contract.
+
+For the browser/PWA path, the public runtime contract is `push.gatewayUrl`, `push.appId`, and `push.webPush.applicationServerKey`. The service worker accepts only opaque `room_id` and `event_id` routing fields, groups queued events with `only_last_per_room`, and opens an existing Aimtrix window through a validated route message. Aimtrix re-reads the PushManager subscription when the authenticated app resumes, so provider token rotation is re-registered. It never places provider content in the notification body. If the gateway or VAPID key is absent, the preference remains an honest foreground-only mode.
 
 The gateway stores no event payloads. Logs must exclude pushkeys, room IDs, event IDs, and notification bodies; metrics may contain aggregate delivery counts and latency. Pushkey rejection removes the stale pusher from the homeserver on the next client maintenance pass.
 
@@ -98,7 +101,7 @@ APNs `.p8` keys, FCM service-account JSON, VAPID private keys, and gateway signi
 
 ## Proof and remaining external dependency
 
-`npm run proof:push` runs a disposable local HTTP gateway and sends a representative `event_id_only` Matrix notification through it. The proof asserts that the request can be accepted without `content` or an `access_token`, and prints the exact privacy boundary it verifies.
+`npm run proof:push` runs a disposable local HTTP gateway and sends a representative `event_id_only` Matrix notification through it. `npm run proof:push-sw` executes the service worker's push and click handlers in an isolated runtime. Together they assert that the request and the displayed notification can be handled without `content` or an `access_token`, and that taps carry only validated opaque routing identifiers.
 
 It intentionally does **not** claim closed-app delivery. A live proof requires all of the following external pieces that are not present in this repository: a disposable account on a supported homeserver, an authenticated pusher registration, a configured Sygnal/Web Push endpoint, a native bundle with APNs/FCM credentials or a VAPID deployment, and a real suspended device. No production credentials or live notification traffic belong in this PR; the live test is a release-gate task for the native/mobile implementation.
 

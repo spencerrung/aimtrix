@@ -12,7 +12,9 @@ import { NetworkStatus } from './features/pwa/NetworkStatus';
 import { StartupScreen } from './features/auth/StartupScreen';
 import { Workspace } from './features/workspace/Workspace';
 import { MatrixController } from './matrix/MatrixController';
+import type { PushRegistrationResult } from './matrix/MatrixController';
 import { MediaProvider } from './matrix/MediaProvider';
+import { parsePushRoute, pushRouteFromMessage, type PushRoute } from './pwa/pushRouting';
 import {
   loadUserPreferences,
   saveUserPreferences,
@@ -31,7 +33,7 @@ function initialTheme(configured: ThemeName): ThemeName {
   return saved === 'aqua' || saved === 'graphite' || saved === 'midnight' ? saved : configured;
 }
 
-function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
+function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pushRoute?: PushRoute }) {
   const { config, warnings } = result;
   const controller = useMemo(() => new MatrixController(config), [config]);
   const snapshot = useSyncExternalStore(
@@ -65,6 +67,8 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
       deactivateAccount: (password: string, erase: boolean) =>
         controller.deactivateAccount(password, erase),
       previewMessageSound: () => controller.previewMessageTone(),
+      registerPushNotifications: (): Promise<PushRegistrationResult> => controller.registerPushNotifications(),
+      unregisterPushNotifications: () => controller.unregisterPushNotifications(),
     }),
     [controller],
   );
@@ -75,6 +79,24 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
     const color = theme === 'midnight' ? '#1d2b3a' : theme === 'graphite' ? '#77818b' : '#72aee6';
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
   }, [theme]);
+
+  useEffect(() => {
+    const refresh = () => {
+      if (!document.hidden) controller.refreshAfterPush();
+    };
+    document.addEventListener('visibilitychange', refresh);
+    if (pushRoute) controller.refreshAfterPush();
+    return () => document.removeEventListener('visibilitychange', refresh);
+  }, [controller, pushRoute]);
+
+  useEffect(() => {
+    if (snapshot.status !== 'ready' || !preferences.desktopNotifications) return;
+    const refreshPushRegistration = () => {
+      if (!document.hidden) void controller.registerPushNotifications();
+    };
+    document.addEventListener('visibilitychange', refreshPushRegistration);
+    return () => document.removeEventListener('visibilitychange', refreshPushRegistration);
+  }, [controller, preferences.desktopNotifications, snapshot.status]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -187,6 +209,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
+        pushRoute={pushRoute}
         onSendMessage={(roomId, body, mentionUserIds) => controller.sendMessage(roomId, body, mentionUserIds)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
@@ -240,6 +263,7 @@ function ConfiguredApp({ result }: { result: RuntimeConfigResult }) {
 export default function App() {
   const [result, setResult] = useState<RuntimeConfigResult>();
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker>();
+  const [pushRoute, setPushRoute] = useState<PushRoute | undefined>(() => parsePushRoute(new URL(window.location.href)));
 
   useEffect(() => {
     let active = true;
@@ -252,6 +276,22 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const handlePushRoute = (event: MessageEvent) => {
+      if (!event.data || event.data.type !== 'AIMTRIX_PUSH_ROUTE') return;
+      const route = pushRouteFromMessage(event.data);
+      if (!route) return;
+      setPushRoute(route);
+      const url = new URL(window.location.href);
+      if (route.roomId) url.searchParams.set('room', route.roomId);
+      if (route.eventId) url.searchParams.set('event', route.eventId);
+      window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+    };
+    navigator.serviceWorker.addEventListener('message', handlePushRoute);
+    return () => navigator.serviceWorker.removeEventListener('message', handlePushRoute);
+  }, []);
+
+  useEffect(() => {
     const handleUpdate = (event: Event) => {
       setUpdateWorker((event as CustomEvent<ServiceWorker>).detail);
     };
@@ -261,7 +301,7 @@ export default function App() {
 
   return (
     <>
-      {!result ? <StartupScreen /> : <ConfiguredApp result={result} />}
+      {!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} />}
       <NetworkStatus />
       <InstallPrompt />
       {updateWorker ? (

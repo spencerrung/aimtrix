@@ -19,6 +19,7 @@ import type {
   DeviceVerificationChallenge,
   MatrixSettingsSnapshot,
 } from '../../matrix/settingsTypes';
+import type { PushRegistrationResult } from '../../matrix/MatrixController';
 import type { UserPreferences } from '../../settings/preferences';
 
 export interface MatrixSettingsActions {
@@ -33,6 +34,8 @@ export interface MatrixSettingsActions {
   changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) => Promise<void>;
   deactivateAccount: (password: string, erase: boolean) => Promise<void>;
   previewMessageSound?: () => void;
+  registerPushNotifications?: () => Promise<PushRegistrationResult>;
+  unregisterPushNotifications?: () => Promise<void>;
 }
 
 interface MatrixSettingsPanelProps {
@@ -136,7 +139,26 @@ export function MatrixSettingsPanel({
 
   const requestNotifications = async (enabled: boolean) => {
     if (!enabled) {
+      if (actions?.unregisterPushNotifications) {
+        try {
+          await actions.unregisterPushNotifications();
+        } catch {
+          setError('The homeserver could not remove background notification delivery.');
+          return;
+        }
+      }
       updatePreferences({ desktopNotifications: false });
+      return;
+    }
+    if (actions?.registerPushNotifications) {
+      const result = await actions.registerPushNotifications();
+      if (result.status === 'denied' || result.status === 'unavailable' || result.status === 'error') {
+        updatePreferences({ desktopNotifications: false });
+        setError(result.message);
+        return;
+      }
+      updatePreferences({ desktopNotifications: true });
+      setNotice(result.message);
       return;
     }
     if (!('Notification' in window)) {
@@ -376,7 +398,7 @@ export function MatrixSettingsPanel({
 
           <section className="matrix-settings-group">
             <header><Bell size={17} /><div><h3>Notifications and message privacy</h3><p>Browser behavior for this Aimtrix installation.</p></div></header>
-            <label className="settings-toggle-row"><span><strong>Desktop notifications</strong><small>Notify when Aimtrix is in the background.</small></span><input type="checkbox" checked={preferences.desktopNotifications} onChange={(event) => void requestNotifications(event.target.checked)} /></label>
+            <label className="settings-toggle-row"><span><strong>Desktop notifications</strong><small>Use Matrix push rules and privacy-safe event identifiers when a gateway is configured; otherwise this is foreground-only.</small></span><input type="checkbox" checked={preferences.desktopNotifications} onChange={(event) => void requestNotifications(event.target.checked)} /></label>
             <label className="settings-toggle-row"><span><strong>Message sounds</strong><small>Play an original Aimtrix tone for new messages.</small></span><input type="checkbox" checked={preferences.notificationSounds} onChange={(event) => updatePreferences({ notificationSounds: event.target.checked })} /></label>
             <label className="settings-range-row"><Volume2 size={15} /><span>Sound volume</span><input type="range" min="0" max="1" step="0.05" value={preferences.soundVolume} onChange={(event) => updatePreferences({ soundVolume: Number(event.target.value) })} /></label>
             {actions?.previewMessageSound ? (

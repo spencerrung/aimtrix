@@ -6,6 +6,7 @@ import type {
   SyncState,
 } from 'matrix-js-sdk';
 import type { RoomMessageEventContent } from 'matrix-js-sdk/lib/@types/events.js';
+import type { IPusherRequest } from 'matrix-js-sdk/lib/@types/PushRules.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
 import {
   VerificationPhase,
@@ -63,6 +64,11 @@ export interface LoginCredentials {
   password: string;
   homeserver: string;
 }
+
+export type PushRegistrationResult =
+  | { status: 'registered'; message: string }
+  | { status: 'foreground-only'; message: string }
+  | { status: 'denied' | 'unavailable' | 'error'; message: string };
 
 export type MatrixControllerSnapshot =
   | { status: 'restoring'; message: string }
@@ -168,6 +174,8 @@ export class MatrixController {
     notificationSounds: true,
     soundVolume: 0.55,
   };
+  private pushRegistration?: { pushKey: string; appId: string };
+  private pushRefreshPending = false;
 
   private readonly platform: AimtrixPlatform;
 
@@ -186,6 +194,84 @@ export class MatrixController {
     soundVolume: number;
   }): void {
     this.notificationPreferences = preferences;
+  }
+
+  public async registerPushNotifications(): Promise<PushRegistrationResult> {
+    if (!this.platform.notifications.supported) {
+      return { status: 'unavailable', message: 'This browser does not support notifications.' };
+    }
+    const permission = this.platform.notifications.permission === 'granted'
+      ? 'granted'
+      : await this.platform.notifications.requestPermission();
+    if (permission !== 'granted') {
+      return { status: 'denied', message: 'Notification permission was not granted.' };
+    }
+
+    const pushConfig = this.config.push;
+    if (!pushConfig?.webPush?.applicationServerKey || !this.platform.capabilities.push || !this.platform.push.supported) {
+      return {
+        status: 'foreground-only',
+        message: 'Foreground notifications are enabled. Background delivery is not configured for this installation.',
+      };
+    }
+    const client = this.client;
+    if (!client) return { status: 'error', message: 'Connect to Matrix before enabling background notifications.' };
+
+    let createdSubscription = false;
+    try {
+      const existingSubscription = await this.platform.push.getSubscription();
+      const subscription = existingSubscription ?? await this.platform.push.subscribe(pushConfig.webPush.applicationServerKey);
+      createdSubscription = !existingSubscription;
+      const pushKey = subscription.keys.p256dh;
+      if (!pushKey) throw new Error('The browser did not provide a usable push key.');
+      const data = {
+        format: 'event_id_only',
+        url: pushConfig.gatewayUrl,
+        endpoint: subscription.endpoint,
+        events_only: true,
+        only_last_per_room: true,
+        ...(subscription.keys.auth ? { auth: subscription.keys.auth } : {}),
+      };
+      const pusher: IPusherRequest = {
+        pushkey: pushKey,
+        kind: 'http',
+        app_display_name: this.config.brandName,
+        app_id: pushConfig.appId,
+        device_display_name: `${this.config.brandName} Web`,
+        lang: (navigator.language || 'en').split('-')[0],
+        append: true,
+        data,
+      };
+      await client.setPusher(pusher);
+      this.pushRegistration = { pushKey, appId: pushConfig.appId };
+      return { status: 'registered', message: 'Background notifications are enabled with privacy-safe event identifiers.' };
+    } catch (error) {
+      if (createdSubscription) await this.platform.push.unsubscribe().catch(() => undefined);
+      return { status: 'error', message: friendlyError(error) };
+    }
+  }
+
+  public async unregisterPushNotifications(): Promise<void> {
+    const pushConfig = this.config.push;
+    const client = this.client;
+    const subscription = this.platform.push.supported
+      ? await this.platform.push.getSubscription()
+      : undefined;
+    const pushKey = subscription?.keys.p256dh ?? this.pushRegistration?.pushKey;
+    const appId = pushConfig?.appId ?? this.pushRegistration?.appId;
+    if (client && pushKey && appId) await client.removePusher(pushKey, appId);
+    if (this.platform.push.supported) await this.platform.push.unsubscribe();
+    this.pushRegistration = undefined;
+  }
+
+  public refreshAfterPush(): void {
+    const client = this.client;
+    if (!client) {
+      this.pushRefreshPending = true;
+      return;
+    }
+    this.pushRefreshPending = false;
+    client.retryImmediately();
   }
 
   public subscribe = (subscriber: Subscriber): (() => void) => {
@@ -339,6 +425,11 @@ export class MatrixController {
   public async forgetSession(): Promise<void> {
     const client = this.client;
     const session = this.activeSession ?? (await this.platform.credentials.load());
+    try {
+      await this.unregisterPushNotifications();
+    } catch {
+      // Local credential removal must still succeed when the homeserver is unavailable.
+    }
     this.detachClientListeners();
     client?.stopClient();
     this.client = undefined;
@@ -365,6 +456,11 @@ export class MatrixController {
     const client = this.client;
     const session = this.activeSession;
     this.setSnapshot({ status: 'connecting', message: 'Signing off…' });
+    try {
+      await this.unregisterPushNotifications();
+    } catch {
+      // Local logout must still succeed when the homeserver is unavailable.
+    }
     this.detachClientListeners();
     this.client = undefined;
     this.activeSession = undefined;
@@ -650,6 +746,11 @@ export class MatrixController {
   public async deactivateAccount(password: string, erase: boolean): Promise<void> {
     const client = this.client;
     if (!client) throw new Error('Matrix is not connected.');
+    try {
+      await this.unregisterPushNotifications();
+    } catch {
+      // Account deactivation still proceeds if the homeserver cannot remove the pusher.
+    }
     await client.deactivateAccount(
       {
         type: 'm.login.password',
@@ -1895,6 +1996,10 @@ export class MatrixController {
         pendingEventOrdering: sdk.PendingEventOrdering.Chronological,
         threadSupport: true,
       });
+      if (this.pushRefreshPending) {
+        this.pushRefreshPending = false;
+        client.retryImmediately();
+      }
 
       // Log thread support level for diagnostics. The SDK's thread APIs are
       // safe to call even when the server has no thread support — messages
@@ -1954,14 +2059,14 @@ export class MatrixController {
     if (
       this.notificationPreferences.desktopNotifications &&
       document.hidden &&
-      'Notification' in window &&
-      Notification.permission === 'granted'
+      this.platform.notifications.permission === 'granted'
     ) {
-      const notification = new Notification('Incoming Aimtrix call', {
+      this.platform.notifications.show({
+        title: 'Incoming Aimtrix call',
         body: call.getOpponentMember()?.name || 'A Matrix contact is calling.',
         tag: `call-${call.callId}`,
+        onClick: () => this.platform.deepLinks.focus(),
       });
-      notification.onclick = () => window.focus();
     }
     if (this.notificationPreferences.notificationSounds) this.playMessageTone();
   };
@@ -2070,16 +2175,16 @@ export class MatrixController {
     if (
       this.notificationPreferences.desktopNotifications &&
       document.hidden &&
-      'Notification' in window &&
-      Notification.permission === 'granted'
+      this.platform.notifications.permission === 'granted'
     ) {
       const content = event.getContent<{ body?: string }>();
       const body = typeof content.body === 'string' ? content.body : 'New Matrix message';
-      const notification = new Notification(room.name || 'Aimtrix', {
+      this.platform.notifications.show({
+        title: room.name || 'Aimtrix',
         body: body.slice(0, 240),
         tag: room.roomId,
+        onClick: () => this.platform.deepLinks.focus(),
       });
-      notification.onclick = () => window.focus();
     }
   }
 

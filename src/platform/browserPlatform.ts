@@ -9,6 +9,8 @@ import type {
   InstallAndUpdate,
   NotificationRequest,
   NotificationService,
+  PushService,
+  PushSubscriptionData,
 } from './platform';
 
 function isStandalone(): boolean {
@@ -31,7 +33,60 @@ function createBrowserNotifications(): NotificationService {
     },
     show(request: NotificationRequest) {
       if (!supported || Notification.permission !== 'granted') return;
-      new Notification(request.title, { body: request.body, tag: request.tag });
+      const notification = new Notification(request.title, { body: request.body, tag: request.tag });
+      if (request.onClick) notification.onclick = request.onClick;
+    },
+  };
+}
+
+function decodeBase64Url(value: string): Uint8Array<ArrayBuffer> {
+  const normalized = value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '=');
+  const binary = atob(normalized);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes;
+}
+
+function serializePushSubscription(subscription: PushSubscription): PushSubscriptionData {
+  const json = subscription.toJSON();
+  return {
+    endpoint: subscription.endpoint,
+    expirationTime: subscription.expirationTime,
+    keys: {
+      auth: json.keys?.auth,
+      p256dh: json.keys?.p256dh,
+    },
+  };
+}
+
+function createBrowserPush(): PushService {
+  const supported = typeof navigator !== 'undefined' &&
+    'serviceWorker' in navigator &&
+    typeof window !== 'undefined' &&
+    'PushManager' in window;
+
+  return {
+    supported,
+    async getSubscription() {
+      if (!supported) return undefined;
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      return subscription ? serializePushSubscription(subscription) : undefined;
+    },
+    async subscribe(applicationServerKey) {
+      if (!supported) throw new Error('Background push is not supported by this browser.');
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: decodeBase64Url(applicationServerKey),
+      });
+      return serializePushSubscription(subscription);
+    },
+    async unsubscribe() {
+      if (!supported) return false;
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      return subscription ? subscription.unsubscribe() : false;
     },
   };
 }
@@ -73,6 +128,7 @@ export function createBrowserPlatform(): AimtrixPlatform {
   return {
     capabilities: {
       notifications: typeof window !== 'undefined' && 'Notification' in window,
+      push: typeof window !== 'undefined' && 'PushManager' in window,
       serviceWorker: typeof navigator !== 'undefined' && 'serviceWorker' in navigator,
       mediaDevices: typeof navigator !== 'undefined' && Boolean(navigator.mediaDevices),
       standalone: isStandalone(),
@@ -80,6 +136,7 @@ export function createBrowserPlatform(): AimtrixPlatform {
     },
     credentials: createBrowserCredentialStore(),
     notifications: createBrowserNotifications(),
+    push: createBrowserPush(),
     lifecycle: createBrowserLifecycle(),
     install: createBrowserInstall(),
     deepLinks: createBrowserDeepLinks(),
