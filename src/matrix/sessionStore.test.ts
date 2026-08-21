@@ -1,9 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
-  clearStoredSession,
+  createBrowserCredentialStore,
   databaseNames,
-  loadStoredSession,
-  saveStoredSession,
   type StoredMatrixSession,
 } from './sessionStore';
 
@@ -17,10 +15,12 @@ const session: StoredMatrixSession = {
 
 describe('sessionStore', () => {
   it('round-trips a valid session and clears it', () => {
-    saveStoredSession(session);
-    expect(loadStoredSession()).toEqual(session);
-    clearStoredSession();
-    expect(loadStoredSession()).toBeUndefined();
+    const credentials = createBrowserCredentialStore();
+    return credentials.save(session).then(async () => {
+      expect(await credentials.load()).toEqual(session);
+      await credentials.clear();
+      expect(await credentials.load()).toBeUndefined();
+    });
   });
 
   it('uses isolated deterministic database names', () => {
@@ -30,7 +30,10 @@ describe('sessionStore', () => {
 
   it('removes malformed session values', () => {
     localStorage.setItem('aimtrix.matrix-session.v1', '{bad');
-    expect(loadStoredSession()).toBeUndefined();
-    expect(localStorage.getItem('aimtrix.matrix-session.v1')).toBeNull();
+    const credentials = createBrowserCredentialStore();
+    return credentials.load().then((loaded) => {
+      expect(loaded).toBeUndefined();
+      expect(localStorage.getItem('aimtrix.matrix-session.v1')).toBeNull();
+    });
   });
 });
