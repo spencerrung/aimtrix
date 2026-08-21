@@ -43,6 +43,32 @@ describe('parseRuntimeConfig', () => {
     ]);
   });
 
+  it('accepts a public push gateway contract without allowing insecure endpoints', () => {
+    const result = parseRuntimeConfig({
+      push: {
+        gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+        appId: 'dev.example.aimtrix',
+        webPush: { applicationServerKey: 'public-vapid-key' },
+      },
+    });
+
+    expect(result.config.push).toEqual({
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.example.aimtrix',
+      webPush: { applicationServerKey: 'public-vapid-key' },
+    });
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('disables push configuration when the gateway is unsafe', () => {
+    const result = parseRuntimeConfig({
+      push: { gatewayUrl: 'http://push.example.test/notify', appId: 'aimtrix' },
+    });
+
+    expect(result.config.push).toBeUndefined();
+    expect(result.warnings).toContain('push configuration is invalid; background notifications were disabled.');
+  });
+
   it('rejects unsafe URLs and clamps unreasonable upload limits', () => {
     const result = parseRuntimeConfig({
       defaultHomeserver: { baseUrl: 'javascript:alert(1)' },

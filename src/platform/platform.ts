@@ -8,6 +8,7 @@ export interface CredentialStore<T> {
 
 export interface PlatformCapabilities {
   notifications: boolean;
+  push: boolean;
   serviceWorker: boolean;
   mediaDevices: boolean;
   standalone: boolean;
@@ -18,6 +19,7 @@ export interface NotificationRequest {
   title: string;
   body: string;
   tag?: string;
+  onClick?: () => void;
 }
 
 export interface NotificationService {
@@ -25,6 +27,22 @@ export interface NotificationService {
   readonly permission: NotificationPermission | 'unsupported';
   requestPermission(): Promise<NotificationPermission | 'unsupported'>;
   show(request: NotificationRequest): void;
+}
+
+export interface PushSubscriptionData {
+  endpoint: string;
+  expirationTime?: number | null;
+  keys: {
+    auth?: string;
+    p256dh?: string;
+  };
+}
+
+export interface PushService {
+  readonly supported: boolean;
+  getSubscription(): Promise<PushSubscriptionData | undefined>;
+  subscribe(applicationServerKey: string): Promise<PushSubscriptionData>;
+  unsubscribe(): Promise<boolean>;
 }
 
 export interface AppLifecycle {
@@ -52,6 +70,7 @@ export interface AimtrixPlatform {
   capabilities: PlatformCapabilities;
   credentials: CredentialStore<StoredMatrixSession>;
   notifications: NotificationService;
+  push: PushService;
   lifecycle: AppLifecycle;
   install: InstallAndUpdate;
   deepLinks: DeepLinkService;

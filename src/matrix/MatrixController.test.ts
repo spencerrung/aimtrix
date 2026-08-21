@@ -3,6 +3,7 @@ import type { MatrixClient } from 'matrix-js-sdk';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
 import { defaultProfilePersonalization } from '../settings/profilePersonalization';
 import { MatrixController } from './MatrixController';
+import type { AimtrixPlatform } from '../platform/platform';
 
 type ControllerInternals = {
   client?: MatrixClient;
@@ -24,7 +25,81 @@ function inject(
   internals.sdk = sdk as typeof import('matrix-js-sdk');
 }
 
+function pushPlatform(subscription?: {
+  endpoint: string;
+  keys: { auth?: string; p256dh?: string };
+}): AimtrixPlatform {
+  return {
+    capabilities: { push: true },
+    notifications: {
+      supported: true,
+      permission: 'granted',
+      requestPermission: vi.fn().mockResolvedValue('granted'),
+      show: vi.fn(),
+    },
+    push: {
+      supported: true,
+      getSubscription: vi.fn().mockResolvedValue(subscription),
+      subscribe: vi.fn().mockResolvedValue(subscription ?? {
+        endpoint: 'https://push.example.test/subscription',
+        keys: { auth: 'auth-key', p256dh: 'p256dh-key' },
+      }),
+      unsubscribe: vi.fn().mockResolvedValue(true),
+    },
+  } as unknown as AimtrixPlatform;
+}
+
 describe('MatrixController protocol integration', () => {
+  it('registers an event-id-only web pusher without forwarding message content', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.example.aimtrix',
+      webPush: { applicationServerKey: 'public-vapid-key' },
+    };
+    const setPusher = vi.fn().mockResolvedValue({});
+    const controller = new MatrixController(config, pushPlatform());
+    inject(controller, { setPusher });
+
+    const result = await controller.registerPushNotifications();
+
+    expect(result.status).toBe('registered');
+    expect(setPusher).toHaveBeenCalledWith(expect.objectContaining({
+      app_id: 'dev.example.aimtrix',
+      append: true,
+      data: {
+        format: 'event_id_only',
+        url: 'https://push.example.test/_matrix/push/v1/notify',
+        endpoint: 'https://push.example.test/subscription',
+        events_only: true,
+        only_last_per_room: true,
+        auth: 'auth-key',
+      },
+    }));
+    expect(setPusher.mock.calls[0][0].data).not.toHaveProperty('content');
+  });
+
+  it('removes the Matrix pusher before unsubscribing the browser subscription', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.example.aimtrix',
+      webPush: { applicationServerKey: 'public-vapid-key' },
+    };
+    const removePusher = vi.fn().mockResolvedValue({});
+    const platform = pushPlatform({
+      endpoint: 'https://push.example.test/subscription',
+      keys: { p256dh: 'p256dh-key' },
+    });
+    const controller = new MatrixController(config, platform);
+    inject(controller, { removePusher });
+
+    await controller.unregisterPushNotifications();
+
+    expect(removePusher).toHaveBeenCalledWith('p256dh-key', 'dev.example.aimtrix');
+    expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it('only plays a message tone for Matrix events allowed by push rules', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     const playMessageTone = vi.fn();

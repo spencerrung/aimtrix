@@ -11,6 +11,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "proof:push": "node scripts/push-architecture-proof.mjs",
+    "proof:push-sw": "node scripts/push-service-worker-proof.mjs",
     "check": "npm run lint && npm run test && npm run build",
     "preview": "vite preview"
   },

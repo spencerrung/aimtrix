@@ -25,6 +25,13 @@ export interface RuntimeConfig {
   gifProvider?: {
     searchEndpoint: string;
   };
+  push?: {
+    gatewayUrl: string;
+    appId: string;
+    webPush?: {
+      applicationServerKey: string;
+    };
+  };
   stickerPacks: Array<{
     name: string;
     manifestUrl: string;
@@ -103,6 +110,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
   const features = optionalRecord(root.features);
   const media = optionalRecord(root.media);
   const gifProvider = optionalRecord(root.gifProvider);
+  const push = optionalRecord(root.push);
   const emojiPacks = optionalRecord(root.emojiPacks);
 
   const brandName =
@@ -146,6 +154,31 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
     } catch {
       warnings.push('gifProvider.searchEndpoint is invalid; GIF search was disabled.');
     }
+  }
+
+  let parsedPush: RuntimeConfig['push'];
+  if (root.push !== undefined && typeof push.gatewayUrl === 'string' && typeof push.appId === 'string') {
+    try {
+      const gatewayUrl = new URL(push.gatewayUrl);
+      if (gatewayUrl.protocol !== 'https:' && !(gatewayUrl.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(gatewayUrl.hostname))) {
+        throw new Error('insecure push gateway');
+      }
+      const appId = push.appId.trim().slice(0, 100);
+      if (!appId) throw new Error('empty push app id');
+      const webPush = optionalRecord(push.webPush);
+      const applicationServerKey = typeof webPush.applicationServerKey === 'string'
+        ? webPush.applicationServerKey.trim()
+        : undefined;
+      parsedPush = {
+        gatewayUrl: gatewayUrl.toString().replace(/\/$/, ''),
+        appId,
+        ...(applicationServerKey ? { webPush: { applicationServerKey } } : {}),
+      };
+    } catch {
+      warnings.push('push configuration is invalid; background notifications were disabled.');
+    }
+  } else if (root.push !== undefined) {
+    warnings.push('push configuration is invalid; background notifications were disabled.');
   }
 
   const stickerPacks = Array.isArray(root.stickerPacks)
@@ -211,6 +244,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
         ),
       },
       gifProvider: parsedGifProvider,
+      push: parsedPush,
       stickerPacks,
       emojiPacks: {
         enabled: readBoolean(emojiPacks.enabled, defaultRuntimeConfig.emojiPacks.enabled),
