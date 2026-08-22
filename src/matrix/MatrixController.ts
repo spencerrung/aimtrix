@@ -2376,12 +2376,13 @@ export class MatrixController {
 
   private readonly handleDecrypted = (event: MatrixEvent): void => {
     const roomId = event.getRoomId();
+    const eventId = event.getId();
+    const room = roomId && eventId ? this.client?.getRoom(roomId) : undefined;
+    if (!eventId || !room?.findEventById(eventId)) return;
     this.bumpRoomVersion(roomId);
     this.scheduleWorkspacePublish();
-    const eventId = event.getId();
     if (eventId && roomId && this.liveEncryptedMessages.delete(eventId)) {
-      const room = this.client?.getRoom(roomId);
-      if (room) this.notifyForMessage(event, room);
+      this.notifyForMessage(event, room);
     }
   };
 

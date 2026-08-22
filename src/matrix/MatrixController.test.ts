@@ -13,6 +13,8 @@ type ControllerInternals = {
   attachThreadListeners: (room: unknown) => void;
   notifyForMessage: (event: unknown, room: unknown) => void;
   playMessageTone: () => void;
+  handleDecrypted: (event: unknown) => void;
+  scheduleWorkspacePublish: () => void;
 };
 
 function inject(
@@ -63,6 +65,41 @@ function pushPlatform(subscription?: {
 }
 
 describe('MatrixController protocol integration', () => {
+  it('ignores crypto-store decryptions that are not in a loaded room timeline', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const internals = controller as unknown as ControllerInternals;
+    const scheduleWorkspacePublish = vi.fn();
+    internals.scheduleWorkspacePublish = scheduleWorkspacePublish;
+    inject(controller, { getRoom: vi.fn().mockReturnValue(undefined) });
+
+    internals.handleDecrypted({
+      getId: () => '$stored:test',
+      getRoomId: () => '!old:test',
+    });
+
+    expect(scheduleWorkspacePublish).not.toHaveBeenCalled();
+    expect(internals.snapshotCache.roomVersions.has('!old:test')).toBe(false);
+  });
+
+  it('publishes a decrypted event that belongs to a loaded room timeline', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const internals = controller as unknown as ControllerInternals;
+    const scheduleWorkspacePublish = vi.fn();
+    internals.scheduleWorkspacePublish = scheduleWorkspacePublish;
+    const event = {
+      getId: () => '$visible:test',
+      getRoomId: () => '!room:test',
+    };
+    inject(controller, {
+      getRoom: vi.fn().mockReturnValue({ findEventById: vi.fn().mockReturnValue(event) }),
+    });
+
+    internals.handleDecrypted(event);
+
+    expect(scheduleWorkspacePublish).toHaveBeenCalledOnce();
+    expect(internals.snapshotCache.roomVersions.get('!room:test')).toBe(1);
+  });
+
   it('registers an event-id-only web pusher without forwarding message content', async () => {
     const config = structuredClone(defaultRuntimeConfig);
     config.push = {
