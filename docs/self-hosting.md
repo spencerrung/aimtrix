@@ -101,7 +101,7 @@ Aimtrix ships two lazy emoji packs from the repository: the Unicode standard pac
 
 Leave `assetBaseUrl` empty to load the manifests and Bufo artwork from the Aimtrix deployment itself. Set it to an HTTPS CDN or static host to load the same `/emoji/...` paths from elsewhere. Set `standard` to `false` to opt out of the standard catalog, or set `enabled` to `false` to disable all built-in and configured emoji packs; disabled packs are not fetched or loaded. `packs` accepts additional operator-managed manifests with a `name` and same-origin or HTTPS `manifestUrl`.
 
-Emoji pack manifests use `entries` with stable IDs, searchable names/aliases, optional Unicode `emoji`, and optional image `src` values:
+Emoji pack manifests use `entries` with stable IDs, searchable names/aliases, optional Unicode `emoji`, and optional image `src` values. Animated images can provide a static `previewSrc`; Aimtrix shows the preview while idle and plays the original animation on pointer hover:
 
 ```json
 {
@@ -109,7 +109,7 @@ Emoji pack manifests use `entries` with stable IDs, searchable names/aliases, op
   "name": "My emoji",
   "version": "1.0.0",
   "entries": [
-    { "id": "wave", "name": "Wave", "aliases": ["hello"], "src": "./wave.png" },
+    { "id": "wave", "name": "Wave", "aliases": ["hello"], "src": "./wave.gif", "previewSrc": "./previews/wave.webp" },
     { "id": "sparkles", "name": "Sparkles", "emoji": "✨" }
   ]
 }

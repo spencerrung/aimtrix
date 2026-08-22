@@ -115,8 +115,30 @@ type LinkPreview = {
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 const MAX_VISIBLE_EMOJI_RESULTS = 240;
 
-function EmojiAsset({ entry }: { entry: Pick<EmojiPackEntry, 'emoji' | 'name' | 'src'> }) {
-  return entry.src ? <img className="emoji-asset" src={entry.src} alt="" loading="lazy" /> : entry.emoji;
+function EmojiAsset({
+  entry,
+  alt = '',
+  title,
+  style,
+}: {
+  entry: Pick<EmojiPackEntry, 'emoji' | 'name' | 'previewSrc' | 'src'>;
+  alt?: string;
+  title?: string;
+  style?: CSSProperties;
+}) {
+  const [animated, setAnimated] = useState(false);
+  if (!entry.src) return entry.emoji;
+  const canAnimate = Boolean(entry.previewSrc && entry.previewSrc !== entry.src);
+  return <img
+    className="emoji-asset"
+    src={animated ? entry.src : entry.previewSrc ?? entry.src}
+    alt={alt}
+    title={title}
+    style={style}
+    loading="lazy"
+    onPointerEnter={canAnimate ? () => setAnimated(true) : undefined}
+    onPointerLeave={canAnimate ? () => setAnimated(false) : undefined}
+  />;
 }
 
 type TextEmojiEntry = EmojiPackEntry & { emoji: string };
@@ -253,7 +275,7 @@ function InlineMessageText({ body, emojiCatalog, hasMentions }: { body: string; 
       ? emojiCatalog.find((candidate) => candidate.src && emojiReactionKey(candidate).toLowerCase() === token.toLowerCase())
       : undefined;
     if (entry?.src) {
-      return <img className="emoji-asset" style={{ verticalAlign: 'middle' }} src={entry.src} alt={entry.name} title={entry.name} loading="lazy" key={`${keyPrefix}:emoji:${tokenIndex}`} />;
+      return <EmojiAsset entry={entry} style={{ verticalAlign: 'middle' }} alt={entry.name} title={entry.name} key={`${keyPrefix}:emoji:${tokenIndex}`} />;
     }
     if (!hasMentions) return <LinkifiedText body={token} key={`${keyPrefix}:text:${tokenIndex}`} />;
     return <Fragment key={`${keyPrefix}:mentions:${tokenIndex}`}>{token.split(/(@[\w.-]+)/g).map((mentionToken, mentionIndex) => mentionToken.startsWith('@')
