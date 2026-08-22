@@ -69,4 +69,4 @@ jobs:
           test -f ios/App/App/Info.plist
           test -f ios/App/App/PrivacyInfo.xcprivacy
           grep -q 'applicationId "dev.alucard.aimtrix"' android/app/build.gradle
-          grep -q '<string>aimtrix</string>' android/app/src/main/res/values/strings.xml
+          grep -q 'custom_url_scheme.*aimtrix' android/app/src/main/res/values/strings.xml
