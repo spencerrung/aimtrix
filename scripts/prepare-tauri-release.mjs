@@ -14,6 +14,7 @@ const publicKey = process.env.TAURI_UPDATER_PUBLIC_KEY?.trim();
 if (!publicKey) throw new Error('TAURI_UPDATER_PUBLIC_KEY is required for a signed desktop release.');
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
+const gstreamerResourcePath = path.join(root, 'src-tauri', 'resources', 'gstreamer');
 const cargoTomlPath = path.join(root, 'src-tauri', 'Cargo.toml');
 const cargoLockPath = path.join(root, 'src-tauri', 'Cargo.lock');
 const cargoToml = fs.readFileSync(cargoTomlPath, 'utf8').replace(
@@ -32,6 +33,9 @@ const config = {
   version,
   bundle: {
     createUpdaterArtifacts: true,
+    resources: fs.existsSync(gstreamerResourcePath) ? {
+      'resources/gstreamer/': 'gstreamer',
+    } : undefined,
     macOS: process.env.APPLE_SIGNING_IDENTITY ? {
       signingIdentity: process.env.APPLE_SIGNING_IDENTITY,
     } : undefined,

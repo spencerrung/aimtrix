@@ -12,6 +12,45 @@ const ALLOWED_KEYS: [&str; 3] = [
     "aimtrix.native-push-token.v1",
 ];
 
+#[cfg(target_os = "linux")]
+fn configure_gstreamer_runtime() {
+    let resource_root = std::env::var_os("APPDIR")
+        .map(std::path::PathBuf::from)
+        .map(|app_dir| app_dir.join("usr/lib/Aimtrix/gstreamer"))
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()?
+                .parent()?
+                .join("../lib/Aimtrix/gstreamer")
+                .canonicalize()
+                .ok()
+        });
+    let Some(resource_root) = resource_root else {
+        return;
+    };
+    let plugins = resource_root.join("plugins");
+    let scanner = resource_root.join("gst-plugin-scanner");
+    if !plugins.is_dir() || !scanner.is_file() {
+        return;
+    }
+
+    std::env::set_var("GST_PLUGIN_PATH_1_0", &plugins);
+    std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &plugins);
+    std::env::set_var("GST_PLUGIN_SCANNER", scanner);
+
+    let cache_root = std::env::var_os("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| std::path::PathBuf::from(home).join(".cache"))
+        });
+    if let Some(cache_root) = cache_root {
+        let cache = cache_root.join("aimtrix");
+        if std::fs::create_dir_all(&cache).is_ok() {
+            std::env::set_var("GST_REGISTRY", cache.join("gstreamer-registry.bin"));
+        }
+    }
+}
+
 fn keyring_entry(key: &str) -> Result<Entry, String> {
     if !ALLOWED_KEYS.contains(&key) {
         return Err("unsupported secure storage key".to_string());
@@ -110,6 +149,9 @@ fn configure_tray<R: Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    configure_gstreamer_runtime();
+
     let mut builder = tauri::Builder::default();
 
     #[cfg(desktop)]
