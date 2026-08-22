@@ -208,6 +208,7 @@ jobs:
           releaseBody: See docs/desktop-release.md for installation, update, and rollback verification.
           releaseDraft: true
           prerelease: ${{ inputs.prerelease || false }}
+          tauriScript: ./node_modules/.bin/tauri
           args: --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.generated.json
 
   audit:
