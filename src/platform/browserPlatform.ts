@@ -4,6 +4,7 @@ import {
 import type {
   AimtrixPlatform,
   AppLifecycle,
+  CredentialStore,
   DeepLinkService,
   DeviceMedia,
   InstallAndUpdate,
@@ -11,7 +12,10 @@ import type {
   NotificationService,
   PushService,
   PushSubscriptionData,
+  SsoPendingState,
 } from './platform';
+
+const SSO_PENDING_KEY = 'aimtrix.sso-pending.v1';
 
 function isStandalone(): boolean {
   return typeof window !== 'undefined' &&
@@ -67,6 +71,7 @@ function createBrowserPush(): PushService {
 
   return {
     supported,
+    provider: 'web',
     async getSubscription() {
       if (!supported) return undefined;
       const registration = await navigator.serviceWorker.ready;
@@ -75,6 +80,7 @@ function createBrowserPush(): PushService {
     },
     async subscribe(applicationServerKey) {
       if (!supported) throw new Error('Background push is not supported by this browser.');
+      if (!applicationServerKey) throw new Error('A Web Push application server key is required.');
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.subscribe({
         userVisibleOnly: true,
@@ -87,6 +93,29 @@ function createBrowserPush(): PushService {
       const registration = await navigator.serviceWorker.ready;
       const subscription = await registration.pushManager.getSubscription();
       return subscription ? subscription.unsubscribe() : false;
+    },
+  };
+}
+
+function createBrowserSsoState(): CredentialStore<SsoPendingState> {
+  return {
+    async load() {
+      const serialized = sessionStorage.getItem(SSO_PENDING_KEY);
+      if (!serialized) return undefined;
+      try {
+        const value = JSON.parse(serialized) as Partial<SsoPendingState>;
+        if (typeof value.baseUrl === 'string' && typeof value.serverName === 'string') return value as SsoPendingState;
+      } catch {
+        // Remove malformed state below.
+      }
+      sessionStorage.removeItem(SSO_PENDING_KEY);
+      return undefined;
+    },
+    async save(value) {
+      sessionStorage.setItem(SSO_PENDING_KEY, JSON.stringify(value));
+    },
+    async clear() {
+      sessionStorage.removeItem(SSO_PENDING_KEY);
     },
   };
 }
@@ -110,6 +139,8 @@ function createBrowserInstall(): InstallAndUpdate {
 
 function createBrowserDeepLinks(): DeepLinkService {
   return {
+    prepare: async () => undefined,
+    ssoRedirectUrl: () => `${window.location.origin}${window.location.pathname}`,
     currentUrl: () => new URL(window.location.href),
     replacePath: (path) => window.history.replaceState({}, '', path),
     navigate: (url) => window.location.assign(url),
@@ -127,6 +158,7 @@ function createBrowserMedia(): DeviceMedia {
 export function createBrowserPlatform(): AimtrixPlatform {
   return {
     capabilities: {
+      platform: 'browser',
       notifications: typeof window !== 'undefined' && 'Notification' in window,
       push: typeof window !== 'undefined' && 'PushManager' in window,
       serviceWorker: typeof navigator !== 'undefined' && 'serviceWorker' in navigator,
@@ -135,6 +167,7 @@ export function createBrowserPlatform(): AimtrixPlatform {
       secureCredentialStorage: false,
     },
     credentials: createBrowserCredentialStore(),
+    sso: createBrowserSsoState(),
     notifications: createBrowserNotifications(),
     push: createBrowserPush(),
     lifecycle: createBrowserLifecycle(),

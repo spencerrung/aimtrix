@@ -14,6 +14,7 @@ import { Workspace } from './features/workspace/Workspace';
 import { MatrixController } from './matrix/MatrixController';
 import type { PushRegistrationResult } from './matrix/MatrixController';
 import { MediaProvider } from './matrix/MediaProvider';
+import { getAimtrixPlatform } from './platform/aimtrixPlatform';
 import { parsePushRoute, pushRouteFromMessage, type PushRoute } from './pwa/pushRouting';
 import {
   loadUserPreferences,
@@ -35,6 +36,7 @@ function initialTheme(configured: ThemeName): ThemeName {
 
 function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pushRoute?: PushRoute }) {
   const { config, warnings } = result;
+  const platform = getAimtrixPlatform();
   const controller = useMemo(() => new MatrixController(config), [config]);
   const snapshot = useSyncExternalStore(
     controller.subscribe,
@@ -82,21 +84,21 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
 
   useEffect(() => {
     const refresh = () => {
-      if (!document.hidden) controller.refreshAfterPush();
+      if (!platform.lifecycle.isHidden()) controller.refreshAfterPush();
     };
-    document.addEventListener('visibilitychange', refresh);
+    const unsubscribe = platform.lifecycle.subscribe(refresh);
     if (pushRoute) controller.refreshAfterPush();
-    return () => document.removeEventListener('visibilitychange', refresh);
-  }, [controller, pushRoute]);
+    return unsubscribe;
+  }, [controller, platform, pushRoute]);
 
   useEffect(() => {
     if (snapshot.status !== 'ready' || !preferences.desktopNotifications) return;
     const refreshPushRegistration = () => {
-      if (!document.hidden) void controller.registerPushNotifications();
+      if (!platform.lifecycle.isHidden()) void controller.registerPushNotifications();
     };
-    document.addEventListener('visibilitychange', refreshPushRegistration);
-    return () => document.removeEventListener('visibilitychange', refreshPushRegistration);
-  }, [controller, preferences.desktopNotifications, snapshot.status]);
+    const unsubscribe = platform.lifecycle.subscribe(refreshPushRegistration);
+    return unsubscribe;
+  }, [controller, platform, preferences.desktopNotifications, snapshot.status]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -276,10 +278,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!('serviceWorker' in navigator)) return;
-    const handlePushRoute = (event: MessageEvent) => {
-      if (!event.data || event.data.type !== 'AIMTRIX_PUSH_ROUTE') return;
-      const route = pushRouteFromMessage(event.data);
+    const applyRoute = (value: unknown) => {
+      const route = pushRouteFromMessage(value);
       if (!route) return;
       setPushRoute(route);
       const url = new URL(window.location.href);
@@ -287,8 +287,16 @@ export default function App() {
       if (route.eventId) url.searchParams.set('event', route.eventId);
       window.history.replaceState({}, '', `${url.pathname}${url.search}`);
     };
-    navigator.serviceWorker.addEventListener('message', handlePushRoute);
-    return () => navigator.serviceWorker.removeEventListener('message', handlePushRoute);
+    const handlePushRoute = (event: MessageEvent) => {
+      if (event.data?.type === 'AIMTRIX_PUSH_ROUTE') applyRoute(event.data);
+    };
+    const handleNativeRoute = (event: Event) => applyRoute((event as CustomEvent).detail);
+    window.addEventListener('aimtrix-push-route', handleNativeRoute);
+    if ('serviceWorker' in navigator) navigator.serviceWorker.addEventListener('message', handlePushRoute);
+    return () => {
+      window.removeEventListener('aimtrix-push-route', handleNativeRoute);
+      if ('serviceWorker' in navigator) navigator.serviceWorker.removeEventListener('message', handlePushRoute);
+    };
   }, []);
 
   useEffect(() => {

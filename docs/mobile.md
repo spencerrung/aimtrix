@@ -1,8 +1,8 @@
 # Mobile wrapper evaluation
 
-Status: **Capacitor is the recommended future mobile shell; mobile packaging remains deferred.**
+Status: **Capacitor is the selected mobile shell foundation; physical-device validation and store distribution remain deferred.**
 
-This is a feasibility result, not approval to add native projects or store packaging. The current PWA remains the supported mobile client until a physical-device pass proves that a wrapper improves the product enough to justify native release and plugin maintenance.
+The follow-up implementation adds reproducible Capacitor Android and iOS projects plus shared native platform adapters. The current PWA remains the supported mobile client until a physical-device pass proves that the wrapper is ready for internal distribution and justifies native release and plugin maintenance. See [the mobile release runbook](mobile-release.md) for signing and store boundaries.
 
 ## Spike evidence
 
@@ -52,7 +52,7 @@ Tauri mobile remains viable, but the spike found no evidence that it reduces Aim
 - Secure storage, push, media, and store behavior would still require native plugins and physical-device validation.
 - The desktop Tauri spike already found an additional Linux WebKitGTK build dependency; that does not disqualify mobile, but it makes a single Tauri choice less operationally simple.
 
-This is a recommendation for the next real spike, not a commitment to ship Capacitor. Do not add Capacitor dependencies, `android/`, or `ios/` until a device owner and a release target exist.
+This selects Capacitor as the implementation path without claiming store readiness. Native project sources are now checked in so the device owner can build the same commit; no production signing material or store submission is included.
 
 ## Native capability inventory
 

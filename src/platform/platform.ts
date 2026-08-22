@@ -1,5 +1,10 @@
 import type { StoredMatrixSession } from '../matrix/sessionStore';
 
+export interface SsoPendingState {
+  baseUrl: string;
+  serverName: string;
+}
+
 export interface CredentialStore<T> {
   load(): Promise<T | undefined>;
   save(value: T): Promise<void>;
@@ -7,6 +12,7 @@ export interface CredentialStore<T> {
 }
 
 export interface PlatformCapabilities {
+  platform?: 'browser' | 'ios' | 'android';
   notifications: boolean;
   push: boolean;
   serviceWorker: boolean;
@@ -31,6 +37,8 @@ export interface NotificationService {
 
 export interface PushSubscriptionData {
   endpoint: string;
+  provider?: 'web' | 'native';
+  pushKey?: string;
   expirationTime?: number | null;
   keys: {
     auth?: string;
@@ -40,8 +48,9 @@ export interface PushSubscriptionData {
 
 export interface PushService {
   readonly supported: boolean;
+  readonly provider?: 'web' | 'native';
   getSubscription(): Promise<PushSubscriptionData | undefined>;
-  subscribe(applicationServerKey: string): Promise<PushSubscriptionData>;
+  subscribe(applicationServerKey?: string): Promise<PushSubscriptionData>;
   unsubscribe(): Promise<boolean>;
 }
 
@@ -55,6 +64,8 @@ export interface InstallAndUpdate {
 }
 
 export interface DeepLinkService {
+  prepare(): Promise<void>;
+  ssoRedirectUrl(): string;
   currentUrl(): URL;
   replacePath(path: string): void;
   navigate(url: string): void;
@@ -69,6 +80,7 @@ export interface DeviceMedia {
 export interface AimtrixPlatform {
   capabilities: PlatformCapabilities;
   credentials: CredentialStore<StoredMatrixSession>;
+  sso: CredentialStore<SsoPendingState>;
   notifications: NotificationService;
   push: PushService;
   lifecycle: AppLifecycle;

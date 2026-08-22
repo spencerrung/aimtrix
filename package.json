@@ -12,6 +12,9 @@
     "test:e2e": "playwright test",
     "proof:push": "node scripts/push-architecture-proof.mjs",
     "proof:push-sw": "node scripts/push-service-worker-proof.mjs",
+    "mobile:sync": "npm run build && cap sync",
+    "mobile:open:android": "cap open android",
+    "mobile:open:ios": "cap open ios",
     "check": "npm run lint && npm run test && npm run build",
     "preview": "vite preview"
   },
@@ -19,6 +22,13 @@
     "node": ">=22.0.0"
   },
   "dependencies": {
+    "@aparajita/capacitor-secure-storage": "^8.0.0",
+    "@capacitor/android": "^8.5.0",
+    "@capacitor/app": "^8.1.1",
+    "@capacitor/core": "^8.5.0",
+    "@capacitor/ios": "^8.5.0",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/push-notifications": "^8.1.2",
     "lucide-react": "^1.28.0",
     "matrix-encrypt-attachment": "^1.0.3",
     "matrix-js-sdk": "^42.1.0",
@@ -27,6 +37,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",
+    "@capacitor/cli": "^8.5.0",
     "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.61.1",
     "@testing-library/jest-dom": "^6.9.1",
