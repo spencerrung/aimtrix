@@ -397,8 +397,8 @@ export function MatrixSettingsPanel({
           </section>
 
           <section className="matrix-settings-group">
-            <header><Bell size={17} /><div><h3>Notifications and message privacy</h3><p>Browser behavior for this Aimtrix installation.</p></div></header>
-            <label className="settings-toggle-row"><span><strong>Desktop notifications</strong><small>Use Matrix push rules and privacy-safe event identifiers when a gateway is configured; otherwise this is foreground-only.</small></span><input type="checkbox" checked={preferences.desktopNotifications} onChange={(event) => void requestNotifications(event.target.checked)} /></label>
+            <header><Bell size={17} /><div><h3>Notifications and message privacy</h3><p>Background delivery and local notification behavior for this Aimtrix installation.</p></div></header>
+            <label className="settings-toggle-row"><span><strong>Background notifications</strong><small>Use Matrix push rules and privacy-safe event identifiers when a gateway is configured; otherwise this is foreground-only.</small></span><input type="checkbox" checked={preferences.desktopNotifications} onChange={(event) => void requestNotifications(event.target.checked)} /></label>
             <label className="settings-toggle-row"><span><strong>Message sounds</strong><small>Play an original Aimtrix tone for new messages.</small></span><input type="checkbox" checked={preferences.notificationSounds} onChange={(event) => updatePreferences({ notificationSounds: event.target.checked })} /></label>
             <label className="settings-range-row"><Volume2 size={15} /><span>Sound volume</span><input type="range" min="0" max="1" step="0.05" value={preferences.soundVolume} onChange={(event) => updatePreferences({ soundVolume: Number(event.target.value) })} /></label>
             {actions?.previewMessageSound ? (

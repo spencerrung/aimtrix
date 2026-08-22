@@ -30,13 +30,23 @@ function pushPlatform(subscription?: {
   provider?: 'web' | 'native';
   pushKey?: string;
   keys: { auth?: string; p256dh?: string };
-}): AimtrixPlatform {
+}, options: { permission?: NotificationPermission; requestPermission?: NotificationPermission } = {}): AimtrixPlatform {
   return {
     capabilities: { push: true },
+    lifecycle: { isHidden: () => true, subscribe: vi.fn().mockReturnValue(() => undefined) },
+    deepLinks: {
+      prepare: vi.fn().mockResolvedValue(undefined),
+      ssoRedirectUrl: vi.fn().mockReturnValue('https://aimtrix.example.test/'),
+      currentUrl: vi.fn().mockReturnValue(new URL('https://aimtrix.example.test/')),
+      replacePath: vi.fn(),
+      openRoute: vi.fn(),
+      navigate: vi.fn(),
+      focus: vi.fn(),
+    },
     notifications: {
       supported: true,
-      permission: 'granted',
-      requestPermission: vi.fn().mockResolvedValue('granted'),
+      permission: options.permission ?? 'granted',
+      requestPermission: vi.fn().mockResolvedValue(options.requestPermission ?? 'granted'),
       show: vi.fn(),
     },
     push: {
@@ -103,6 +113,24 @@ describe('MatrixController protocol integration', () => {
     expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('still clears the provider subscription when homeserver pusher removal fails', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.example.aimtrix',
+      webPush: { applicationServerKey: 'public-vapid-key' },
+    };
+    const platform = pushPlatform({
+      endpoint: 'https://push.example.test/subscription',
+      keys: { p256dh: 'p256dh-key' },
+    });
+    const controller = new MatrixController(config, platform);
+    inject(controller, { removePusher: vi.fn().mockRejectedValue(new Error('homeserver unavailable')) });
+
+    await expect(controller.unregisterPushNotifications()).rejects.toThrow('homeserver unavailable');
+    expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
+  });
+
   it('registers a native provider token without web subscription fields', async () => {
     const config = structuredClone(defaultRuntimeConfig);
     config.push = {
@@ -155,6 +183,61 @@ describe('MatrixController protocol integration', () => {
     expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
   });
 
+  it('reports denied permission without touching the Matrix pusher', async () => {
+    const platform = pushPlatform(undefined, { permission: 'default', requestPermission: 'denied' });
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    const setPusher = vi.fn();
+    inject(controller, { setPusher });
+
+    const result = await controller.registerPushNotifications();
+
+    expect(result).toEqual({ status: 'denied', message: 'Notification permission was not granted.' });
+    expect(setPusher).not.toHaveBeenCalled();
+  });
+
+  it('cleans up a newly-created provider subscription when the homeserver rejects it', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.alucard.aimtrix',
+      webPush: { applicationServerKey: 'public-vapid-key' },
+    };
+    const platform = pushPlatform();
+    const controller = new MatrixController(config, platform);
+    inject(controller, { setPusher: vi.fn().mockRejectedValue(new Error('provider rejected')) });
+
+    const result = await controller.registerPushNotifications();
+
+    expect(result.status).toBe('error');
+    expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('removes pushers associated with a device after deleting that device', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.alucard.aimtrix',
+    };
+    const controller = new MatrixController(config);
+    const internals = controller as unknown as ControllerInternals & {
+      activeSession: { userId: string; deviceId: string };
+    };
+    internals.activeSession = { userId: '@alex:example.com', deviceId: 'CURRENT' };
+    const removePusher = vi.fn().mockResolvedValue(undefined);
+    inject(controller, {
+      deleteDevice: vi.fn().mockResolvedValue(undefined),
+      getPushers: vi.fn().mockResolvedValue({ pushers: [
+        { app_id: 'dev.alucard.aimtrix', device_id: 'OTHER', pushkey: 'stale-token' },
+        { app_id: 'other.app', device_id: 'OTHER', pushkey: 'other-token' },
+      ] }),
+      removePusher,
+    });
+
+    await expect(controller.removeDevice('OTHER')).resolves.toBe('removed');
+
+    expect(removePusher).toHaveBeenCalledWith('stale-token', 'dev.alucard.aimtrix');
+  });
+
   it('only plays a message tone for Matrix events allowed by push rules', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     const playMessageTone = vi.fn();
@@ -191,6 +274,45 @@ describe('MatrixController protocol integration', () => {
     );
 
     expect(playMessageTone).toHaveBeenCalledOnce();
+  });
+
+  it('keeps native foreground notification content generic and routes its tap', () => {
+    const platform = pushPlatform();
+    platform.capabilities.platform = 'android';
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    const internals = controller as unknown as ControllerInternals & {
+      notificationPreferences: { desktopNotifications: boolean; notificationSounds: boolean; soundVolume: number };
+    };
+    internals.notificationPreferences = {
+      desktopNotifications: true,
+      notificationSounds: true,
+      soundVolume: 0.55,
+    };
+    inject(controller, {
+      getPushActionsForEvent: vi.fn().mockReturnValue({ notify: true }),
+      getRoomPushRule: vi.fn(),
+    });
+    internals.connection = 'online';
+    Object.defineProperty(document, 'hidden', { configurable: true, value: true });
+
+    internals.notifyForMessage(
+      {
+        getType: () => 'm.room.message',
+        getContent: () => ({ body: 'private room content' }),
+      },
+      { roomId: '!room:test', name: 'Private room' },
+    );
+
+    const show = platform.notifications.show as ReturnType<typeof vi.fn>;
+    expect(show).toHaveBeenCalledWith(expect.objectContaining({
+      body: 'New Matrix activity',
+      silent: false,
+    }));
+    const request = show.mock.calls[0][0] as { onClick: () => void };
+    request.onClick();
+    expect(platform.deepLinks.openRoute).toHaveBeenCalledWith({ roomId: '!room:test' });
+    expect(platform.deepLinks.focus).toHaveBeenCalledOnce();
+    Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   });
 
   it('sends a readable Matrix notice with the Aimtrix nudge marker', async () => {

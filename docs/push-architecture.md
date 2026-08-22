@@ -75,6 +75,7 @@ The gateway stores no event payloads. Logs must exclude pushkeys, room IDs, even
 ## Lifecycle and failure handling
 
 - **Refresh:** on every provider-token refresh or Web Push subscription change, replace the pusher with the new pushkey and keep the old one until the homeserver acknowledges the replacement.
+- **Aimtrix lifecycle:** an opted-in installation restores its pusher after the Matrix session becomes ready, retries registration after resume, and reacts to native provider-token refresh events without exposing the token or Matrix content to UI diagnostics.
 - **Logout:** call `/pushers/set` with the same `pushkey` and `app_id`, `kind: null`, while the access token is still valid; then clear the local provider subscription.
 - **Device removal:** remove the pusher during explicit device removal where the server permits it. A deleted Matrix device must not be allowed to keep receiving pushes; the gateway also removes provider tokens rejected by APNs/FCM/Web Push.
 - **Gateway failure:** the homeserver retains the pusher and retries according to its push-gateway behavior. Aimtrix must show a truthful “notifications unavailable” state rather than retrying with direct provider calls.

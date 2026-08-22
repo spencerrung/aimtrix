@@ -93,11 +93,18 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
 
   useEffect(() => {
     if (snapshot.status !== 'ready' || !preferences.desktopNotifications) return;
+    void controller.registerPushNotifications();
     const refreshPushRegistration = () => {
       if (!platform.lifecycle.isHidden()) void controller.registerPushNotifications();
     };
     const unsubscribe = platform.lifecycle.subscribe(refreshPushRegistration);
-    return unsubscribe;
+    const unsubscribeTokenRefresh = platform.push.onTokenRefresh(() => {
+      void controller.registerPushNotifications();
+    });
+    return () => {
+      unsubscribe();
+      unsubscribeTokenRefresh();
+    };
   }, [controller, platform, preferences.desktopNotifications, snapshot.status]);
 
   useEffect(() => {

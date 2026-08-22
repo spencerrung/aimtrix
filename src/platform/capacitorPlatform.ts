@@ -137,6 +137,7 @@ function createNativeNotifications(): NotificationService {
           id,
           title: request.title,
           body: request.body,
+          silent: request.silent,
           extra: request.tag ? { tag: request.tag } : undefined,
         }],
       }).catch(() => clickHandlers.delete(id));
@@ -148,10 +149,12 @@ function createNativePush(onRoute: (route: PushRoute) => void): PushService {
   let token: string | undefined;
   let registrationError: string | undefined;
   let registrationPromise: Promise<string> | undefined;
+  const tokenRefreshListeners = new Set<() => void>();
   let resolveRegistration: ((value: string) => void) | undefined;
   let rejectRegistration: ((reason: Error) => void) | undefined;
 
   void PushNotifications.addListener('registration', (result) => {
+    const previousToken = token;
     token = result.value;
     registrationError = undefined;
     void prepareNativeSecureStorage()
@@ -160,6 +163,9 @@ function createNativePush(onRoute: (route: PushRoute) => void): PushService {
     resolveRegistration?.(result.value);
     resolveRegistration = undefined;
     rejectRegistration = undefined;
+    if (previousToken !== undefined && previousToken !== result.value) {
+      queueMicrotask(() => tokenRefreshListeners.forEach((listener) => listener()));
+    }
   });
   void PushNotifications.addListener('registrationError', (result) => {
     registrationError = result.error;
@@ -215,6 +221,10 @@ function createNativePush(onRoute: (route: PushRoute) => void): PushService {
         );
       }
     },
+    onTokenRefresh(listener) {
+      tokenRefreshListeners.add(listener);
+      return () => tokenRefreshListeners.delete(listener);
+    },
     async unsubscribe() {
       await PushNotifications.unregister();
       token = undefined;
@@ -251,7 +261,9 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
     return true;
   };
   const applyRoute = (route: PushRoute) => {
-    window.history.replaceState({}, '', routeUrl(route));
+    const path = routeUrl(route);
+    if (`${window.location.pathname}${window.location.search}` === path) return;
+    window.history.replaceState({}, '', path);
     window.dispatchEvent(new CustomEvent('aimtrix-push-route', { detail: route }));
     onRoute(route);
   };
@@ -283,6 +295,7 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
     ssoRedirectUrl: () => 'aimtrix://sso',
     currentUrl: () => new URL(window.location.href),
     replacePath: (path) => window.history.replaceState({}, '', path),
+    openRoute: applyRoute,
     navigate: (url) => window.location.assign(url),
     focus: () => window.focus(),
   };
@@ -316,8 +329,7 @@ export function createCapacitorPlatform(): AimtrixPlatform {
     sso: createNativeSsoState(),
     notifications: createNativeNotifications(),
     push: createNativePush((route) => {
-      deepLinks.replacePath(routeUrl(route));
-      window.dispatchEvent(new CustomEvent('aimtrix-push-route', { detail: route }));
+      deepLinks.openRoute(route);
     }),
     lifecycle: createNativeLifecycle(),
     install: createNativeInstall(),

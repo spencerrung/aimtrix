@@ -48,6 +48,7 @@ The native permission explanations are intentionally narrow. Denial must leave l
 - Logout and forget-session remove the pusher before clearing the provider token and credential entry.
 - Per-account sync and Rust/WASM crypto databases retain the existing account/device hash naming scheme. A reinstall or lost device does not claim to recover E2EE keys without Matrix recovery material.
 - Push registration uses Matrix's standard pusher API and the event-id-only gateway contract. APNs/FCM tokens are pushkeys, not room data, and never appear in logs or notification copy.
+- A saved notification preference re-registers the pusher after restore/resume; native token refresh events replace the new pusher and retire the prior in-memory registration when the homeserver accepts it.
 
 ## Native deep links
 

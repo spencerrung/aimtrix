@@ -1,6 +1,8 @@
 import {
   createBrowserCredentialStore,
 } from '../matrix/sessionStore';
+import { routeUrl } from '../pwa/pushRouting';
+import type { PushRoute } from '../pwa/pushRouting';
 import type {
   AimtrixPlatform,
   AppLifecycle,
@@ -88,6 +90,9 @@ function createBrowserPush(): PushService {
       });
       return serializePushSubscription(subscription);
     },
+    onTokenRefresh() {
+      return () => undefined;
+    },
     async unsubscribe() {
       if (!supported) return false;
       const registration = await navigator.serviceWorker.ready;
@@ -143,6 +148,11 @@ function createBrowserDeepLinks(): DeepLinkService {
     ssoRedirectUrl: () => `${window.location.origin}${window.location.pathname}`,
     currentUrl: () => new URL(window.location.href),
     replacePath: (path) => window.history.replaceState({}, '', path),
+    openRoute: (route: PushRoute) => {
+      const path = routeUrl(route);
+      window.history.replaceState({}, '', path);
+      window.dispatchEvent(new CustomEvent('aimtrix-push-route', { detail: route }));
+    },
     navigate: (url) => window.location.assign(url),
     focus: () => window.focus(),
   };

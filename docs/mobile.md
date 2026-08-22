@@ -34,7 +34,7 @@ The Android build failure is an environment/toolchain finding, not an Aimtrix so
 
 ## Decision
 
-### Recommend Capacitor for a future wrapper
+### Capacitor implementation status
 
 Capacitor is the better fit for Aimtrix's web-first client:
 
@@ -49,7 +49,7 @@ Tauri mobile remains viable, but the spike found no evidence that it reduces Aim
 
 - Android needs the same Android SDK/NDK/device setup plus a Rust mobile build.
 - iOS requires a macOS/Xcode environment, and the Linux CLI cannot even initialize the iOS target here.
-- Secure storage, push, media, and store behavior would still require native plugins and physical-device validation.
+- Secure storage, push, lifecycle, and deep-link adapters now exist in the checked-in shell; media and store behavior still require native plugins or configuration plus physical-device validation.
 - The desktop Tauri spike already found an additional Linux WebKitGTK build dependency; that does not disqualify mobile, but it makes a single Tauri choice less operationally simple.
 
 This selects Capacitor as the implementation path without claiming store readiness. Native project sources are now checked in so the device owner can build the same commit; no production signing material or store submission is included.
@@ -86,7 +86,7 @@ Use disposable Matrix accounts and rooms. Record device model, OS build, browser
 
 The PWA already has responsive Chromium coverage, iOS safe-area behavior, browser push privacy proofs, E2EE persistence, and truthful unsupported states. The current evidence does not show a mobile wrapper fixing a production problem; it shows that Capacitor can package the existing web artifact and that native validation still needs hardware and platform toolchains.
 
-Adopt Capacitor only when the release requirement is explicit—reliable closed-app push, app-store distribution, native secure storage, or a device capability that the PWA cannot provide—and after the critical path above is scheduled on physical devices.
+Capacitor is selected for the wrapper. Keep the PWA as the supported mobile client until the critical path above is scheduled and passes on physical devices.
 
 ## References
 

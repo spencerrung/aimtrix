@@ -36,6 +36,7 @@ import { getAimtrixPlatform } from '../platform/aimtrixPlatform';
 import type { AimtrixPlatform } from '../platform/platform';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { SpaceHierarchyRoomData } from './spaceHierarchy';
+import type { PushRoute } from '../pwa/pushRouting';
 import {
   DIRECT_BACKGROUNDS_EVENT,
   ROOM_BACKGROUND_EVENT,
@@ -199,9 +200,14 @@ export class MatrixController {
     if (!this.platform.notifications.supported) {
       return { status: 'unavailable', message: 'This browser does not support notifications.' };
     }
-    const permission = this.platform.notifications.permission === 'granted'
-      ? 'granted'
-      : await this.platform.notifications.requestPermission();
+    let permission;
+    try {
+      permission = this.platform.notifications.permission === 'granted'
+        ? 'granted'
+        : await this.platform.notifications.requestPermission();
+    } catch {
+      return { status: 'error', message: 'Aimtrix could not request notification permission.' };
+    }
     if (permission !== 'granted') {
       return { status: 'denied', message: 'Notification permission was not granted.' };
     }
@@ -219,7 +225,12 @@ export class MatrixController {
 
     let createdSubscription = false;
     try {
-      const existingSubscription = await this.platform.push.getSubscription();
+      let existingSubscription;
+      try {
+        existingSubscription = await this.platform.push.getSubscription();
+      } catch {
+        existingSubscription = undefined;
+      }
       const subscription = existingSubscription ?? await this.platform.push.subscribe(
         usesWebPush ? pushConfig.webPush?.applicationServerKey : undefined,
       );
@@ -245,6 +256,12 @@ export class MatrixController {
         data,
       };
       await client.setPusher(pusher);
+      if (this.activeSession) {
+        await this.removePushersForDevice(client, this.activeSession.deviceId, pushKey);
+      }
+      if (this.pushRegistration && this.pushRegistration.pushKey !== pushKey) {
+        await client.removePusher(this.pushRegistration.pushKey, this.pushRegistration.appId).catch(() => undefined);
+      }
       this.pushRegistration = { pushKey, appId: pushConfig.appId };
       return { status: 'registered', message: 'Background notifications are enabled with privacy-safe event identifiers.' };
     } catch (error) {
@@ -256,14 +273,52 @@ export class MatrixController {
   public async unregisterPushNotifications(): Promise<void> {
     const pushConfig = this.config.push;
     const client = this.client;
-    const subscription = this.platform.push.supported
-      ? await this.platform.push.getSubscription()
-      : undefined;
+    let subscription;
+    if (this.platform.push.supported) {
+      try {
+        subscription = await this.platform.push.getSubscription();
+      } catch {
+        subscription = undefined;
+      }
+    }
     const pushKey = subscription?.pushKey ?? subscription?.keys.p256dh ?? this.pushRegistration?.pushKey;
     const appId = pushConfig?.appId ?? this.pushRegistration?.appId;
-    if (client && pushKey && appId) await client.removePusher(pushKey, appId);
-    if (this.platform.push.supported) await this.platform.push.unsubscribe();
+    let cleanupError: unknown;
+    try {
+      if (client && pushKey && appId) await client.removePusher(pushKey, appId);
+    } catch (error) {
+      cleanupError = error;
+    }
+    try {
+      if (this.platform.push.supported) await this.platform.push.unsubscribe();
+    } catch (error) {
+      cleanupError ??= error;
+    }
     this.pushRegistration = undefined;
+    if (cleanupError) throw cleanupError;
+  }
+
+  private focusNotification(roomId?: string): void {
+    if (roomId) {
+      const route: PushRoute = { roomId };
+      this.platform.deepLinks.openRoute(route);
+    }
+    this.platform.deepLinks.focus();
+  }
+
+  private async removePushersForDevice(client: MatrixClient, deviceId: string, keepPushKey?: string): Promise<void> {
+    const appId = this.config.push?.appId;
+    if (!appId) return;
+    try {
+      const { pushers } = await client.getPushers();
+      await Promise.all(pushers
+        .filter((pusher) => pusher.app_id === appId && (
+          pusher.device_id === deviceId || pusher['org.matrix.msc3881.device_id'] === deviceId
+        ) && pusher.pushkey !== keepPushKey)
+        .map((pusher) => client.removePusher(pusher.pushkey, pusher.app_id)));
+    } catch {
+      return;
+    }
   }
 
   public refreshAfterPush(): void {
@@ -781,6 +836,7 @@ export class MatrixController {
       : undefined;
     try {
       await client.deleteDevice(deviceId, auth);
+      await this.removePushersForDevice(client, deviceId);
       this.pendingDeviceAuth.delete(deviceId);
       return 'removed';
     } catch (error) {
@@ -2059,14 +2115,15 @@ export class MatrixController {
     this.updateCallSummary();
     if (
       this.notificationPreferences.desktopNotifications &&
-      document.hidden &&
+      this.platform.lifecycle.isHidden() &&
       this.platform.notifications.permission === 'granted'
     ) {
       this.platform.notifications.show({
         title: 'Incoming Aimtrix call',
-        body: call.getOpponentMember()?.name || 'A Matrix contact is calling.',
+        body: 'A Matrix contact is calling. Open Aimtrix to answer.',
         tag: `call-${call.callId}`,
-        onClick: () => this.platform.deepLinks.focus(),
+        silent: !this.notificationPreferences.notificationSounds,
+        onClick: () => this.focusNotification(call.roomId),
       });
     }
     if (this.notificationPreferences.notificationSounds) this.playMessageTone();
@@ -2175,16 +2232,19 @@ export class MatrixController {
     }
     if (
       this.notificationPreferences.desktopNotifications &&
-      document.hidden &&
+      this.platform.lifecycle.isHidden() &&
       this.platform.notifications.permission === 'granted'
     ) {
       const content = event.getContent<{ body?: string }>();
-      const body = typeof content.body === 'string' ? content.body : 'New Matrix message';
+      const body = this.platform.capabilities.platform === 'browser' && typeof content.body === 'string'
+        ? content.body.slice(0, 240)
+        : 'New Matrix activity';
       this.platform.notifications.show({
         title: room.name || 'Aimtrix',
-        body: body.slice(0, 240),
+        body,
         tag: room.roomId,
-        onClick: () => this.platform.deepLinks.focus(),
+        silent: !this.notificationPreferences.notificationSounds,
+        onClick: () => this.focusNotification(room.roomId),
       });
     }
   }
