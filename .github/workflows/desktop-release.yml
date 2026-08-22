@@ -15,6 +15,16 @@ on:
         required: false
         default: false
         type: boolean
+      target:
+        description: Platform matrix to build; push-tag runs can use DESKTOP_RELEASE_TARGET temporarily
+        required: false
+        default: all
+        type: choice
+        options:
+          - all
+          - linux
+          - macos
+          - windows
 
 permissions:
   contents: write
@@ -27,6 +37,7 @@ concurrency:
 
 env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+  RELEASE_TARGET: ${{ inputs.target || vars.DESKTOP_RELEASE_TARGET || 'all' }}
   TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
   TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
   TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
@@ -45,15 +56,20 @@ jobs:
           - name: Linux x86_64
             os: ubuntu-22.04
             bundles: appimage,deb,rpm
+            target: linux
           - name: macOS Apple Silicon
             os: macos-15-arm64
             bundles: dmg,app
+            target: macos
           - name: macOS Intel
             os: macos-15
             bundles: dmg,app
+            target: macos
           - name: Windows x86_64
             os: windows-2022
             bundles: nsis,msi
+            target: windows
+    if: ${{ inputs.target == '' && vars.DESKTOP_RELEASE_TARGET == '' || inputs.target == 'all' || vars.DESKTOP_RELEASE_TARGET == 'all' || matrix.target == inputs.target || matrix.target == vars.DESKTOP_RELEASE_TARGET }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v7
@@ -64,6 +80,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$RELEASE_TARGET" =~ ^(all|linux|macos|windows)$ ]] || {
+            echo "RELEASE_TARGET must be all, linux, macos, or windows; received $RELEASE_TARGET" >&2
+            exit 1
+          }
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z.-]+)?$ ]] || {
             echo "RELEASE_TAG must use vMAJOR.MINOR.PATCH, received $RELEASE_TAG" >&2
             exit 1
@@ -177,6 +197,7 @@ jobs:
   audit:
     name: Audit release assets
     needs: build
+    if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout release tag
