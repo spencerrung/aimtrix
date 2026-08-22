@@ -120,9 +120,34 @@ jobs:
           sudo apt-get install --no-install-recommends -y \
             libwebkit2gtk-4.1-dev \
             libappindicator3-dev \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
             librsvg2-dev \
             patchelf \
             xdg-utils
+
+      - name: Stage Linux GStreamer runtime
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          destination=src-tauri/resources/gstreamer
+          plugins="$destination/plugins"
+          mkdir -p "$plugins"
+          install -m 755 \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstcoreelements.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstapp.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstaudioconvert.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstaudioresample.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstplayback.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgsttypefindfunctions.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstvolume.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstautodetect.so \
+            /usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpulseaudio.so \
+            "$plugins/"
+          scanner=$(find /usr/lib/x86_64-linux-gnu -path '*/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner' -print -quit)
+          test -n "$scanner"
+          install -m 755 "$scanner" "$destination/gst-plugin-scanner"
 
       - name: Set up Node.js
         uses: actions/setup-node@v7
@@ -242,6 +267,27 @@ jobs:
 
       - name: Validate updater metadata
         run: node release-tools/scripts/validate-release-metadata.mjs "$(find release-artifacts -name latest.json -print -quit)"
+
+      - name: Validate Linux media runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          appimage=$(find release-artifacts -name '*.AppImage' -print -quit)
+          if [[ -z "$appimage" ]]; then
+            exit 0
+          fi
+          chmod +x "$appimage"
+          extraction="$RUNNER_TEMP/aimtrix-appimage"
+          mkdir -p "$extraction"
+          (
+            cd "$extraction"
+            "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
+          )
+          runtime="$extraction/squashfs-root/usr/lib/aimtrix/gstreamer"
+          test -x "$runtime/gst-plugin-scanner"
+          for plugin in coreelements app audioconvert audioresample playback typefindfunctions volume autodetect pulseaudio; do
+            test -x "$runtime/plugins/libgst${plugin}.so"
+          done
 
       - name: Generate source SBOM
         uses: anchore/sbom-action@v0
