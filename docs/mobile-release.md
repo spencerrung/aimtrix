@@ -1,5 +1,7 @@
 # Mobile application release
 
+The cross-client promotion, privacy/store disclosure, evidence, and rollback process is in the [release operations runbook](release-operations.md). This document owns the mobile-specific signing, permission, provider, and physical-device gate.
+
 Aimtrix now contains reproducible Capacitor Android and iOS project sources. These projects are internal-distribution foundations, not a store submission. No production signing material, APNs keys, FCM service accounts, or provider credentials belong in this repository.
 
 ## Application identity

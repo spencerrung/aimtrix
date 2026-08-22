@@ -12,6 +12,8 @@ Aimtrix follows semantic versioning after `1.0.0`. Until then, minor versions ma
 
 Aimtrix does not run migrations or server-side state. Operators should retain their previous immutable image tag for rollback.
 
+The cross-platform operating process, privacy/store disclosure contract, live interoperability gate, physical-device gate, evidence template, support process, and rollback ownership live in [release operations](release-operations.md). Run `npm run release:validate` before cutting a release; CI runs the same contract check and preserves browser evidence artifacts.
+
 ## Desktop release
 
 Desktop releases are tag-driven and remain draft releases until the clean-machine gate is complete. The workflow is `.github/workflows/desktop-release.yml`; it builds signed Linux x86_64, macOS Apple Silicon, macOS Intel, and Windows x86_64 artifacts, then audits the generated updater metadata, checksums, SBOM, and provenance.
