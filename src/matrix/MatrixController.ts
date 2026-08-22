@@ -93,6 +93,9 @@ function loadMatrixSdk(): Promise<MatrixSdk> {
 }
 
 function friendlyError(error: unknown): string {
+  if (typeof error === 'string' && /secure credential storage/i.test(error)) {
+    return 'Aimtrix could not access secure credential storage on this device.';
+  }
   const candidate = error as { errcode?: unknown; message?: unknown; name?: unknown };
   if (candidate.errcode === 'M_FORBIDDEN') return 'That Matrix ID or password was not accepted.';
   if (candidate.errcode === 'M_UNKNOWN_TOKEN') return 'Your Matrix session expired. Please sign in again.';

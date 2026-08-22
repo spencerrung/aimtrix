@@ -20,10 +20,17 @@ fn keyring_entry(key: &str) -> Result<Entry, String> {
         .map_err(|_| "secure credential storage is unavailable".to_string())
 }
 
-#[tauri::command]
-fn secure_credential_load(key: String) -> Result<Option<String>, String> {
-    let entry = keyring_entry(&key)?;
-    match entry.get_password() {
+#[cfg(target_os = "linux")]
+fn keyutils_entry(key: &str) -> Result<Entry, String> {
+    let credential =
+        keyring::keyutils::KeyutilsCredential::new_with_target(None, KEYRING_SERVICE, key)
+            .map_err(|_| "secure credential storage is unavailable".to_string())?;
+    Ok(Entry::new_with_credential(Box::new(credential)))
+}
+
+#[cfg(target_os = "linux")]
+fn load_linux_fallback(key: &str) -> Result<Option<String>, String> {
+    match keyutils_entry(key)?.get_password() {
         Ok(value) => Ok(Some(value)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(_) => Err("secure credential storage is unavailable".to_string()),
@@ -31,11 +38,35 @@ fn secure_credential_load(key: String) -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
+fn secure_credential_load(key: String) -> Result<Option<String>, String> {
+    let entry = keyring_entry(&key)?;
+    match entry.get_password() {
+        Ok(value) => Ok(Some(value)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(_) => {
+            #[cfg(target_os = "linux")]
+            return load_linux_fallback(&key);
+
+            #[cfg(not(target_os = "linux"))]
+            Err("secure credential storage is unavailable".to_string())
+        }
+    }
+}
+
+#[tauri::command]
 fn secure_credential_save(key: String, value: String) -> Result<(), String> {
     let entry = keyring_entry(&key)?;
-    entry
+    if entry.set_password(&value).is_ok() {
+        return Ok(());
+    }
+
+    #[cfg(target_os = "linux")]
+    return keyutils_entry(&key)?
         .set_password(&value)
-        .map_err(|_| "secure credential storage is unavailable".to_string())
+        .map_err(|_| "secure credential storage is unavailable".to_string());
+
+    #[cfg(not(target_os = "linux"))]
+    Err("secure credential storage is unavailable".to_string())
 }
 
 #[tauri::command]
@@ -43,7 +74,16 @@ fn secure_credential_clear(key: String) -> Result<(), String> {
     let entry = keyring_entry(&key)?;
     match entry.delete_credential() {
         Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(_) => Err("secure credential storage is unavailable".to_string()),
+        Err(_) => {
+            #[cfg(target_os = "linux")]
+            return match keyutils_entry(&key)?.delete_credential() {
+                Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+                Err(_) => Err("secure credential storage is unavailable".to_string()),
+            };
+
+            #[cfg(not(target_os = "linux"))]
+            Err("secure credential storage is unavailable".to_string())
+        }
     }
 }
 
