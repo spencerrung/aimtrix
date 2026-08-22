@@ -24,4 +24,6 @@ keyring = { version = "3.6.3", default-features = false, features = ["apple-nati
 tauri = { version = "2.11.3", features = ["tray-icon"] }
 tauri-plugin-deep-link = "2"
 tauri-plugin-notification = "2"
+tauri-plugin-process = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
+tauri-plugin-updater = "2"

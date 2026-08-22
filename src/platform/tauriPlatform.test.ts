@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   getCurrent: vi.fn(async () => null as string[] | null),
   onOpenUrl: vi.fn(async () => () => undefined),
+  check: vi.fn(),
+  relaunch: vi.fn(),
 }));
 
 vi.mock('@tauri-apps/api/core', () => ({ invoke: mocks.invoke }));
@@ -25,12 +27,16 @@ vi.mock('@tauri-apps/plugin-notification', () => ({
   requestPermission: vi.fn(async () => 'granted'),
   sendNotification: vi.fn(),
 }));
+vi.mock('@tauri-apps/plugin-process', () => ({ relaunch: mocks.relaunch }));
+vi.mock('@tauri-apps/plugin-updater', () => ({ check: mocks.check }));
 
 describe('Tauri platform', () => {
   beforeEach(() => {
     mocks.invoke.mockReset();
     mocks.getCurrent.mockReset();
     mocks.getCurrent.mockResolvedValue(null);
+    mocks.check.mockReset();
+    mocks.relaunch.mockReset();
   });
 
   it('exposes secure desktop capabilities and allowlisted credentials', async () => {
@@ -61,5 +67,28 @@ describe('Tauri platform', () => {
     expect(window.location.search).toContain('room=%21room%3Aexample');
     expect(routeEvent).toHaveBeenCalledOnce();
     window.removeEventListener('aimtrix-push-route', routeEvent);
+  });
+
+  it('reports the current desktop version when the signed channel has no update', async () => {
+    mocks.check.mockResolvedValue(null);
+
+    await expect(createTauriPlatform().install.checkForUpdate()).resolves.toEqual({ status: 'current' });
+  });
+
+  it('downloads and relaunches a signed desktop update only after an explicit install call', async () => {
+    const downloadAndInstall = vi.fn(async () => undefined);
+    mocks.check.mockResolvedValue({
+      version: '0.2.0',
+      date: '2026-08-22T00:00:00Z',
+      body: 'Release notes',
+      downloadAndInstall,
+    });
+    const result = await createTauriPlatform().install.checkForUpdate();
+
+    expect(result).toMatchObject({ status: 'available', version: '0.2.0', notes: 'Release notes' });
+    expect(downloadAndInstall).not.toHaveBeenCalled();
+    if (result.status === 'available') await result.install();
+    expect(downloadAndInstall).toHaveBeenCalledOnce();
+    expect(mocks.relaunch).toHaveBeenCalledOnce();
   });
 });

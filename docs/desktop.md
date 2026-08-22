@@ -14,7 +14,8 @@ The desktop shell lives under `src-tauri/` and uses a strict `main`-window capab
 - Window focus/blur drives lifecycle-aware refresh behavior. Close-requested stops Matrix sync and releases media/object-URL resources before the process exits.
 - A native tray menu exposes **Show Aimtrix** and **Quit Aimtrix**. A single-instance plugin forwards a second launch to the existing window instead of starting another Matrix sync client.
 - Desktop media continues through the browser WebView API and reports a truthful unsupported state when the host WebView does not expose it.
-- Updater wiring is intentionally left to the signed packaging issue (#90): this shell does not pretend unsigned local builds have a trusted update channel.
+- Signed release builds register the Tauri updater against the immutable GitHub Releases `latest.json` channel. The release-only config injects the long-lived public verification key; local/debug builds have no trusted update channel.
+- The updater adapter exposes a check result without downloading anything. The caller must explicitly invoke the returned install action, which downloads the signed bundle and relaunches only after installation succeeds. Browser and Capacitor builds report updater support as unavailable.
 
 The shell is deliberately not store-ready. Signing, notarization, update endpoints, artifact provenance, clean-machine install/upgrade testing, and release channels remain the packaging/release work.
 
@@ -95,8 +96,9 @@ Do not call the desktop client production-ready until a disposable native run pa
 4. File picker, authenticated MXC media, camera/microphone, screen sharing, audio output, and one-to-one WebRTC.
 5. Notification permission/delivery, clipboard, deep-link cold start/warm handoff, single-instance behavior, and clean shutdown.
 6. Capability audit, CSP/asset-origin review, signed artifacts, binary size/startup/memory measurements, and a reproducible release build.
+7. Verify the updater rejects a tampered `.sig`, preserves the OS keyring and IndexedDB crypto state across an upgrade, and leaves the previous immutable release available for rollback.
 
-The shell now provides the native-only foundations that motivated this work: OS keychain integration, a reliable tray/window lifecycle, and desktop deep-link registration. That does not replace the hosted PWA or waive physical and clean-machine validation.
+The shell now provides the native-only foundations that motivated this work: OS keychain integration, a reliable tray/window lifecycle, desktop deep-link registration, and a signed updater integration. That does not replace the hosted PWA or waive physical and clean-machine validation.
 
 ## Local commands
 

@@ -12,7 +12,9 @@
     "notification:allow-notify",
     "notification:allow-register-action-types",
     "notification:allow-register-listener",
+    "process:allow-relaunch",
     "deep-link:allow-get-current",
-    "core:event:default"
+    "core:event:default",
+    "updater:default"
   ]
 }

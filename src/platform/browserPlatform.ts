@@ -140,6 +140,7 @@ function createBrowserLifecycle(): AppLifecycle {
 function createBrowserInstall(): InstallAndUpdate {
   return {
     displayMode: () => isStandalone() ? 'standalone' : 'browser',
+    checkForUpdate: async () => ({ status: 'unsupported' }),
   };
 }
 

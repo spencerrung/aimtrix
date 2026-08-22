@@ -310,7 +310,10 @@ function createNativeMedia(): DeviceMedia {
 }
 
 function createNativeInstall(): InstallAndUpdate {
-  return { displayMode: () => 'standalone' };
+  return {
+    displayMode: () => 'standalone',
+    checkForUpdate: async () => ({ status: 'unsupported' }),
+  };
 }
 
 export function createCapacitorPlatform(): AimtrixPlatform {
