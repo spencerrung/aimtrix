@@ -44,3 +44,29 @@ jobs:
 
       - name: Push privacy proofs
         run: npm run proof:push && npm run proof:push-sw
+
+  mobile-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and synchronize Capacitor projects
+        run: npm run mobile:sync
+
+      - name: Verify native release inputs
+        run: |
+          test -f android/app/src/main/AndroidManifest.xml
+          test -f ios/App/App/Info.plist
+          test -f ios/App/App/PrivacyInfo.xcprivacy
+          grep -q 'applicationId "dev.alucard.aimtrix"' android/app/build.gradle
+          grep -q '<string>aimtrix</string>' android/app/src/main/res/values/strings.xml

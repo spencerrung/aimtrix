@@ -1,13 +1,15 @@
 import { createRoot } from 'react-dom/client';
 import App from './App';
+import { getAimtrixPlatform } from './platform/aimtrixPlatform';
 import './styles.css';
 
 const root = document.getElementById('root');
 if (!root) throw new Error('Aimtrix root element is missing.');
 
-createRoot(root).render(<App />);
+const platform = getAimtrixPlatform();
+void platform.deepLinks.prepare().catch(() => undefined).finally(() => createRoot(root).render(<App />));
 
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
+if (platform.capabilities.serviceWorker && import.meta.env.PROD) {
   window.addEventListener('load', () => {
     void navigator.serviceWorker.register('/sw.js').then((registration) => {
       const announceWaitingWorker = () => {

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getAimtrixPlatform } from '../../platform/aimtrixPlatform';
 
 interface BeforeInstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -20,12 +21,14 @@ function isIos(): boolean {
 }
 
 export function InstallPrompt() {
+  const native = getAimtrixPlatform().capabilities.platform !== 'browser';
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent>();
   const [expanded, setExpanded] = useState(false);
   const [dismissed, setDismissed] = useState(false);
   const ios = isIos();
 
   useEffect(() => {
+    if (native) return;
     if (isStandalone()) return;
     const handleBeforeInstall = (event: Event) => {
       event.preventDefault();
@@ -33,8 +36,9 @@ export function InstallPrompt() {
     };
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
     return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
-  }, []);
+  }, [native]);
 
+  if (native) return null;
   if (dismissed || isStandalone() || (!deferredPrompt && !ios)) return null;
 
   const install = async () => {

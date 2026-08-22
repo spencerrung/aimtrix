@@ -54,6 +54,6 @@ Then open <http://localhost:8080>. The final image is stateless and supports bot
 - Era-faithful visual character with accessible, responsive behavior.
 - Original artwork, sounds, and branding.
 
-Architecture notes live in [`docs/architecture.md`](docs/architecture.md). Deployment details, security headers, calling requirements, and Kubernetes guidance are in [`docs/self-hosting.md`](docs/self-hosting.md). See also the [release policy](docs/releases.md), [desktop-wrapper evaluation](docs/desktop.md), and [mobile-wrapper evaluation](docs/mobile.md).
+Architecture notes live in [`docs/architecture.md`](docs/architecture.md). Deployment details, security headers, calling requirements, and Kubernetes guidance are in [`docs/self-hosting.md`](docs/self-hosting.md). See also the [release policy](docs/releases.md), [desktop-wrapper evaluation](docs/desktop.md), [mobile-wrapper evaluation](docs/mobile.md), and [mobile release runbook](docs/mobile-release.md).
 
 Aimtrix is available under the [MIT License](LICENSE).

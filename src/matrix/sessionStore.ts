@@ -8,10 +8,10 @@ export interface StoredMatrixSession {
   deviceId: string;
 }
 
-const SESSION_KEY = 'aimtrix.matrix-session.v1';
+export const SESSION_KEY = 'aimtrix.matrix-session.v1';
 
-function isStoredSession(value: unknown): value is StoredMatrixSession {
-  if (typeof value !== 'object' || value === null) return false;
+export function parseStoredMatrixSession(value: unknown): StoredMatrixSession | undefined {
+  if (typeof value !== 'object' || value === null) return undefined;
   const candidate = value as Partial<StoredMatrixSession>;
   if (
     !candidate.baseUrl ||
@@ -20,14 +20,15 @@ function isStoredSession(value: unknown): value is StoredMatrixSession {
     !candidate.userId ||
     !candidate.deviceId
   ) {
-    return false;
+    return undefined;
   }
 
   try {
     const url = new URL(candidate.baseUrl);
-    return url.protocol === 'https:' || url.protocol === 'http:';
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return undefined;
+    return candidate as StoredMatrixSession;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
@@ -40,7 +41,8 @@ export function createBrowserCredentialStore(
         const serialized = storage.getItem(SESSION_KEY);
         if (!serialized) return undefined;
         const parsed: unknown = JSON.parse(serialized);
-        if (isStoredSession(parsed)) return parsed;
+        const session = parseStoredMatrixSession(parsed);
+        if (session) return session;
         storage.removeItem(SESSION_KEY);
       } catch {
         storage.removeItem(SESSION_KEY);

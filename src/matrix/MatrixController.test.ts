@@ -27,6 +27,8 @@ function inject(
 
 function pushPlatform(subscription?: {
   endpoint: string;
+  provider?: 'web' | 'native';
+  pushKey?: string;
   keys: { auth?: string; p256dh?: string };
 }): AimtrixPlatform {
   return {
@@ -39,6 +41,7 @@ function pushPlatform(subscription?: {
     },
     push: {
       supported: true,
+      provider: subscription?.provider ?? 'web',
       getSubscription: vi.fn().mockResolvedValue(subscription),
       subscribe: vi.fn().mockResolvedValue(subscription ?? {
         endpoint: 'https://push.example.test/subscription',
@@ -97,6 +100,58 @@ describe('MatrixController protocol integration', () => {
     await controller.unregisterPushNotifications();
 
     expect(removePusher).toHaveBeenCalledWith('p256dh-key', 'dev.example.aimtrix');
+    expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
+  });
+
+  it('registers a native provider token without web subscription fields', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.alucard.aimtrix',
+    };
+    const setPusher = vi.fn().mockResolvedValue({});
+    const platform = pushPlatform({
+      endpoint: '',
+      provider: 'native',
+      pushKey: 'native-provider-token',
+      keys: {},
+    });
+    const controller = new MatrixController(config, platform);
+    inject(controller, { setPusher });
+
+    const result = await controller.registerPushNotifications();
+
+    expect(result.status).toBe('registered');
+    expect(setPusher).toHaveBeenCalledWith(expect.objectContaining({
+      pushkey: 'native-provider-token',
+      data: {
+        format: 'event_id_only',
+        url: 'https://push.example.test/_matrix/push/v1/notify',
+        events_only: true,
+        only_last_per_room: true,
+      },
+    }));
+  });
+
+  it('removes a native Matrix pusher after restoring its provider token', async () => {
+    const config = structuredClone(defaultRuntimeConfig);
+    config.push = {
+      gatewayUrl: 'https://push.example.test/_matrix/push/v1/notify',
+      appId: 'dev.alucard.aimtrix',
+    };
+    const removePusher = vi.fn().mockResolvedValue({});
+    const platform = pushPlatform({
+      endpoint: '',
+      provider: 'native',
+      pushKey: 'native-provider-token',
+      keys: {},
+    });
+    const controller = new MatrixController(config, platform);
+    inject(controller, { removePusher });
+
+    await controller.unregisterPushNotifications();
+
+    expect(removePusher).toHaveBeenCalledWith('native-provider-token', 'dev.alucard.aimtrix');
     expect(platform.push.unsubscribe).toHaveBeenCalledOnce();
   });
 

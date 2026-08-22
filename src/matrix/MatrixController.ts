@@ -32,7 +32,7 @@ import {
   databaseNames,
   type StoredMatrixSession,
 } from './sessionStore';
-import { createBrowserPlatform } from '../platform/browserPlatform';
+import { getAimtrixPlatform } from '../platform/aimtrixPlatform';
 import type { AimtrixPlatform } from '../platform/platform';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { SpaceHierarchyRoomData } from './spaceHierarchy';
@@ -80,7 +80,6 @@ export type MatrixControllerSnapshot =
 
 type Subscriber = () => void;
 type MatrixSdk = typeof import('matrix-js-sdk');
-const SSO_PENDING_KEY = 'aimtrix.sso-pending.v1';
 const PERSONALIZATION_EVENT = 'dev.alucard.aimtrix.preferences.v1';
 const PROFILE_PERSONALIZATION_EVENT = 'dev.alucard.aimtrix.profile.v1';
 const SPACE_ORDER_EVENT = 'dev.alucard.aimtrix.space_order.v1';
@@ -181,7 +180,7 @@ export class MatrixController {
 
   public constructor(
     private readonly config: RuntimeConfig,
-    platform: AimtrixPlatform = createBrowserPlatform(),
+    platform: AimtrixPlatform = getAimtrixPlatform(),
   ) {
     this.platform = platform;
   }
@@ -208,7 +207,8 @@ export class MatrixController {
     }
 
     const pushConfig = this.config.push;
-    if (!pushConfig?.webPush?.applicationServerKey || !this.platform.capabilities.push || !this.platform.push.supported) {
+    const usesWebPush = this.platform.push.provider !== 'native';
+    if (!pushConfig || (usesWebPush && !pushConfig.webPush?.applicationServerKey) || !this.platform.capabilities.push || !this.platform.push.supported) {
       return {
         status: 'foreground-only',
         message: 'Foreground notifications are enabled. Background delivery is not configured for this installation.',
@@ -220,16 +220,18 @@ export class MatrixController {
     let createdSubscription = false;
     try {
       const existingSubscription = await this.platform.push.getSubscription();
-      const subscription = existingSubscription ?? await this.platform.push.subscribe(pushConfig.webPush.applicationServerKey);
+      const subscription = existingSubscription ?? await this.platform.push.subscribe(
+        usesWebPush ? pushConfig.webPush?.applicationServerKey : undefined,
+      );
       createdSubscription = !existingSubscription;
-      const pushKey = subscription.keys.p256dh;
-      if (!pushKey) throw new Error('The browser did not provide a usable push key.');
+      const pushKey = subscription.pushKey ?? subscription.keys.p256dh;
+      if (!pushKey) throw new Error('The platform did not provide a usable push key.');
       const data = {
         format: 'event_id_only',
         url: pushConfig.gatewayUrl,
-        endpoint: subscription.endpoint,
         events_only: true,
         only_last_per_room: true,
+        ...(subscription.endpoint ? { endpoint: subscription.endpoint } : {}),
         ...(subscription.keys.auth ? { auth: subscription.keys.auth } : {}),
       };
       const pusher: IPusherRequest = {
@@ -237,8 +239,8 @@ export class MatrixController {
         kind: 'http',
         app_display_name: this.config.brandName,
         app_id: pushConfig.appId,
-        device_display_name: `${this.config.brandName} Web`,
-        lang: (navigator.language || 'en').split('-')[0],
+        device_display_name: `${this.config.brandName} ${this.platform.capabilities.platform === 'browser' ? 'Web' : 'Mobile'}`,
+        lang: (typeof navigator !== 'undefined' ? navigator.language : 'en').split('-')[0],
         append: true,
         data,
       };
@@ -257,7 +259,7 @@ export class MatrixController {
     const subscription = this.platform.push.supported
       ? await this.platform.push.getSubscription()
       : undefined;
-    const pushKey = subscription?.keys.p256dh ?? this.pushRegistration?.pushKey;
+    const pushKey = subscription?.pushKey ?? subscription?.keys.p256dh ?? this.pushRegistration?.pushKey;
     const appId = pushConfig?.appId ?? this.pushRegistration?.appId;
     if (client && pushKey && appId) await client.removePusher(pushKey, appId);
     if (this.platform.push.supported) await this.platform.push.unsubscribe();
@@ -341,23 +343,22 @@ export class MatrixController {
           ? 'cas'
           : undefined;
       if (!loginType) throw new Error('This homeserver does not advertise SSO.');
-      sessionStorage.setItem(SSO_PENDING_KEY, JSON.stringify(target));
-      const redirectUrl = `${window.location.origin}${window.location.pathname}`;
-      window.location.assign(ssoClient.getSsoLoginUrl(redirectUrl, loginType));
+      await this.platform.sso.save(target);
+      const redirectUrl = this.platform.deepLinks.ssoRedirectUrl();
+      this.platform.deepLinks.navigate(ssoClient.getSsoLoginUrl(redirectUrl, loginType));
     } catch (error) {
       this.setSnapshot({ status: 'signed-out', error: friendlyError(error) });
     }
   }
 
   private async completeSso(loginToken: string): Promise<void> {
-    const serialized = sessionStorage.getItem(SSO_PENDING_KEY);
-    if (!serialized) throw new Error('SSO homeserver information is missing.');
-    const target = JSON.parse(serialized) as { baseUrl: string; serverName: string };
+    const target = await this.platform.sso.load();
+    if (!target) throw new Error('SSO homeserver information is missing.');
     const sdk = await loadMatrixSdk();
     const loginClient = sdk.createClient({ baseUrl: target.baseUrl });
     const response = await loginClient.login('m.login.token', {
       token: loginToken,
-      initial_device_display_name: 'Aimtrix Web',
+      initial_device_display_name: `Aimtrix ${this.platform.capabilities.platform === 'browser' ? 'Web' : 'Mobile'}`,
     });
     const session: StoredMatrixSession = {
       baseUrl: target.baseUrl,
@@ -366,7 +367,7 @@ export class MatrixController {
       userId: response.user_id,
       deviceId: response.device_id,
     };
-    sessionStorage.removeItem(SSO_PENDING_KEY);
+    await this.platform.sso.clear();
     window.history.replaceState({}, '', window.location.pathname);
     await this.platform.credentials.save(session);
     await this.connect(session);
@@ -391,7 +392,7 @@ export class MatrixController {
       const response = await loginClient.login('m.login.password', {
         identifier: { type: 'm.id.user', user: credentials.userId.trim() },
         password: credentials.password,
-        initial_device_display_name: 'Aimtrix Web',
+        initial_device_display_name: `Aimtrix ${this.platform.capabilities.platform === 'browser' ? 'Web' : 'Mobile'}`,
       });
       const session: StoredMatrixSession = {
         baseUrl: target.baseUrl,
