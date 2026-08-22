@@ -234,8 +234,14 @@ jobs:
           mkdir -p release-artifacts
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-artifacts
 
+      - name: Checkout release validation tools
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: release-tools
+
       - name: Validate updater metadata
-        run: node scripts/validate-release-metadata.mjs "$(find release-artifacts -name latest.json -print -quit)"
+        run: node release-tools/scripts/validate-release-metadata.mjs "$(find release-artifacts -name latest.json -print -quit)"
 
       - name: Generate source SBOM
         uses: anchore/sbom-action@v0
