@@ -283,7 +283,7 @@ jobs:
             cd "$extraction"
             "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
           )
-          runtime="$extraction/squashfs-root/usr/lib/aimtrix/gstreamer"
+          runtime="$extraction/squashfs-root/usr/lib/Aimtrix/gstreamer"
           test -x "$runtime/gst-plugin-scanner"
           for plugin in coreelements app audioconvert audioresample playback typefindfunctions volume autodetect pulseaudio; do
             test -x "$runtime/plugins/libgst${plugin}.so"

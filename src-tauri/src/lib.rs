@@ -16,12 +16,12 @@ const ALLOWED_KEYS: [&str; 3] = [
 fn configure_gstreamer_runtime() {
     let resource_root = std::env::var_os("APPDIR")
         .map(std::path::PathBuf::from)
-        .map(|app_dir| app_dir.join("usr/lib/aimtrix/gstreamer"))
+        .map(|app_dir| app_dir.join("usr/lib/Aimtrix/gstreamer"))
         .or_else(|| {
             std::env::current_exe()
                 .ok()?
                 .parent()?
-                .join("../lib/aimtrix/gstreamer")
+                .join("../lib/Aimtrix/gstreamer")
                 .canonicalize()
                 .ok()
         });
