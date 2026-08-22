@@ -91,6 +91,8 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
     return unsubscribe;
   }, [controller, platform, pushRoute]);
 
+  useEffect(() => platform.lifecycle.subscribeShutdown(() => controller.shutdown()), [controller, platform]);
+
   useEffect(() => {
     if (snapshot.status !== 'ready' || !preferences.desktopNotifications) return;
     void controller.registerPushNotifications();

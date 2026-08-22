@@ -1,0 +1,18 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Aimtrix desktop permissions for the bundled main window",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "notification:allow-is-permission-granted",
+    "notification:allow-request-permission",
+    "notification:allow-notify",
+    "notification:allow-register-action-types",
+    "notification:allow-register-listener",
+    "deep-link:allow-get-current",
+    "core:event:default"
+  ]
+}

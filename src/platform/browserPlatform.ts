@@ -133,6 +133,7 @@ function createBrowserLifecycle(): AppLifecycle {
       document.addEventListener('visibilitychange', listener);
       return () => document.removeEventListener('visibilitychange', listener);
     },
+    subscribeShutdown: () => () => undefined,
   };
 }
 
