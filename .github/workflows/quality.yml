@@ -40,4 +40,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Browser and accessibility tests
-        run: npm run test:e2e
+        run: PLAYWRIGHT_PREVIEW=1 npm run test:e2e
+
+      - name: Push privacy proofs
+        run: npm run proof:push && npm run proof:push-sw
