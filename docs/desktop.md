@@ -1,8 +1,22 @@
-# Desktop wrapper evaluation
+# Desktop client
 
-Status: Tauri 2 feasibility spike complete; **do not add a native project yet**.
+Status: Tauri 2 shell implemented; **cross-platform native release validation is still pending**.
 
-Aimtrix remains a web/PWA project for the 0.x line. The spike proves that the current Vite output can be pointed at Tauri's bundled-asset model, but it does not pass the Linux native build on this host and has no Windows or macOS evidence. That is enough to reject a premature `src-tauri/` addition, not enough to claim Tauri interoperability.
+Aimtrix remains web-first and the hosted PWA stays supported. The checked-in Tauri shell packages the same Vite client as local bundled assets; it does not create a second Matrix implementation or make the PWA depend on Tauri.
+
+## Current implementation
+
+The desktop shell lives under `src-tauri/` and uses a strict `main`-window capability allowlist. The shared TypeScript platform boundary selects it only when Tauri's runtime marker is present; browser and Capacitor builds keep their existing adapters.
+
+- Matrix sessions and pending SSO state use an OS-protected keyring through narrowly allowlisted Rust commands. Secure-storage failures return generic errors and never expose credential values.
+- SSO callbacks use the registered `aimtrix://sso` scheme. Room/event routes use validated query parameters, work on cold and warm starts, and are delivered through the existing push-route event.
+- Native notifications use Tauri's notification plugin with an action-specific handler that focuses Aimtrix and invokes the original room route callback. Message content remains subject to the existing generic native notification policy.
+- Window focus/blur drives lifecycle-aware refresh behavior. Close-requested stops Matrix sync and releases media/object-URL resources before the process exits.
+- A native tray menu exposes **Show Aimtrix** and **Quit Aimtrix**. A single-instance plugin forwards a second launch to the existing window instead of starting another Matrix sync client.
+- Desktop media continues through the browser WebView API and reports a truthful unsupported state when the host WebView does not expose it.
+- Updater wiring is intentionally left to the signed packaging issue (#90): this shell does not pretend unsigned local builds have a trusted update channel.
+
+The shell is deliberately not store-ready. Signing, notarization, update endpoints, artifact provenance, clean-machine install/upgrade testing, and release channels remain the packaging/release work.
 
 ## Spike evidence
 
@@ -71,9 +85,9 @@ The generated scaffold's default capability grants only `core:default`. The even
 - Rust commands must validate inputs and return sanitized errors. Tauri capabilities reduce frontend blast radius but do not protect against malicious Rust code, lax scopes, compromised dependencies, or WebView vulnerabilities.
 - Multiple windows must share one Matrix client/session and one crypto lifecycle; opening independent SDK clients risks duplicate sync and separate crypto stores.
 
-## Adoption gate
+## Native release gate
 
-Do not merge `src-tauri/` or Tauri dependencies until a disposable native spike passes the critical path on all three desktop targets:
+Do not call the desktop client production-ready until a disposable native run passes the critical path on all three desktop targets:
 
 1. Build the current `dist/` as bundled local assets.
 2. Login, SSO callback, restore, logout, forget-session, and expired-token cleanup.
@@ -82,7 +96,17 @@ Do not merge `src-tauri/` or Tauri dependencies until a disposable native spike 
 5. Notification permission/delivery, clipboard, deep-link cold start/warm handoff, single-instance behavior, and clean shutdown.
 6. Capability audit, CSP/asset-origin review, signed artifacts, binary size/startup/memory measurements, and a reproducible release build.
 
-The PWA remains the chosen implementation until one of these native-only needs is real: OS keychain integration, reliable tray/unread badge, system-wide shortcuts, or independent conversation windows. A native shell is not justified merely because it is possible.
+The shell now provides the native-only foundations that motivated this work: OS keychain integration, a reliable tray/window lifecycle, and desktop deep-link registration. That does not replace the hosted PWA or waive physical and clean-machine validation.
+
+## Local commands
+
+```bash
+npm run desktop:info   # report host prerequisites and Tauri targets
+npm run desktop:dev    # run the Vite client inside Tauri
+npm run desktop:build  # build a packaged desktop artifact
+```
+
+The current Linux workstation is still missing `webkit2gtk-4.1`, so `desktop:info` reports that prerequisite and a local Rust build stops before compiling the application crate. The checked-in desktop workflow installs that dependency on Ubuntu and compiles the same shell on Linux, macOS, and Windows. No signing keys or release credentials belong in this repository.
 
 ## Electron fallback trigger
 

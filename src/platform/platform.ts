@@ -13,7 +13,7 @@ export interface CredentialStore<T> {
 }
 
 export interface PlatformCapabilities {
-  platform?: 'browser' | 'ios' | 'android';
+  platform?: 'browser' | 'desktop' | 'ios' | 'android';
   notifications: boolean;
   push: boolean;
   serviceWorker: boolean;
@@ -60,6 +60,7 @@ export interface PushService {
 export interface AppLifecycle {
   isHidden(): boolean;
   subscribe(listener: () => void): () => void;
+  subscribeShutdown(listener: () => void): () => void;
 }
 
 export interface InstallAndUpdate {

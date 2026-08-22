@@ -249,6 +249,7 @@ function createNativeLifecycle(): AppLifecycle {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+    subscribeShutdown: () => () => undefined,
   };
 }
 

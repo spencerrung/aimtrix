@@ -245,12 +245,17 @@ export class MatrixController {
         ...(subscription.endpoint ? { endpoint: subscription.endpoint } : {}),
         ...(subscription.keys.auth ? { auth: subscription.keys.auth } : {}),
       };
+      const clientLabel = this.platform.capabilities.platform === 'browser'
+        ? 'Web'
+        : this.platform.capabilities.platform === 'desktop'
+          ? 'Desktop'
+          : 'Mobile';
       const pusher: IPusherRequest = {
         pushkey: pushKey,
         kind: 'http',
         app_display_name: this.config.brandName,
         app_id: pushConfig.appId,
-        device_display_name: `${this.config.brandName} ${this.platform.capabilities.platform === 'browser' ? 'Web' : 'Mobile'}`,
+        device_display_name: `${this.config.brandName} ${clientLabel}`,
         lang: (typeof navigator !== 'undefined' ? navigator.language : 'en').split('-')[0],
         append: true,
         data,
@@ -329,6 +334,14 @@ export class MatrixController {
     }
     this.pushRefreshPending = false;
     client.retryImmediately();
+  }
+
+  public shutdown(): void {
+    this.detachClientListeners();
+    this.client?.stopClient();
+    this.client = undefined;
+    this.activeSession = undefined;
+    this.clearMediaCache();
   }
 
   public subscribe = (subscriber: Subscriber): (() => void) => {
@@ -411,9 +424,14 @@ export class MatrixController {
     if (!target) throw new Error('SSO homeserver information is missing.');
     const sdk = await loadMatrixSdk();
     const loginClient = sdk.createClient({ baseUrl: target.baseUrl });
+    const clientLabel = this.platform.capabilities.platform === 'browser'
+      ? 'Web'
+      : this.platform.capabilities.platform === 'desktop'
+        ? 'Desktop'
+        : 'Mobile';
     const response = await loginClient.login('m.login.token', {
       token: loginToken,
-      initial_device_display_name: `Aimtrix ${this.platform.capabilities.platform === 'browser' ? 'Web' : 'Mobile'}`,
+      initial_device_display_name: `Aimtrix ${clientLabel}`,
     });
     const session: StoredMatrixSession = {
       baseUrl: target.baseUrl,
@@ -444,10 +462,15 @@ export class MatrixController {
       });
       const sdk = await loadMatrixSdk();
       const loginClient = sdk.createClient({ baseUrl: target.baseUrl });
+      const clientLabel = this.platform.capabilities.platform === 'browser'
+        ? 'Web'
+        : this.platform.capabilities.platform === 'desktop'
+          ? 'Desktop'
+          : 'Mobile';
       const response = await loginClient.login('m.login.password', {
         identifier: { type: 'm.id.user', user: credentials.userId.trim() },
         password: credentials.password,
-        initial_device_display_name: `Aimtrix ${this.platform.capabilities.platform === 'browser' ? 'Web' : 'Mobile'}`,
+        initial_device_display_name: `Aimtrix ${clientLabel}`,
       });
       const session: StoredMatrixSession = {
         baseUrl: target.baseUrl,
