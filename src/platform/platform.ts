@@ -1,4 +1,5 @@
 import type { StoredMatrixSession } from '../matrix/sessionStore';
+import type { PushRoute } from '../pwa/pushRouting';
 
 export interface SsoPendingState {
   baseUrl: string;
@@ -25,6 +26,7 @@ export interface NotificationRequest {
   title: string;
   body: string;
   tag?: string;
+  silent?: boolean;
   onClick?: () => void;
 }
 
@@ -51,6 +53,7 @@ export interface PushService {
   readonly provider?: 'web' | 'native';
   getSubscription(): Promise<PushSubscriptionData | undefined>;
   subscribe(applicationServerKey?: string): Promise<PushSubscriptionData>;
+  onTokenRefresh(listener: () => void): () => void;
   unsubscribe(): Promise<boolean>;
 }
 
@@ -68,6 +71,7 @@ export interface DeepLinkService {
   ssoRedirectUrl(): string;
   currentUrl(): URL;
   replacePath(path: string): void;
+  openRoute(route: PushRoute): void;
   navigate(url: string): void;
   focus(): void;
 }
