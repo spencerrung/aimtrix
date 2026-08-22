@@ -36,6 +36,17 @@ test('workspace navigation, drawer, and personalization are functional', async (
   await expect(page.locator('html')).toHaveAttribute('data-accent', 'grape');
 });
 
+test('decorative drawer twinkles do not repaint continuously', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name === 'mobile', 'The profile drawer is hidden in the mobile navigation flow.');
+  const twinkles = () => page.evaluate(() => document.getAnimations()
+    .filter((animation) => animation.animationName === 'drawer-twinkle')
+    .map((animation) => animation.effect?.getTiming().iterations));
+
+  expect(await twinkles()).toEqual([]);
+  await page.locator('.drawer-profile').hover();
+  await expect.poll(twinkles).toEqual([1, 1, 1]);
+});
+
 test('desktop workspace panels resize, collapse, and restore', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'mobile', 'Mobile uses the existing one-surface navigation flow.');
   const buddyDrawer = page.locator('.buddy-panel');
