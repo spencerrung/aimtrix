@@ -40,11 +40,25 @@ jobs:
       - name: Lint, test, and build
         run: npm run check
 
+      - name: Validate release contract
+        run: npm run release:validate
+
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
       - name: Browser and accessibility tests
         run: PLAYWRIGHT_PREVIEW=1 npm run test:e2e
+
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-evidence-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Push privacy proofs
         run: npm run proof:push && npm run proof:push-sw

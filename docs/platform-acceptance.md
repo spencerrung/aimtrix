@@ -2,7 +2,7 @@
 
 Status: 0.x release-gate checklist
 
-This is the repeatable acceptance plan for the hosted Aimtrix PWA before a native shell is justified. The [mobile-wrapper evaluation](mobile.md) records the current Capacitor-versus-Tauri recommendation and native blockers. Automated browser coverage proves browser-detectable behavior; it does not prove APNs/FCM/Web Push delivery, E2EE interoperability with a live homeserver, or OS-level install behavior. Those require the manual checks below.
+This is the repeatable acceptance plan for the hosted Aimtrix PWA and native clients. The [release operations runbook](release-operations.md) defines promotion ownership, evidence, rollback, and incident response; the [mobile-wrapper evaluation](mobile.md) records the current Capacitor-versus-Tauri recommendation and native blockers. Automated browser coverage proves browser-detectable behavior; it does not prove APNs/FCM/Web Push delivery, E2EE interoperability with a live homeserver, or OS-level install behavior. Those require the manual checks below.
 
 ## Ownership and evidence
 

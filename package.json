@@ -12,6 +12,7 @@
     "test:e2e": "playwright test",
     "proof:push": "node scripts/push-architecture-proof.mjs",
     "proof:push-sw": "node scripts/push-service-worker-proof.mjs",
+    "release:validate": "node scripts/validate-release-contract.mjs",
     "mobile:sync": "npm run build && cap sync",
     "mobile:open:android": "cap open android",
     "mobile:open:ios": "cap open ios",
