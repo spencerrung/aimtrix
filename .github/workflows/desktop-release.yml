@@ -46,30 +46,46 @@ env:
   APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
 jobs:
+  select:
+    name: Select release target
+    runs-on: ubuntu-22.04
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Build target matrix
+        id: matrix
+        shell: bash
+        env:
+          target: ${{ inputs.target || vars.DESKTOP_RELEASE_TARGET || 'all' }}
+        run: |
+          set -euo pipefail
+          case "$target" in
+            all)
+              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-22.04","bundles":"appimage,deb,rpm","target":"linux"},{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"},{"name":"Windows x86_64","os":"windows-2022","bundles":"nsis,msi","target":"windows"}]}'
+              ;;
+            linux)
+              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-22.04","bundles":"appimage,deb,rpm","target":"linux"}]}'
+              ;;
+            macos)
+              matrix='{"include":[{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"}]}'
+              ;;
+            windows)
+              matrix='{"include":[{"name":"Windows x86_64","os":"windows-2022","bundles":"nsis,msi","target":"windows"}]}'
+              ;;
+            *)
+              echo "RELEASE_TARGET must be all, linux, macos, or windows; received $target" >&2
+              exit 1
+              ;;
+          esac
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: select
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - name: Linux x86_64
-            os: ubuntu-22.04
-            bundles: appimage,deb,rpm
-            target: linux
-          - name: macOS Apple Silicon
-            os: macos-15-arm64
-            bundles: dmg,app
-            target: macos
-          - name: macOS Intel
-            os: macos-15
-            bundles: dmg,app
-            target: macos
-          - name: Windows x86_64
-            os: windows-2022
-            bundles: nsis,msi
-            target: windows
-    if: ${{ inputs.target == '' && vars.DESKTOP_RELEASE_TARGET == '' || inputs.target == 'all' || vars.DESKTOP_RELEASE_TARGET == 'all' || matrix.target == inputs.target || matrix.target == vars.DESKTOP_RELEASE_TARGET }}
+      matrix: ${{ fromJSON(needs.select.outputs.matrix) }}
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v7
