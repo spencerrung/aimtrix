@@ -89,6 +89,7 @@ import {
 } from '../../matrix/roomBackgrounds';
 import type { UserPreferences } from '../../settings/preferences';
 import type { PushRoute } from '../../pwa/pushRouting';
+import type { InstallAndUpdate } from '../../platform/platform';
 import {
   defaultProfilePersonalization,
   type ProfilePersonalization,
@@ -294,6 +295,7 @@ interface WorkspaceProps {
   onUploadProfileBanner?: (file: File) => Promise<string>;
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
+  install?: InstallAndUpdate;
   pushRoute?: PushRoute;
   onSendMessage?: (roomId: string, body: string, mentionUserIds?: string[]) => Promise<void>;
   onSendNudge?: (roomId: string) => Promise<void>;
@@ -3264,6 +3266,7 @@ export function Workspace({
   onUploadProfileBanner,
   onUpdateProfile,
   matrixSettingsActions,
+  install,
   pushRoute,
   onSendMessage,
   onSendNudge,
@@ -4254,6 +4257,7 @@ export function Workspace({
               setProfileOpen(true);
             }}
             matrixActions={matrixSettingsActions}
+            install={install}
             onSignOut={onSignOut}
             onClose={() => setSettingsOpen(false)}
           />

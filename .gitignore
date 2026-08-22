@@ -8,5 +8,6 @@ coverage/
 !.env.example
 .DS_Store
 *.log
+src-tauri/tauri.release.generated.json
 playwright-report/
 test-results/

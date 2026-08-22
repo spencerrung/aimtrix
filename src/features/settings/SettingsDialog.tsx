@@ -3,6 +3,7 @@ import {
   LogOut,
   Paintbrush,
   Palette,
+  RefreshCw,
   ShieldCheck,
   SlidersHorizontal,
   Sparkles,
@@ -26,6 +27,7 @@ import {
   type AccentName,
   type UserPreferences,
 } from '../../settings/preferences';
+import type { InstallAndUpdate, UpdateCheckResult } from '../../platform/platform';
 
 export interface ProfileUpdate {
   displayName: string;
@@ -43,6 +45,7 @@ interface SettingsDialogProps {
   onSaveProfile?: (update: ProfileUpdate) => Promise<void>;
   onOpenProfilePage: () => void;
   matrixActions?: MatrixSettingsActions;
+  install?: InstallAndUpdate;
   onSignOut: () => void;
   onClose: () => void;
 }
@@ -71,6 +74,7 @@ export function SettingsDialog({
   onSaveProfile,
   onOpenProfilePage,
   matrixActions,
+  install,
   onSignOut,
   onClose,
 }: SettingsDialogProps) {
@@ -81,6 +85,8 @@ export function SettingsDialog({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string>();
+  const [updateStatus, setUpdateStatus] = useState<UpdateCheckResult>();
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
 
   const updatePreferences = (update: Partial<UserPreferences>) => {
     onPreferencesChange({ ...preferences, ...update });
@@ -99,6 +105,17 @@ export function SettingsDialog({
       setError('Your homeserver did not accept that profile update.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const checkForUpdate = async () => {
+    if (!install) return;
+    setCheckingUpdate(true);
+    setUpdateStatus(undefined);
+    try {
+      setUpdateStatus(await install.checkForUpdate());
+    } finally {
+      setCheckingUpdate(false);
     }
   };
 
@@ -326,6 +343,26 @@ export function SettingsDialog({
                     onChange={(event) => updatePreferences({ detailsOpenByDefault: event.target.checked })}
                   />
                 </label>
+                {install?.displayMode() === 'standalone' ? (
+                  <div className="settings-update-card">
+                    <div className="settings-section-heading">
+                      <h2>Desktop updates</h2>
+                      <p>Signed updates are checked only when you ask. Your current session and encrypted data stay on this device.</p>
+                    </div>
+                    <div className="settings-save-row">
+                      <button className="aqua-button" type="button" onClick={() => void checkForUpdate()} disabled={checkingUpdate}>
+                        <RefreshCw size={14} /> {checkingUpdate ? 'Checking…' : 'Check for updates'}
+                      </button>
+                      {updateStatus?.status === 'available' ? (
+                        <button className="aqua-button aqua-button--primary" type="button" onClick={() => void updateStatus.install()}>
+                          Install Aimtrix {updateStatus.version}
+                        </button>
+                      ) : null}
+                    </div>
+                    {updateStatus?.status === 'current' ? <p className="settings-hint">You’re up to date.</p> : null}
+                    {updateStatus?.status === 'unavailable' ? <p className="settings-error" role="alert">The signed update channel could not be reached.</p> : null}
+                  </div>
+                ) : null}
               </div>
             ) : (
               <MatrixSettingsPanel

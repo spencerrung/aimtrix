@@ -63,8 +63,15 @@ export interface AppLifecycle {
   subscribeShutdown(listener: () => void): () => void;
 }
 
+export type UpdateCheckResult =
+  | { status: 'available'; version: string; date?: string; notes?: string; install(): Promise<void> }
+  | { status: 'current' }
+  | { status: 'unsupported' }
+  | { status: 'unavailable' };
+
 export interface InstallAndUpdate {
   displayMode(): 'browser' | 'standalone';
+  checkForUpdate(): Promise<UpdateCheckResult>;
 }
 
 export interface DeepLinkService {

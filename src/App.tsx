@@ -220,6 +220,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
+        install={platform.install}
         pushRoute={pushRoute}
         onSendMessage={(roomId, body, mentionUserIds) => controller.sendMessage(roomId, body, mentionUserIds)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}

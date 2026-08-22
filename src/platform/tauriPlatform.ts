@@ -9,6 +9,8 @@ import {
   requestPermission,
   sendNotification,
 } from '@tauri-apps/plugin-notification';
+import { relaunch } from '@tauri-apps/plugin-process';
+import { check } from '@tauri-apps/plugin-updater';
 import {
   parseStoredMatrixSession,
   SESSION_KEY,
@@ -21,10 +23,12 @@ import type {
   CredentialStore,
   DeepLinkService,
   DeviceMedia,
+  InstallAndUpdate,
   NotificationRequest,
   NotificationService,
   PushService,
   SsoPendingState,
+  UpdateCheckResult,
 } from './platform';
 
 const SSO_KEY = 'aimtrix.sso-pending.v1';
@@ -233,6 +237,30 @@ function createTauriMedia(): DeviceMedia {
   };
 }
 
+function createTauriInstall(): InstallAndUpdate {
+  return {
+    displayMode: () => 'standalone',
+    async checkForUpdate(): Promise<UpdateCheckResult> {
+      try {
+        const update = await check();
+        if (!update) return { status: 'current' };
+        return {
+          status: 'available',
+          version: update.version,
+          date: update.date ?? undefined,
+          notes: update.body ?? undefined,
+          install: async () => {
+            await update.downloadAndInstall();
+            await relaunch();
+          },
+        };
+      } catch {
+        return { status: 'unavailable' };
+      }
+    },
+  };
+}
+
 export function createTauriPlatform(): AimtrixPlatform {
   return {
     capabilities: {
@@ -249,7 +277,7 @@ export function createTauriPlatform(): AimtrixPlatform {
     notifications: createTauriNotifications(),
     push: createTauriPush(),
     lifecycle: createTauriLifecycle(),
-    install: { displayMode: () => 'standalone' },
+    install: createTauriInstall(),
     deepLinks: createTauriDeepLinks(),
     media: createTauriMedia(),
   };
