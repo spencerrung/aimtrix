@@ -90,6 +90,48 @@ describe('MatrixController protocol integration', () => {
     });
   });
 
+  it('uploads selected custom emoji and sends one rich text event', async () => {
+    const uploadContent = vi.fn().mockResolvedValue({ content_uri: 'mxc://test/bufo' });
+    const sendMessage = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      blob: () => Promise.resolve(new Blob(['png'], { type: 'image/png' })),
+    }));
+    try {
+      const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+      inject(controller, {
+        getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+        uploadContent,
+        sendMessage,
+      } as unknown as Partial<MatrixClient>, {
+        MsgType: { Text: 'm.text' },
+      });
+
+      await controller.sendMessage('!room:test', 'ugh :bufo-wave:', [], [{
+        shortcode: ':bufo-wave:',
+        id: 'bufo-wave',
+        name: 'Bufo wave',
+        src: '/emoji/bufo-wave.png',
+      }]);
+
+      expect(uploadContent).toHaveBeenCalledWith(expect.any(Blob), {
+        name: 'bufo-wave.png',
+        type: 'image/png',
+        includeFilename: false,
+      });
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('!room:test', {
+        msgtype: 'm.text',
+        body: 'ugh :bufo-wave:',
+        format: 'org.matrix.custom.html',
+        formatted_body: '<p>ugh <img data-mx-emoticon src="mxc://test/bufo" alt=":bufo-wave:" title=":bufo-wave:" height="32"></p>',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps mention metadata inside standard Matrix replacement content', async () => {
     const sendEvent = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));

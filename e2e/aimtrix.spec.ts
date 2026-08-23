@@ -205,12 +205,16 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await page.getByRole('button', { name: 'Add emoji' }).click();
   const emojiPicker = page.getByLabel('Emoji picker');
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
+  const ownMessageCount = await page.locator('.timeline-message--own').count();
   await emojiPicker.getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
   await expect(composer).toHaveValue('🌈:bufo-add-bufo:');
+  await expect(page.locator('.composer__preview img')).toBeVisible();
   await expect(page.getByRole('img', { name: 'Add Bufo' })).not.toBeVisible();
   await composer.press('Enter');
-  await expect(page.getByText('🌈')).toBeVisible();
-  await expect(page.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
+  await expect(page.locator('.timeline-message--own')).toHaveCount(ownMessageCount + 1);
+  const inlineEmojiMessage = page.locator('.timeline-message--own').last();
+  await expect(inlineEmojiMessage).toContainText('🌈');
+  await expect(inlineEmojiMessage.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByRole('button', { name: 'Send Aqua hello' }).click();

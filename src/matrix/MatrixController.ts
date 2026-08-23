@@ -30,6 +30,7 @@ import { resolveHomeserver } from './discovery';
 import {
   matrixFormattedMessage,
   matrixReplyFormattedBody,
+  type MatrixInlineEmote,
   type MatrixMessageMention,
 } from './messageFormatting';
 import {
@@ -169,6 +170,7 @@ export class MatrixController {
     mimetype: string;
     size: number;
   }>>();
+  private readonly inlineEmoteUploads = new Map<string, Promise<string>>();
   private activeCall?: MatrixCall;
   private callSummary?: CallSummary;
   private callDevices = { microphoneId: '', cameraId: '' };
@@ -679,6 +681,7 @@ export class MatrixController {
     this.mediaObjectUrls.clear();
     this.mediaRequests.clear();
     this.stickerUploads.clear();
+    this.inlineEmoteUploads.clear();
   }
 
   public async loadSettings(): Promise<MatrixSettingsSnapshot> {
@@ -1794,6 +1797,55 @@ export class MatrixController {
     }
   }
 
+  private async uploadInlineEmotes(
+    emotes: Array<{ shortcode: string; id: string; name: string; src: string }>,
+  ): Promise<MatrixInlineEmote[]> {
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    return Promise.all(emotes.map(async (emote) => {
+      const cacheKey = `${this.activeSession?.userId}|inline-emote|${emote.id}|${emote.src}`;
+      let uploaded = this.inlineEmoteUploads.get(cacheKey);
+      if (!uploaded) {
+        uploaded = (async () => {
+          const response = await fetch(emote.src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+          if (!response.ok) throw new Error('Custom emoji asset could not be loaded.');
+          const contentLength = Number(response.headers.get('content-length') ?? 0);
+          if (contentLength > this.config.media.maxUploadBytes) {
+            throw new Error('Custom emoji exceeds the configured upload limit.');
+          }
+          const blob = await response.blob();
+          if (!blob.type.startsWith('image/') || blob.size > this.config.media.maxUploadBytes) {
+            throw new Error('Custom emoji returned unsupported media.');
+          }
+          const extension = ({
+            'image/gif': 'gif',
+            'image/jpeg': 'jpg',
+            'image/png': 'png',
+            'image/svg+xml': 'svg',
+            'image/webp': 'webp',
+          } as Record<string, string>)[blob.type] ?? 'bin';
+          const result = await client.uploadContent(blob, {
+            name: `${emote.id}.${extension}`,
+            type: blob.type,
+            includeFilename: false,
+          });
+          return result.content_uri;
+        })();
+        this.inlineEmoteUploads.set(cacheKey, uploaded);
+      }
+      try {
+        return {
+          shortcode: emote.shortcode,
+          name: emote.name,
+          mxcUrl: await uploaded,
+        };
+      } catch (error) {
+        this.inlineEmoteUploads.delete(cacheKey);
+        throw error;
+      }
+    }));
+  }
+
   public async sendSticker(
     roomId: string,
     sticker: { id: string; name: string; src: string },
@@ -1938,13 +1990,22 @@ export class MatrixController {
     body: string,
     target: { id: string; senderId: string; body: string; threadRootId?: string },
     mentions: MatrixMessageMention[] = [],
+    inlineEmotes: Array<{ shortcode: string; id: string; name: string; src: string }> = [],
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
     if (!client || !sdk || !message) return;
+    if (inlineEmotes.length) {
+      const room = client.getRoom(roomId);
+      if (!room) throw new Error('Room is not available.');
+      if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
+        throw new Error('Encryption is not ready for this room.');
+      }
+    }
     const quoted = target.body.split('\n').map((line) => `> <${target.senderId}> ${line}`).join('\n');
-    const formatted = matrixFormattedMessage(message, mentions);
+    const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
+    const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     const mentionUserIds = [...new Set([...formatted.usedMentionUserIds, target.senderId])];
     const mentionContent = mentionUserIds.length
       ? { 'm.mentions': { user_ids: mentionUserIds } }
@@ -2032,12 +2093,21 @@ export class MatrixController {
     eventId: string,
     body: string,
     mentions: MatrixMessageMention[] = [],
+    inlineEmotes: Array<{ shortcode: string; id: string; name: string; src: string }> = [],
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
     if (!client || !sdk || !message) return;
-    const formatted = matrixFormattedMessage(message, mentions);
+    if (inlineEmotes.length) {
+      const room = client.getRoom(roomId);
+      if (!room) throw new Error('Room is not available.');
+      if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
+        throw new Error('Encryption is not ready for this room.');
+      }
+    }
+    const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
+    const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     const newContent = {
       msgtype: sdk.MsgType.Text,
       body: formatted.body,
@@ -2095,6 +2165,7 @@ export class MatrixController {
     roomId: string,
     body: string,
     mentions: MatrixMessageMention[] = [],
+    inlineEmotes: Array<{ shortcode: string; id: string; name: string; src: string }> = [],
   ): Promise<void> {
     const message = body.trim();
     const client = this.client;
@@ -2105,7 +2176,8 @@ export class MatrixController {
     if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
       throw new Error('Encryption is not ready for this room.');
     }
-    const formatted = matrixFormattedMessage(message, mentions);
+    const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
+    const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     await client.sendMessage(roomId, {
       msgtype: sdk.MsgType.Text,
       body: formatted.body,

@@ -54,15 +54,27 @@ function renderWorkspace(
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     profilePersonalization?: ProfilePersonalization;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
-    onSendMessage?: (roomId: string, body: string, mentions?: Array<{ userId: string; label: string }>) => Promise<void>;
+    onSendMessage?: (
+      roomId: string,
+      body: string,
+      mentions?: Array<{ userId: string; label: string }>,
+      inlineEmojis?: Array<{ shortcode: string; id: string; name: string; src: string }>,
+    ) => Promise<void>;
     onSendReply?: (
       roomId: string,
       body: string,
       target: { id: string; senderId: string; body: string; threadRootId?: string },
       mentions?: Array<{ userId: string; label: string }>,
+      inlineEmojis?: Array<{ shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onToggleReaction?: (roomId: string, eventId: string, key: string, ownReactionEventId?: string) => Promise<void>;
-    onEditMessage?: (roomId: string, eventId: string, body: string, mentions?: Array<{ userId: string; label: string }>) => Promise<void>;
+    onEditMessage?: (
+      roomId: string,
+      eventId: string,
+      body: string,
+      mentions?: Array<{ userId: string; label: string }>,
+      inlineEmojis?: Array<{ shortcode: string; id: string; name: string; src: string }>,
+    ) => Promise<void>;
     onSendSticker?: (roomId: string, sticker: { id: string; name: string; src: string }) => Promise<void>;
     onReorderRootSpaces?: (spaceIds: string[]) => Promise<void>;
     onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
@@ -967,12 +979,14 @@ describe('Workspace demo', () => {
       json: () => Promise.resolve({ entries: [{ id: 'bufo-wave', name: 'Bufo wave', src: './bufo-wave.png' }] }),
     }));
     try {
-      let finishStickerSend = () => {};
-      const onSendSticker = vi.fn(() => new Promise<void>((resolve) => {
-        finishStickerSend = resolve;
+      let finishMessageSend = () => {};
+      const onSendMessage = vi.fn(() => new Promise<void>((resolve) => {
+        finishMessageSend = resolve;
       }));
+      const onSendSticker = vi.fn().mockResolvedValue(undefined);
       renderWorkspace({
         workspace: { ...demoWorkspace, mode: 'matrix' as const },
+        onSendMessage,
         onSendSticker,
       });
       fireEvent.click(screen.getByRole('button', { name: 'Add emoji' }));
@@ -987,17 +1001,21 @@ describe('Workspace demo', () => {
 
       const composer = screen.getByLabelText('Message Welcome Lounge');
       expect(composer).toHaveValue(':bufo-wave:');
+      expect(document.querySelector('.composer__preview img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
+      expect(composer).toHaveClass('has-emoji-preview');
       expect(onSendSticker).not.toHaveBeenCalled();
       fireEvent.keyDown(composer, { key: 'Enter' });
-      await waitFor(() => expect(onSendSticker).toHaveBeenCalledWith('welcome', {
+      await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', ':bufo-wave:', [], [{
+        shortcode: ':bufo-wave:',
         id: 'bufo-wave',
         name: 'Bufo wave',
         src: 'http://localhost:3000/emoji/packs/standard/bufo-wave.png',
-      }));
+      }]));
       fireEvent.keyDown(composer, { key: 'Enter' });
-      expect(onSendSticker).toHaveBeenCalledTimes(1);
-      expect(composer).toHaveValue(':bufo-wave:');
-      finishStickerSend();
+      expect(onSendMessage).toHaveBeenCalledTimes(1);
+      expect(onSendSticker).not.toHaveBeenCalled();
+      expect(composer).toHaveValue('');
+      finishMessageSend();
       await waitFor(() => expect(composer).toHaveValue(''));
     } finally {
       vi.unstubAllGlobals();
@@ -1300,17 +1318,19 @@ describe('Workspace demo', () => {
       fireEvent.change(composer, { target: { value: 'hello :bufo' } });
       const bufoListbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
       expect(within(bufoListbox).getByText('bufo wave')).toBeInTheDocument();
-      expect(within(bufoListbox).getByText('sends on submit')).toBeInTheDocument();
+      expect(within(bufoListbox).getByText('inline emoji')).toBeInTheDocument();
       fireEvent.keyDown(composer, { key: 'Tab' });
       expect(composer).toHaveValue('hello :bufo-wave:');
       expect(onSendSticker).not.toHaveBeenCalled();
 
       fireEvent.keyDown(composer, { key: 'Enter' });
-      await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', 'hello'));
-      expect(onSendSticker).toHaveBeenCalledWith('welcome', expect.objectContaining({
+      await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', 'hello :bufo-wave:', [], [{
+        shortcode: ':bufo-wave:',
         id: 'bufo-wave',
         name: 'bufo wave',
-      }));
+        src: 'http://localhost:3000/emoji/packs/standard/bufo-wave.png',
+      }]));
+      expect(onSendSticker).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();
     }

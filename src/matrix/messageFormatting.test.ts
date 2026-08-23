@@ -64,6 +64,36 @@ describe('matrixFormattedMessage', () => {
     expect(result.usedMentionUserIds).toEqual(['@mara_one_two:example.org']);
   });
 
+  it('formats selected image emoji inline with a portable plaintext fallback', () => {
+    const body = 'ugh :bufo-wave:';
+    expect(matrixFormattedMessage(body, [], [{
+      shortcode: ':bufo-wave:',
+      name: 'Bufo wave',
+      mxcUrl: 'mxc://example.org/bufo',
+    }])).toEqual({
+      body,
+      formattedBody: '<p>ugh <img data-mx-emoticon src="mxc://example.org/bufo" alt=":bufo-wave:" title=":bufo-wave:" height="32"></p>',
+      usedMentionUserIds: [],
+    });
+  });
+
+  it('replaces only explicitly selected shortcode occurrences and composes with mentions', () => {
+    const result = matrixFormattedMessage('@Alice :bufo: :bufo:', mentions, [{
+      shortcode: ':bufo:',
+      name: 'Bufo',
+      mxcUrl: 'mxc://example.org/bufo',
+    }]);
+    expect(result.formattedBody).toBe('<p><a href="https://matrix.to/#/%40alice%3Aexample.org">@Alice</a> <img data-mx-emoticon src="mxc://example.org/bufo" alt=":bufo:" title=":bufo:" height="32"> :bufo:</p>');
+    expect(result.usedMentionUserIds).toEqual(['@alice:example.org']);
+  });
+
+  it('does not emit custom emoji HTML for non-Matrix media URLs or code', () => {
+    const emote = { shortcode: ':bufo:', name: 'Bufo', mxcUrl: 'https://example.org/bufo.png' };
+    expect(matrixFormattedMessage(':bufo:', [], [emote])).toEqual({ body: ':bufo:', usedMentionUserIds: [] });
+    expect(matrixFormattedMessage('`:bufo:`', [], [{ ...emote, mxcUrl: 'mxc://example.org/bufo' }]).formattedBody)
+      .toBe('<p><code>:bufo:</code></p>');
+  });
+
   it('builds a standard rich reply fallback before formatted reply content', () => {
     expect(matrixReplyFormattedBody('!room:example.org', {
       id: '$event:example.org',

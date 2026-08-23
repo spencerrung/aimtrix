@@ -118,9 +118,11 @@ type ComposerMention = {
   label: string;
 };
 
-type PendingInlineSticker = {
+type ComposerInlineEmoji = {
   shortcode: string;
-  sticker: { id: string; name: string; src: string };
+  id: string;
+  name: string;
+  src: string;
 };
 
 function hasVisibleComposerMention(body: string, label: string): boolean {
@@ -128,10 +130,10 @@ function hasVisibleComposerMention(body: string, label: string): boolean {
   return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(body);
 }
 
-function pendingStickersStillInDraft(
+function inlineEmojisStillInDraft(
   draft: string,
-  pending: PendingInlineSticker[],
-): PendingInlineSticker[] {
+  pending: ComposerInlineEmoji[],
+): ComposerInlineEmoji[] {
   const available = new Map<string, number>();
   for (const { shortcode } of pending) {
     if (available.has(shortcode)) continue;
@@ -149,13 +151,6 @@ function pendingStickersStillInDraft(
     available.set(shortcode, remaining - 1);
     return true;
   });
-}
-
-function draftWithoutPendingStickers(draft: string, pending: PendingInlineSticker[]): string {
-  return pending
-    .reduce((body, { shortcode }) => body.replace(shortcode, ''), draft)
-    .replace(/[ \t]{2,}/g, ' ')
-    .trim();
 }
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
@@ -408,7 +403,7 @@ interface WorkspaceProps {
   matrixSettingsActions?: MatrixSettingsActions;
   install?: InstallAndUpdate;
   pushRoute?: PushRoute;
-  onSendMessage?: (roomId: string, body: string, mentions?: ComposerMention[]) => Promise<void>;
+  onSendMessage?: (roomId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onSendNudge?: (roomId: string) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
@@ -426,8 +421,9 @@ interface WorkspaceProps {
     body: string,
     target: { id: string; senderId: string; body: string; threadRootId?: string },
     mentions?: ComposerMention[],
+    inlineEmojis?: ComposerInlineEmoji[],
   ) => Promise<void>;
-  onEditMessage?: (roomId: string, eventId: string, body: string, mentions?: ComposerMention[]) => Promise<void>;
+  onEditMessage?: (roomId: string, eventId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onRedactMessage?: (roomId: string, eventId: string) => Promise<void>;
   onTogglePinnedMessage?: (roomId: string, eventId: string, pinned: boolean) => Promise<void>;
   onToggleReaction?: (
@@ -533,6 +529,71 @@ function IconButton({
     >
       {children}
     </button>
+  );
+}
+
+function ComposerEmojiPreview({
+  draft,
+  inlineEmojis,
+  scrollTop,
+}: {
+  draft: string;
+  inlineEmojis: ComposerInlineEmoji[];
+  scrollTop: number;
+}) {
+  const queues = new Map<string, ComposerInlineEmoji[]>();
+  for (const emoji of inlineEmojis) {
+    const shortcode = emoji.shortcode.toLowerCase();
+    queues.set(shortcode, [...(queues.get(shortcode) ?? []), emoji]);
+  }
+  const content: ReactNode[] = [];
+  const shortcodePattern = /:[a-z0-9][a-z0-9_+-]*:/gi;
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+  while ((match = shortcodePattern.exec(draft))) {
+    if (match.index > cursor) content.push(draft.slice(cursor, match.index));
+    const queue = queues.get(match[0].toLowerCase());
+    const emoji = queue?.shift();
+    if (emoji) {
+      content.push(
+        <span
+          className="composer__emoji-token"
+          style={{ display: 'inline-grid', width: '1.5em', height: '1.35em', placeItems: 'center', verticalAlign: '-0.22em' }}
+          key={`emoji:${match.index}:${emoji.id}`}
+        >
+          <EmojiAsset entry={emoji} alt="" style={{ width: '1.35em', height: '1.35em' }} />
+        </span>,
+      );
+    } else {
+      content.push(match[0]);
+    }
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < draft.length) content.push(draft.slice(cursor));
+  return (
+    <span
+      className="composer__preview"
+      aria-hidden="true"
+      style={{
+        gridArea: '1 / 1',
+        display: 'block',
+        minHeight: 34,
+        maxHeight: 130,
+        padding: '8px 10px',
+        overflow: 'hidden',
+        color: 'var(--text)',
+        background: 'var(--surface-raised)',
+        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+        fontSize: '0.88rem',
+        lineHeight: 1.35,
+        whiteSpace: 'pre-wrap',
+        overflowWrap: 'break-word',
+        boxShadow: 'inset 0 1px 2px rgba(30,50,65,0.1)',
+        pointerEvents: 'none',
+      }}
+    >
+      <span style={{ display: 'block', transform: `translateY(-${scrollTop}px)` }}>{content}</span>
+    </span>
   );
 }
 
@@ -1888,7 +1949,7 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: (body?: string, mentions?: ComposerMention[]) => Promise<boolean>;
+  onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<boolean>;
   onThreadSubmit: (mentions?: ComposerMention[]) => Promise<boolean>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
@@ -1940,6 +2001,7 @@ function Conversation({
   const [colonIndex, setColonIndex] = useState(0);
   const [colonDismissed, setColonDismissed] = useState<string>();
   const [composerCaret, setComposerCaret] = useState(0);
+  const [composerScrollTop, setComposerScrollTop] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
   const [timelineDetached, setTimelineDetached] = useState(false);
   const [threadPanelWidth, setThreadPanelWidth] = useState(() => {
@@ -1961,6 +2023,7 @@ function Conversation({
   const [mentionsByRoom, setMentionsByRoom] = useState<Record<string, ComposerMention[]>>({});
   const selectedMentions = room?.id ? mentionsByRoom[room.id] ?? [] : [];
   const mentionsBeforeEdit = useRef<ComposerMention[]>([]);
+  const inlineEmojisBeforeEdit = useRef<ComposerInlineEmoji[]>([]);
   const setSelectedMentions = (update: ComposerMention[] | ((current: ComposerMention[]) => ComposerMention[])) => {
     if (!room?.id) return;
     setMentionsByRoom((current) => {
@@ -1968,15 +2031,15 @@ function Conversation({
       return { ...current, [room.id]: next };
     });
   };
-  const [pendingStickersByRoom, setPendingStickersByRoom] = useState<Record<string, PendingInlineSticker[]>>({});
-  const pendingStickerSendInFlight = useRef(false);
-  const [sendingPendingStickers, setSendingPendingStickers] = useState(false);
-  const pendingInlineStickers = room?.id ? pendingStickersByRoom[room.id] ?? [] : [];
-  const setPendingInlineStickers = (
-    update: PendingInlineSticker[] | ((current: PendingInlineSticker[]) => PendingInlineSticker[]),
+  const [inlineEmojisByRoom, setInlineEmojisByRoom] = useState<Record<string, ComposerInlineEmoji[]>>({});
+  const inlineEmojiSendInFlight = useRef(false);
+  const [sendingInlineEmojis, setSendingInlineEmojis] = useState(false);
+  const inlineEmojis = room?.id ? inlineEmojisByRoom[room.id] ?? [] : [];
+  const setInlineEmojis = (
+    update: ComposerInlineEmoji[] | ((current: ComposerInlineEmoji[]) => ComposerInlineEmoji[]),
   ) => {
     if (!room?.id) return;
-    setPendingStickersByRoom((current) => {
+    setInlineEmojisByRoom((current) => {
       const next = typeof update === 'function' ? update(current[room.id] ?? []) : update;
       return { ...current, [room.id]: next };
     });
@@ -2122,44 +2185,35 @@ function Conversation({
     .slice(0, emojiQuery.trim() ? 48 : MAX_VISIBLE_EMOJI_RESULTS);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (pendingStickerSendInFlight.current) return;
-    const sendingStickers = pendingInlineStickers.length > 0;
-    if (sendingStickers) {
-      pendingStickerSendInFlight.current = true;
-      setSendingPendingStickers(true);
+    if (inlineEmojiSendInFlight.current) return;
+    const sendingEmoji = inlineEmojis.length > 0;
+    if (sendingEmoji) {
+      inlineEmojiSendInFlight.current = true;
+      setSendingInlineEmojis(true);
     }
     void (async () => {
-      const messageDraft = draftWithoutPendingStickers(draft, pendingInlineStickers);
-      const isFencedDraft = messageDraft.startsWith('```');
+      const isFencedDraft = draft.startsWith('```');
       const body = codeDraftMode
-        ? `\`\`\`${codeLanguage}\n${messageDraft}\n\`\`\``
-        : isFencedDraft || pendingInlineStickers.length ? messageDraft : undefined;
+        ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\``
+        : isFencedDraft || inlineEmojis.length ? draft : undefined;
       const editMentions = (editingMessage?.mentions ?? []).map((mention) => ({
         userId: mention.userId,
         label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
       }));
       const activeMentions = [...selectedMentions, ...editMentions]
         .filter((mention, index, values) =>
-          hasVisibleComposerMention(messageDraft, mention.label) &&
+          hasVisibleComposerMention(draft, mention.label) &&
           values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
         );
-      const sentMessage = messageDraft ? await onSubmit(body, activeMentions) : true;
+      const sentMessage = await onSubmit(body, activeMentions, inlineEmojis);
       if (!sentMessage) return;
-
-      const failedStickers: PendingInlineSticker[] = [];
-      for (const pending of pendingInlineStickers) {
-        if (!await onSendSticker(pending.sticker)) failedStickers.push(pending);
-      }
-      setPendingInlineStickers(failedStickers);
-      if (!messageDraft || failedStickers.length) {
-        onDraftChange(failedStickers.map(({ shortcode }) => shortcode).join(' '));
-      }
+      setInlineEmojis([]);
       setSelectedMentions([]);
-      if (messageDraft || pendingInlineStickers.length !== failedStickers.length) returnToLatest();
+      returnToLatest();
     })().finally(() => {
-      if (sendingStickers) {
-        pendingStickerSendInFlight.current = false;
-        setSendingPendingStickers(false);
+      if (sendingEmoji) {
+        inlineEmojiSendInFlight.current = false;
+        setSendingInlineEmojis(false);
       }
       setCodeDraftMode(false);
       requestAnimationFrame(() => mainComposer.current?.focus());
@@ -2171,7 +2225,7 @@ function Conversation({
     nextCaret = nextDraft.length,
   ) => {
     const shortcode = `:${sticker.id}:`;
-    setPendingInlineStickers((current) => [...current, { shortcode, sticker }]);
+    setInlineEmojis((current) => [...current, { shortcode, ...sticker }]);
     onDraftChange(nextDraft);
     rememberEmoji(shortcode);
     setComposerCaret(nextCaret);
@@ -2198,6 +2252,8 @@ function Conversation({
   };
   const startEdit = (message: MessageSummary) => {
     mentionsBeforeEdit.current = selectedMentions;
+    inlineEmojisBeforeEdit.current = inlineEmojis;
+    setInlineEmojis([]);
     setSelectedMentions((message.mentions ?? []).map((mention) => ({
       userId: mention.userId,
       label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
@@ -2206,7 +2262,9 @@ function Conversation({
   };
   const cancelContext = () => {
     setSelectedMentions(mentionsBeforeEdit.current);
+    setInlineEmojis(inlineEmojisBeforeEdit.current);
     mentionsBeforeEdit.current = [];
+    inlineEmojisBeforeEdit.current = [];
     onCancelContext();
   };
   const startThreadEdit = (message: MessageSummary) => {
@@ -3017,7 +3075,7 @@ function Conversation({
               <span className="colon-complete__name">
                 {result.type === 'emoji' && result.emoji ? `:${result.name.replace(/\s+/g, '')}:` : result.name}
               </span>
-              {result.type === 'sticker' || (result.type === 'emoji' && !result.emoji) ? <small>sends on submit</small> : null}
+              {result.type === 'sticker' || (result.type === 'emoji' && !result.emoji) ? <small>inline emoji</small> : null}
             </button>
           ))}
         </div>
@@ -3050,31 +3108,44 @@ function Conversation({
         </IconButton>
         <label className="composer__field">
           <span className="sr-only">Message {room.name}</span>
-          <textarea
-            ref={mainComposer}
-            rows={1}
-            value={draft}
-            placeholder={`Message ${room.name}`}
-            onChange={(event) => {
-              const nextDraft = event.target.value;
-              setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
-              setPendingInlineStickers((current) => pendingStickersStillInDraft(nextDraft, current));
-              setComposerCaret(event.target.selectionStart ?? nextDraft.length);
-              if (nextDraft === '```') {
-                setCodeDraftMode(true);
-                setCodeLanguage('text');
-                onDraftChange('');
-              } else {
-                onDraftChange(nextDraft);
-              }
-            }}
-            onSelect={(event) => setComposerCaret(event.currentTarget.selectionStart ?? 0)}
-            onFocus={() => setComposerFocused(true)}
-            onBlur={() => setComposerFocused(false)}
-            onKeyDown={handleKeyDown}
-            onPaste={uploadPastedImage}
-            disabled={sending || sendingPendingStickers}
-          />
+          <span className="composer__input" style={{ display: 'grid', minWidth: 0 }}>
+            {inlineEmojis.length ? <ComposerEmojiPreview draft={draft} inlineEmojis={inlineEmojis} scrollTop={composerScrollTop} /> : null}
+            <textarea
+              ref={mainComposer}
+              className={inlineEmojis.length ? 'has-emoji-preview' : undefined}
+              style={inlineEmojis.length ? {
+                gridArea: '1 / 1',
+                zIndex: 1,
+                color: 'transparent',
+                caretColor: 'var(--text)',
+                background: 'transparent',
+                boxShadow: 'none',
+              } : undefined}
+              rows={1}
+              value={draft}
+              placeholder={`Message ${room.name}`}
+              onChange={(event) => {
+                const nextDraft = event.target.value;
+                setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
+                setInlineEmojis((current) => inlineEmojisStillInDraft(nextDraft, current));
+                setComposerCaret(event.target.selectionStart ?? nextDraft.length);
+                if (nextDraft === '```') {
+                  setCodeDraftMode(true);
+                  setCodeLanguage('text');
+                  onDraftChange('');
+                } else {
+                  onDraftChange(nextDraft);
+                }
+              }}
+              onSelect={(event) => setComposerCaret(event.currentTarget.selectionStart ?? 0)}
+              onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
+              onFocus={() => setComposerFocused(true)}
+              onBlur={() => setComposerFocused(false)}
+              onKeyDown={handleKeyDown}
+              onPaste={uploadPastedImage}
+              disabled={sending || sendingInlineEmojis}
+            />
+          </span>
         </label>
         {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
         {gifEndpoint ? (
@@ -3109,7 +3180,7 @@ function Conversation({
         </select>
         <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
         {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
-        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending || sendingPendingStickers}>
+        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending || sendingInlineEmojis}>
           <Send size={17} />
         </button>
       </form>
@@ -4203,7 +4274,11 @@ export function Workspace({
     onPreferencesChange(nextPreferences);
   };
 
-  const submitMessage = async (draftOverride?: string, mentions: ComposerMention[] = []): Promise<boolean> => {
+  const submitMessage = async (
+    draftOverride?: string,
+    mentions: ComposerMention[] = [],
+    inlineEmojis: ComposerInlineEmoji[] = [],
+  ): Promise<boolean> => {
     if (!effectiveRoomId || !draft.trim() || sending) return false;
     const body = (draftOverride ?? draft).trim();
     setDrafts((current) => ({ ...current, [effectiveRoomId]: '' }));
@@ -4221,7 +4296,8 @@ export function Workspace({
             ),
           }));
         } else if (onEditMessage) {
-          await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions);
+          if (inlineEmojis.length) await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions, inlineEmojis);
+          else await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions);
         }
       } else if (workspace.mode === 'demo') {
         const message: MessageSummary = {
@@ -4244,15 +4320,18 @@ export function Workspace({
         sentMessage = true;
       } else if (replyTarget && onSendReply) {
         const threadRootId = replyThreadRootId ?? replyTarget.threadRootId;
-        await onSendReply(effectiveRoomId, body, {
+        const target = {
           id: replyTarget.id,
           senderId: replyTarget.senderId,
           body: replyTarget.body,
           threadRootId,
-        }, mentions);
+        };
+        if (inlineEmojis.length) await onSendReply(effectiveRoomId, body, target, mentions, inlineEmojis);
+        else await onSendReply(effectiveRoomId, body, target, mentions);
         sentMessage = true;
       } else if (onSendMessage) {
-        if (mentions.length) await onSendMessage(effectiveRoomId, body, mentions);
+        if (inlineEmojis.length) await onSendMessage(effectiveRoomId, body, mentions, inlineEmojis);
+        else if (mentions.length) await onSendMessage(effectiveRoomId, body, mentions);
         else await onSendMessage(effectiveRoomId, body);
         sentMessage = true;
       }

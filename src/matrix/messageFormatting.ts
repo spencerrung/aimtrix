@@ -3,6 +3,12 @@ export type MatrixMessageMention = {
   label: string;
 };
 
+export type MatrixInlineEmote = {
+  shortcode: string;
+  name: string;
+  mxcUrl: string;
+};
+
 export type MatrixFormattedMessage = {
   body: string;
   formattedBody?: string;
@@ -33,8 +39,9 @@ const formatText = (
   value: string,
   mentions: MatrixMessageMention[],
   usedMentionUserIds: Set<string>,
+  inlineEmotes: Map<string, MatrixInlineEmote[]>,
 ): string => {
-  if (!value || mentions.length === 0) return escapeHtml(value);
+  if (!value || (mentions.length === 0 && inlineEmotes.size === 0)) return escapeHtml(value);
 
   const candidates = mentions
     .filter(({ label, userId }) => label.length > 0 && userId.length > 0)
@@ -44,6 +51,17 @@ const formatText = (
   let result = '';
   let cursor = 0;
   while (cursor < value.length) {
+    const emoteEntry = [...inlineEmotes.entries()].find(([shortcode, emotes]) =>
+      emotes.length > 0 && value.slice(cursor, cursor + shortcode.length).toLowerCase() === shortcode,
+    );
+    if (emoteEntry) {
+      const [shortcode, emotes] = emoteEntry;
+      const emote = emotes.shift()!;
+      const visible = value.slice(cursor, cursor + shortcode.length);
+      result += `<img data-mx-emoticon src="${escapeAttribute(emote.mxcUrl)}" alt="${escapeAttribute(visible)}" title="${escapeAttribute(visible)}" height="32">`;
+      cursor += shortcode.length;
+      continue;
+    }
     const candidate = candidates.find(({ visible }) => {
       if (!value.startsWith(visible, cursor)) return false;
       const previous = value.slice(0, cursor).match(/.$/u)?.[0];
@@ -70,6 +88,7 @@ const formatInline = (
   value: string,
   mentions: MatrixMessageMention[],
   usedMentionUserIds: Set<string>,
+  inlineEmotes: Map<string, MatrixInlineEmote[]>,
 ): string => {
   const parts: string[] = [];
   let cursor = 0;
@@ -77,13 +96,13 @@ const formatInline = (
   let match: RegExpExecArray | null;
 
   while ((match = inlineMarkup.exec(value))) {
-    parts.push(formatText(value.slice(cursor, match.index), mentions, usedMentionUserIds));
+    parts.push(formatText(value.slice(cursor, match.index), mentions, usedMentionUserIds, inlineEmotes));
     if (match[1] !== undefined) parts.push(`<code>${escapeHtml(match[1])}</code>`);
-    else if (match[2] !== undefined) parts.push(`<strong>${formatText(match[2], mentions, usedMentionUserIds)}</strong>`);
-    else parts.push(`<em>${formatText(match[3], mentions, usedMentionUserIds)}</em>`);
+    else if (match[2] !== undefined) parts.push(`<strong>${formatText(match[2], mentions, usedMentionUserIds, inlineEmotes)}</strong>`);
+    else parts.push(`<em>${formatText(match[3], mentions, usedMentionUserIds, inlineEmotes)}</em>`);
     cursor = match.index + match[0].length;
   }
-  parts.push(formatText(value.slice(cursor), mentions, usedMentionUserIds));
+  parts.push(formatText(value.slice(cursor), mentions, usedMentionUserIds, inlineEmotes));
 
   return parts.join('');
 };
@@ -91,10 +110,20 @@ const formatInline = (
 export function matrixFormattedMessage(
   body: string,
   mentions: MatrixMessageMention[] = [],
+  inlineEmotes: MatrixInlineEmote[] = [],
 ): MatrixFormattedMessage {
   const usedMentionUserIds = new Set<string>();
   const hasVisibleMention = mentions.some(({ label }) => label.length > 0 && body.includes(`@${label}`));
-  if (!/[`*_]/.test(body) && !hasVisibleMention) return { body, usedMentionUserIds: [] };
+  const validInlineEmotes = inlineEmotes.filter(({ shortcode, mxcUrl }) =>
+    /^:[a-z0-9][a-z0-9_+-]*:$/i.test(shortcode) && mxcUrl.startsWith('mxc://'),
+  );
+  const hasVisibleEmote = validInlineEmotes.some(({ shortcode }) => body.toLowerCase().includes(shortcode.toLowerCase()));
+  if (!/[`*_]/.test(body) && !hasVisibleMention && !hasVisibleEmote) return { body, usedMentionUserIds: [] };
+  const emoteQueues = new Map<string, MatrixInlineEmote[]>();
+  for (const emote of validInlineEmotes) {
+    const shortcode = emote.shortcode.toLowerCase();
+    emoteQueues.set(shortcode, [...(emoteQueues.get(shortcode) ?? []), emote]);
+  }
 
   const blocks: string[] = [];
   let cursor = 0;
@@ -102,13 +131,13 @@ export function matrixFormattedMessage(
   let match: RegExpExecArray | null;
   while ((match = fence.exec(body))) {
     const before = body.slice(cursor, match.index);
-    if (before) blocks.push(`<p>${formatInline(before, mentions, usedMentionUserIds).replaceAll('\n', '<br>')}</p>`);
+    if (before) blocks.push(`<p>${formatInline(before, mentions, usedMentionUserIds, emoteQueues).replaceAll('\n', '<br>')}</p>`);
     const language = (match[1] ?? '').toLowerCase().replace(/[^a-z0-9+-]/g, '');
     blocks.push(`<pre><code${language ? ` class="language-${language}"` : ''}>${escapeHtml(match[2])}</code></pre>`);
     cursor = match.index + match[0].length;
   }
   const tail = body.slice(cursor);
-  if (tail) blocks.push(`<p>${formatInline(tail, mentions, usedMentionUserIds).replaceAll('\n', '<br>')}</p>`);
+  if (tail) blocks.push(`<p>${formatInline(tail, mentions, usedMentionUserIds, emoteQueues).replaceAll('\n', '<br>')}</p>`);
 
   return { body, formattedBody: blocks.join(''), usedMentionUserIds: [...usedMentionUserIds] };
 }

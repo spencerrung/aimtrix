@@ -222,15 +222,15 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         matrixSettingsActions={matrixSettingsActions}
         install={platform.install}
         pushRoute={pushRoute}
-        onSendMessage={(roomId, body, mentions) => controller.sendMessage(roomId, body, mentions)}
+        onSendMessage={(roomId, body, mentions, inlineEmojis) => controller.sendMessage(roomId, body, mentions, inlineEmojis)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
         onRoomSelected={(roomId) => controller.loadRoomHistory(roomId)}
         onSpaceSelected={(spaceId) => controller.loadSpaceHierarchy(spaceId)}
         onReorganizeSpaceChildren={(update) => controller.reorganizeSpaceChildren(update)}
         onReorderRootSpaces={(spaceIds) => controller.reorderRootSpaces(spaceIds)}
-        onSendReply={(roomId, body, target, mentions) => controller.sendReply(roomId, body, target, mentions)}
-        onEditMessage={(roomId, eventId, body, mentions) => controller.editMessage(roomId, eventId, body, mentions)}
+        onSendReply={(roomId, body, target, mentions, inlineEmojis) => controller.sendReply(roomId, body, target, mentions, inlineEmojis)}
+        onEditMessage={(roomId, eventId, body, mentions, inlineEmojis) => controller.editMessage(roomId, eventId, body, mentions, inlineEmojis)}
         onRedactMessage={(roomId, eventId) => controller.redactMessage(roomId, eventId)}
         onTogglePinnedMessage={(roomId, eventId, pinned) => controller.togglePinnedMessage(roomId, eventId, pinned)}
         onToggleReaction={(roomId, eventId, key, ownReactionEventId) =>
