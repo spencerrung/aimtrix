@@ -123,12 +123,16 @@ describe('Workspace demo', () => {
     expect(composer).toHaveValue('');
   });
 
-  it('selects a room member mention and sends standard mention metadata', () => {
+  it('selects a room member mention with arrows and Tab and sends standard mention metadata', () => {
     const onSendMessage = vi.fn().mockResolvedValue(undefined);
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onSendMessage });
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: '@mar' } });
-    fireEvent.click(screen.getByRole('option', { name: /Mara/ }));
+    fireEvent.change(composer, { target: { value: '@' } });
+    const suggestions = screen.getByRole('listbox', { name: 'Mention a room member' });
+    expect(within(suggestions).getByRole('option', { name: /Spencer/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    expect(within(suggestions).getByRole('option', { name: /Mara/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'Tab' });
     expect(composer).toHaveValue('@Mara ');
     fireEvent.keyDown(composer, { key: 'Enter' });
     expect(onSendMessage).toHaveBeenCalledWith('welcome', '@Mara', [{
@@ -428,7 +432,7 @@ describe('Workspace demo', () => {
       target: { value: 'bufo' },
     });
 
-    const image = (await within(picker).findByRole('button', { name: 'Send Bufo wave as sticker' }))
+    const image = (await within(picker).findByRole('button', { name: 'Insert :bufo-wave:' }))
       .querySelector('img')!;
     expect(image).toHaveAttribute(
       'src',
@@ -545,7 +549,7 @@ describe('Workspace demo', () => {
     await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2-thread-2', 'Keep Aqua; lose the bad UX.', []));
   });
 
-  it('selects and sends portable mentions from the thread composer', async () => {
+  it('selects thread mentions with arrows and Enter and sends portable metadata', async () => {
     const onSendReply = vi.fn().mockResolvedValue(undefined);
     renderWorkspace({
       workspace: { ...demoWorkspace, mode: 'matrix' as const },
@@ -554,8 +558,10 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     const composer = within(thread).getByLabelText('Message thread');
-    fireEvent.change(composer, { target: { value: '@mar' } });
-    fireEvent.click(within(thread).getByRole('option', { name: /Mara/ }));
+    fireEvent.change(composer, { target: { value: '@' } });
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    expect(within(thread).getByRole('option', { name: /Mara/ })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'Enter' });
     expect(composer).toHaveValue('@Mara ');
     fireEvent.keyDown(composer, { key: 'Enter' });
 
@@ -954,14 +960,17 @@ describe('Workspace demo', () => {
     expect(screen.getByLabelText('Message Welcome Lounge')).toHaveValue('🌈');
   });
 
-  it('sends an image-backed emoji as an interoperable Matrix sticker', async () => {
+  it('stages an image-backed emoji until the composer is submitted', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       headers: { get: () => null },
       json: () => Promise.resolve({ entries: [{ id: 'bufo-wave', name: 'Bufo wave', src: './bufo-wave.png' }] }),
     }));
     try {
-      const onSendSticker = vi.fn().mockResolvedValue(undefined);
+      let finishStickerSend = () => {};
+      const onSendSticker = vi.fn(() => new Promise<void>((resolve) => {
+        finishStickerSend = resolve;
+      }));
       renderWorkspace({
         workspace: { ...demoWorkspace, mode: 'matrix' as const },
         onSendSticker,
@@ -972,16 +981,24 @@ describe('Workspace demo', () => {
         target: { value: 'bufo' },
       });
 
-      const bufoButton = await within(picker).findByRole('button', { name: 'Send Bufo wave as sticker' });
+      const bufoButton = await within(picker).findByRole('button', { name: 'Insert :bufo-wave:' });
       expect(bufoButton.querySelector('img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
       fireEvent.click(bufoButton);
 
-      expect(screen.getByLabelText('Message Welcome Lounge')).toHaveValue('');
-      expect(onSendSticker).toHaveBeenCalledWith('welcome', {
+      const composer = screen.getByLabelText('Message Welcome Lounge');
+      expect(composer).toHaveValue(':bufo-wave:');
+      expect(onSendSticker).not.toHaveBeenCalled();
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      await waitFor(() => expect(onSendSticker).toHaveBeenCalledWith('welcome', {
         id: 'bufo-wave',
         name: 'Bufo wave',
         src: 'http://localhost:3000/emoji/packs/standard/bufo-wave.png',
-      });
+      }));
+      fireEvent.keyDown(composer, { key: 'Enter' });
+      expect(onSendSticker).toHaveBeenCalledTimes(1);
+      expect(composer).toHaveValue(':bufo-wave:');
+      finishStickerSend();
+      await waitFor(() => expect(composer).toHaveValue(''));
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1025,14 +1042,16 @@ describe('Workspace demo', () => {
     expect(screen.queryByRole('button', { name: /GIF Club/ })).not.toBeInTheDocument();
   });
 
-  it('reorders top-level spaces without adding drag badges to their icons', () => {
+  it('drags a top-level space downward without adding drag badges to its icon', () => {
     const { container } = renderWorkspace();
     const spaces = screen.getByRole('navigation', { name: 'Spaces' });
+    const dataTransfer = { effectAllowed: 'none' };
+    const friends = within(spaces).getByRole('button', { name: 'Friends' });
+    const homelab = within(spaces).getByRole('button', { name: 'Homelab' });
 
-    fireEvent.keyDown(within(spaces).getByRole('button', { name: 'Friends' }), {
-      key: 'ArrowDown',
-      altKey: true,
-    });
+    fireEvent.dragStart(friends, { dataTransfer });
+    fireEvent.dragOver(homelab, { dataTransfer });
+    fireEvent.drop(homelab, { dataTransfer });
 
     const labels = within(spaces).getAllByRole('button').map((button) => button.getAttribute('aria-label'));
     expect(labels).toEqual(['Home', 'Direct Messages', 'Homelab', 'Friends', 'Music']);
@@ -1250,7 +1269,7 @@ describe('Workspace demo', () => {
     expect(screen.queryByLabelText('Emoji picker')).not.toBeInTheDocument();
   });
 
-  it('completes Unicode emoji inline and sends image-backed emoji as a sticker', async () => {
+  it('completes Unicode emoji inline and stages image-backed emoji until submit', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       headers: { get: () => null },
@@ -1261,9 +1280,11 @@ describe('Workspace demo', () => {
       ] }),
     }));
     try {
+      const onSendMessage = vi.fn().mockResolvedValue(undefined);
       const onSendSticker = vi.fn().mockResolvedValue(undefined);
       renderWorkspace({
         workspace: { ...demoWorkspace, mode: 'matrix' as const },
+        onSendMessage,
         onSendSticker,
       });
       const composer = screen.getByLabelText('Message Welcome Lounge');
@@ -1279,9 +1300,13 @@ describe('Workspace demo', () => {
       fireEvent.change(composer, { target: { value: 'hello :bufo' } });
       const bufoListbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
       expect(within(bufoListbox).getByText('bufo wave')).toBeInTheDocument();
-      expect(within(bufoListbox).getByText('sends as sticker')).toBeInTheDocument();
+      expect(within(bufoListbox).getByText('sends on submit')).toBeInTheDocument();
+      fireEvent.keyDown(composer, { key: 'Tab' });
+      expect(composer).toHaveValue('hello :bufo-wave:');
+      expect(onSendSticker).not.toHaveBeenCalled();
+
       fireEvent.keyDown(composer, { key: 'Enter' });
-      expect(composer).toHaveValue('hello ');
+      await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', 'hello'));
       expect(onSendSticker).toHaveBeenCalledWith('welcome', expect.objectContaining({
         id: 'bufo-wave',
         name: 'bufo wave',

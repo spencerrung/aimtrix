@@ -118,9 +118,44 @@ type ComposerMention = {
   label: string;
 };
 
+type PendingInlineSticker = {
+  shortcode: string;
+  sticker: { id: string; name: string; src: string };
+};
+
 function hasVisibleComposerMention(body: string, label: string): boolean {
   const escaped = `@${label}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(body);
+}
+
+function pendingStickersStillInDraft(
+  draft: string,
+  pending: PendingInlineSticker[],
+): PendingInlineSticker[] {
+  const available = new Map<string, number>();
+  for (const { shortcode } of pending) {
+    if (available.has(shortcode)) continue;
+    let count = 0;
+    let cursor = 0;
+    while ((cursor = draft.indexOf(shortcode, cursor)) >= 0) {
+      count += 1;
+      cursor += shortcode.length;
+    }
+    available.set(shortcode, count);
+  }
+  return pending.filter(({ shortcode }) => {
+    const remaining = available.get(shortcode) ?? 0;
+    if (!remaining) return false;
+    available.set(shortcode, remaining - 1);
+    return true;
+  });
+}
+
+function draftWithoutPendingStickers(draft: string, pending: PendingInlineSticker[]): string {
+  return pending
+    .reduce((body, { shortcode }) => body.replace(shortcode, ''), draft)
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
 }
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
@@ -609,8 +644,7 @@ function SpaceRail({
     if (sourceIndex < 0) return;
     const next = [...orderedJoinedIds];
     next.splice(sourceIndex, 1);
-    const adjustedIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    next.splice(Math.max(0, Math.min(adjustedIndex, next.length)), 0, spaceId);
+    next.splice(Math.max(0, Math.min(targetIndex, next.length)), 0, spaceId);
     if (next.every((id, index) => id === orderedJoinedIds[index])) return;
     setLocalOrder(next);
     setReordering(true);
@@ -663,7 +697,7 @@ function SpaceRail({
                 if (draggedSpaceId) void reorder(draggedSpaceId, rootIndex);
                 setDraggedSpaceId(undefined);
               }}
-              onMove={(offset) => void reorder(space.id, rootIndex + (offset > 0 ? 2 : -1))}
+              onMove={(offset) => void reorder(space.id, rootIndex + offset)}
             />
           );
         })}
@@ -1873,7 +1907,7 @@ function Conversation({
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
   emojiPacks: EmojiPackDefinition[];
   emojiAssetBaseUrl?: string;
-  onSendSticker: (sticker: { id: string; name: string; src: string }) => void;
+  onSendSticker: (sticker: { id: string; name: string; src: string }) => Promise<boolean>;
   onUploadAttachment: (file: File, threadRootId?: string, codeLanguage?: string) => Promise<boolean>;
   onCancelUpload: () => void;
   onRetryUpload: () => void;
@@ -1934,10 +1968,30 @@ function Conversation({
       return { ...current, [room.id]: next };
     });
   };
+  const [pendingStickersByRoom, setPendingStickersByRoom] = useState<Record<string, PendingInlineSticker[]>>({});
+  const pendingStickerSendInFlight = useRef(false);
+  const [sendingPendingStickers, setSendingPendingStickers] = useState(false);
+  const pendingInlineStickers = room?.id ? pendingStickersByRoom[room.id] ?? [] : [];
+  const setPendingInlineStickers = (
+    update: PendingInlineSticker[] | ((current: PendingInlineSticker[]) => PendingInlineSticker[]),
+  ) => {
+    if (!room?.id) return;
+    setPendingStickersByRoom((current) => {
+      const next = typeof update === 'function' ? update(current[room.id] ?? []) : update;
+      return { ...current, [room.id]: next };
+    });
+  };
   const mentionQuery = draft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
-  const mentionMatches = mentionQuery === undefined ? [] : members.filter((member) =>
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState<string>();
+  const mentionMatches = mentionQuery === undefined || mentionDismissed === mentionQuery ? [] : members.filter((member) =>
     member.id.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery),
   ).slice(0, 6);
+  const [lastMentionQuery, setLastMentionQuery] = useState(mentionQuery);
+  if (lastMentionQuery !== mentionQuery) {
+    setLastMentionQuery(mentionQuery);
+    setMentionIndex(0);
+  }
   const [threadMentionsByRoot, setThreadMentionsByRoot] = useState<Record<string, ComposerMention[]>>({});
   const selectedThreadMentions = threadRoot?.id ? threadMentionsByRoot[threadRoot.id] ?? [] : [];
   const threadMentionsBeforeEdit = useRef<ComposerMention[]>([]);
@@ -1949,9 +2003,16 @@ function Conversation({
     });
   };
   const threadMentionQuery = threadDraft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
-  const threadMentionMatches = threadMentionQuery === undefined ? [] : members.filter((member) =>
+  const [threadMentionIndex, setThreadMentionIndex] = useState(0);
+  const [threadMentionDismissed, setThreadMentionDismissed] = useState<string>();
+  const threadMentionMatches = threadMentionQuery === undefined || threadMentionDismissed === threadMentionQuery ? [] : members.filter((member) =>
     member.id.toLowerCase().includes(threadMentionQuery) || member.displayName.toLowerCase().includes(threadMentionQuery),
   ).slice(0, 6);
+  const [lastThreadMentionQuery, setLastThreadMentionQuery] = useState(threadMentionQuery);
+  if (lastThreadMentionQuery !== threadMentionQuery) {
+    setLastThreadMentionQuery(threadMentionQuery);
+    setThreadMentionIndex(0);
+  }
   const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<EmojiPackEntry[]>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
@@ -2061,27 +2122,62 @@ function Conversation({
     .slice(0, emojiQuery.trim() ? 48 : MAX_VISIBLE_EMOJI_RESULTS);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const isFencedDraft = draft.startsWith('```');
-    const body = codeDraftMode
-      ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\``
-      : isFencedDraft ? draft : undefined;
-    const editMentions = (editingMessage?.mentions ?? []).map((mention) => ({
-      userId: mention.userId,
-      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
-    }));
-    const activeMentions = [...selectedMentions, ...editMentions]
-      .filter((mention, index, values) =>
-        hasVisibleComposerMention(draft, mention.label) &&
-        values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
-      );
-    void onSubmit(body, activeMentions).then((sent) => {
-      if (sent) {
-        setSelectedMentions([]);
-        returnToLatest();
+    if (pendingStickerSendInFlight.current) return;
+    const sendingStickers = pendingInlineStickers.length > 0;
+    if (sendingStickers) {
+      pendingStickerSendInFlight.current = true;
+      setSendingPendingStickers(true);
+    }
+    void (async () => {
+      const messageDraft = draftWithoutPendingStickers(draft, pendingInlineStickers);
+      const isFencedDraft = messageDraft.startsWith('```');
+      const body = codeDraftMode
+        ? `\`\`\`${codeLanguage}\n${messageDraft}\n\`\`\``
+        : isFencedDraft || pendingInlineStickers.length ? messageDraft : undefined;
+      const editMentions = (editingMessage?.mentions ?? []).map((mention) => ({
+        userId: mention.userId,
+        label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
+      }));
+      const activeMentions = [...selectedMentions, ...editMentions]
+        .filter((mention, index, values) =>
+          hasVisibleComposerMention(messageDraft, mention.label) &&
+          values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
+        );
+      const sentMessage = messageDraft ? await onSubmit(body, activeMentions) : true;
+      if (!sentMessage) return;
+
+      const failedStickers: PendingInlineSticker[] = [];
+      for (const pending of pendingInlineStickers) {
+        if (!await onSendSticker(pending.sticker)) failedStickers.push(pending);
       }
-    }).finally(() => {
+      setPendingInlineStickers(failedStickers);
+      if (!messageDraft || failedStickers.length) {
+        onDraftChange(failedStickers.map(({ shortcode }) => shortcode).join(' '));
+      }
+      setSelectedMentions([]);
+      if (messageDraft || pendingInlineStickers.length !== failedStickers.length) returnToLatest();
+    })().finally(() => {
+      if (sendingStickers) {
+        pendingStickerSendInFlight.current = false;
+        setSendingPendingStickers(false);
+      }
       setCodeDraftMode(false);
       requestAnimationFrame(() => mainComposer.current?.focus());
+    });
+  };
+  const stageInlineSticker = (
+    sticker: { id: string; name: string; src: string },
+    nextDraft: string,
+    nextCaret = nextDraft.length,
+  ) => {
+    const shortcode = `:${sticker.id}:`;
+    setPendingInlineStickers((current) => [...current, { shortcode, sticker }]);
+    onDraftChange(nextDraft);
+    rememberEmoji(shortcode);
+    setComposerCaret(nextCaret);
+    requestAnimationFrame(() => {
+      mainComposer.current?.focus();
+      mainComposer.current?.setSelectionRange(nextCaret, nextCaret);
     });
   };
   const insertMention = (member: MemberSummary) => {
@@ -2208,6 +2304,28 @@ function Conversation({
       if (event.key === 'Escape') {
         event.preventDefault();
         setColonDismissed(colon?.query);
+        return;
+      }
+    }
+    if (mentionMatches.length) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setMentionIndex((index) => (index + 1) % mentionMatches.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMentionIndex((index) => (index - 1 + mentionMatches.length) % mentionMatches.length);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        insertMention(mentionMatches[mentionIndex % mentionMatches.length]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMentionDismissed(mentionQuery);
         return;
       }
     }
@@ -2499,12 +2617,13 @@ function Conversation({
         onDraftChange(`${before}${result.emoji}${after}`);
         rememberEmoji(result.emoji);
       } else if (result.src) {
-        onDraftChange(`${before}${after}`);
-        onSendSticker({ id: result.id, name: result.name, src: result.src });
+        const sticker = { id: result.id, name: result.name, src: result.src };
+        const shortcode = `:${result.id}:`;
+        stageInlineSticker(sticker, `${before}${shortcode}${after}`, before.length + shortcode.length);
       }
     } else {
-      onDraftChange(`${before}${after}`);
-      onSendSticker({ id: result.id, name: result.name, src: result.src });
+      const shortcode = `:${result.id}:`;
+      stageInlineSticker(result, `${before}${shortcode}${after}`, before.length + shortcode.length);
     }
     setColonDismissed(colon.query);
   };
@@ -2550,6 +2669,28 @@ function Conversation({
   const stopPanelResize = () => { resizeStart.current = undefined; };
 
   const handleThreadComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (threadMentionMatches.length) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setThreadMentionIndex((index) => (index + 1) % threadMentionMatches.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setThreadMentionIndex((index) => (index - 1 + threadMentionMatches.length) % threadMentionMatches.length);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        insertThreadMention(threadMentionMatches[threadMentionIndex % threadMentionMatches.length]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setThreadMentionDismissed(threadMentionQuery);
+        return;
+      }
+    }
     if (
       event.key === 'ArrowUp'
       && !event.shiftKey
@@ -2756,7 +2897,15 @@ function Conversation({
             ))}
           </div>
           {threadMentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a thread member">
-            {threadMentionMatches.map((member) => <button type="button" role="option" key={member.id} onClick={() => insertThreadMention(member)}><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
+            {threadMentionMatches.map((member, index) => <button
+              type="button"
+              role="option"
+              aria-selected={index === threadMentionIndex % threadMentionMatches.length}
+              className={index === threadMentionIndex % threadMentionMatches.length ? 'is-active' : ''}
+              key={member.id}
+              onMouseEnter={() => setThreadMentionIndex(index)}
+              onClick={() => insertThreadMention(member)}
+            ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
           </div> : null}
           <form className="thread-panel__composer" onSubmit={submitThread}>
             {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={cancelThreadEdit}><X size={14} /></button></div> : null}
@@ -2810,7 +2959,7 @@ function Conversation({
                 key={`${sticker.id}:${sticker.src}`}
                 aria-label={`Send ${sticker.name}`}
                 onClick={() => {
-                  onSendSticker(sticker);
+                  void onSendSticker(sticker);
                   setStickerOpen(false);
                 }}
               ><ResolvedStickerImage sticker={sticker} /></button>
@@ -2827,14 +2976,15 @@ function Conversation({
               <button
                 type="button"
                 key={emojiReactionKey(entry)}
-                aria-label={entry.emoji ? `Insert ${entry.emoji}` : `Send ${entry.name} as sticker`}
+                aria-label={entry.emoji ? `Insert ${entry.emoji}` : `Insert :${entry.id}:`}
                 title={entry.name}
                 onClick={() => {
                   if (entry.emoji) {
                     onDraftChange(`${draft}${entry.emoji}`);
                     rememberEmoji(entry.emoji);
                   } else if (entry.src) {
-                    onSendSticker({ id: entry.id, name: entry.name, src: entry.src });
+                    const sticker = { id: entry.id, name: entry.name, src: entry.src };
+                    stageInlineSticker(sticker, `${draft}:${entry.id}:`);
                   }
                   setEmojiOpen(false);
                   setEmojiQuery('');
@@ -2867,13 +3017,21 @@ function Conversation({
               <span className="colon-complete__name">
                 {result.type === 'emoji' && result.emoji ? `:${result.name.replace(/\s+/g, '')}:` : result.name}
               </span>
-              {result.type === 'sticker' || (result.type === 'emoji' && !result.emoji) ? <small>sends as sticker</small> : null}
+              {result.type === 'sticker' || (result.type === 'emoji' && !result.emoji) ? <small>sends on submit</small> : null}
             </button>
           ))}
         </div>
       ) : null}
       {mentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a room member">
-        {mentionMatches.map((member) => <button type="button" role="option" key={member.id} onClick={() => insertMention(member)}><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
+        {mentionMatches.map((member, index) => <button
+          type="button"
+          role="option"
+          aria-selected={index === mentionIndex % mentionMatches.length}
+          className={index === mentionIndex % mentionMatches.length ? 'is-active' : ''}
+          key={member.id}
+          onMouseEnter={() => setMentionIndex(index)}
+          onClick={() => insertMention(member)}
+        ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
       </div> : null}
       <form className="composer" onSubmit={submit}>
         <input
@@ -2898,14 +3056,16 @@ function Conversation({
             value={draft}
             placeholder={`Message ${room.name}`}
             onChange={(event) => {
-              setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(event.target.value, mention.label)));
-              setComposerCaret(event.target.selectionStart ?? event.target.value.length);
-              if (event.target.value === '```') {
+              const nextDraft = event.target.value;
+              setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
+              setPendingInlineStickers((current) => pendingStickersStillInDraft(nextDraft, current));
+              setComposerCaret(event.target.selectionStart ?? nextDraft.length);
+              if (nextDraft === '```') {
                 setCodeDraftMode(true);
                 setCodeLanguage('text');
                 onDraftChange('');
               } else {
-                onDraftChange(event.target.value);
+                onDraftChange(nextDraft);
               }
             }}
             onSelect={(event) => setComposerCaret(event.currentTarget.selectionStart ?? 0)}
@@ -2913,7 +3073,7 @@ function Conversation({
             onBlur={() => setComposerFocused(false)}
             onKeyDown={handleKeyDown}
             onPaste={uploadPastedImage}
-            disabled={sending}
+            disabled={sending || sendingPendingStickers}
           />
         </label>
         {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
@@ -2949,7 +3109,7 @@ function Conversation({
         </select>
         <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
         {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
-        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending}>
+        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending || sendingPendingStickers}>
           <Send size={17} />
         </button>
       </form>
@@ -3881,7 +4041,7 @@ export function Workspace({
   };
 
   const sendSticker = async (sticker: { id: string; name: string; src: string }) => {
-    if (!effectiveRoomId) return;
+    if (!effectiveRoomId) return false;
     try {
       if (workspace.mode === 'demo') {
         const message: MessageSummary = {
@@ -3901,10 +4061,13 @@ export function Workspace({
           [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message],
         }));
       } else {
-        await onSendSticker?.(effectiveRoomId, sticker);
+        if (!onSendSticker) return false;
+        await onSendSticker(effectiveRoomId, sticker);
       }
+      return true;
     } catch {
       setNotice('That sticker could not be uploaded to Matrix.');
+      return false;
     }
   };
 
@@ -4350,7 +4513,7 @@ export function Workspace({
             onReact={handleReact}
             emojiPacks={availableEmojiPacks}
             emojiAssetBaseUrl={config.emojiPacks.assetBaseUrl}
-            onSendSticker={(sticker) => void sendSticker(sticker)}
+            onSendSticker={sendSticker}
             onUploadAttachment={(file, threadRootId, codeLanguage) => uploadAttachment(file, threadRootId, codeLanguage)}
             onCancelUpload={() => onCancelUpload?.()}
             onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload); }}

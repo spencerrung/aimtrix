@@ -86,7 +86,7 @@ test('desktop workspace panels resize, collapse, and restore', async ({ page }, 
 test('space arrange mode supports drag reordering and moving into a subspace', async ({ page }, testInfo) => {
   test.skip(testInfo.project.name === 'mobile', 'Native drag interaction is covered on desktop; mobile uses the same up/down and destination controls.');
   const spaces = page.getByRole('navigation', { name: 'Spaces' });
-  await spaces.getByRole('button', { name: 'Homelab' }).dragTo(spaces.getByRole('button', { name: 'Friends' }));
+  await spaces.getByRole('button', { name: 'Friends' }).dragTo(spaces.getByRole('button', { name: 'Homelab' }));
   await expect(spaces.getByRole('button').nth(2)).toHaveAccessibleName('Homelab');
   await expect(spaces.getByRole('button').nth(3)).toHaveAccessibleName('Friends');
   await expect(spaces.locator('.space-button__drag')).toHaveCount(0);
@@ -171,6 +171,15 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(page.getByText('Edited browser test message')).toBeVisible();
   await expect(page.getByLabel('Edited message').last()).toBeVisible();
 
+  await composer.fill('@');
+  const mentionSuggestions = page.getByRole('listbox', { name: 'Mention a room member' });
+  await composer.press('ArrowDown');
+  await expect(mentionSuggestions.getByRole('option', { name: /Mara/ })).toHaveAttribute('aria-selected', 'true');
+  await composer.press('Tab');
+  await expect(composer).toHaveValue('@Mara ');
+  await composer.press('Enter');
+  await expect(page.getByText('@Mara', { exact: true }).last()).toBeVisible();
+
   await page.getByRole('button', { name: 'Insert code block' }).click();
   await expect(page.getByLabel('Code block mode')).toHaveText('text code');
   await page.getByRole('combobox', { name: 'Code language' }).selectOption('javascript');
@@ -196,11 +205,12 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await page.getByRole('button', { name: 'Add emoji' }).click();
   const emojiPicker = page.getByLabel('Emoji picker');
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
-  await emojiPicker.getByRole('button', { name: 'Send Add Bufo as sticker' }).click();
-  await expect(composer).toHaveValue('🌈');
-  await expect(page.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
+  await emojiPicker.getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
+  await expect(composer).toHaveValue('🌈:bufo-add-bufo:');
+  await expect(page.getByRole('img', { name: 'Add Bufo' })).not.toBeVisible();
   await composer.press('Enter');
   await expect(page.getByText('🌈')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
 
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByRole('button', { name: 'Send Aqua hello' }).click();
