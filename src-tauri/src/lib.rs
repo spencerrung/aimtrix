@@ -13,6 +13,17 @@ const ALLOWED_KEYS: [&str; 3] = [
 ];
 
 #[cfg(target_os = "linux")]
+const WAYLAND_ABI_REEXEC: &str = "AIMTRIX_WAYLAND_ABI_REEXEC";
+
+#[cfg(target_os = "linux")]
+const WAYLAND_LIBRARIES: [&str; 4] = [
+    "libwayland-client.so.0",
+    "libwayland-egl.so.1",
+    "libwayland-cursor.so.0",
+    "libwayland-server.so.0",
+];
+
+#[cfg(target_os = "linux")]
 fn should_use_native_wayland(
     session_type: Option<&std::ffi::OsStr>,
     wayland_display: Option<&std::ffi::OsStr>,
@@ -21,6 +32,99 @@ fn should_use_native_wayland(
     !force_x11
         && session_type.is_some_and(|value| value == "wayland")
         && wayland_display.is_some_and(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn should_preload_host_wayland(
+    use_native_wayland: bool,
+    appimage: Option<&std::ffi::OsStr>,
+    appdir: Option<&std::ffi::OsStr>,
+    reexec_marker: Option<&std::ffi::OsStr>,
+) -> bool {
+    use_native_wayland
+        && !reexec_marker.is_some_and(|value| value == "1")
+        && appimage.is_some_and(|value| !value.is_empty())
+        && appdir.is_some_and(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn find_host_wayland_libraries(
+    directories: &[std::path::PathBuf],
+) -> Option<Vec<std::path::PathBuf>> {
+    directories.iter().find_map(|directory| {
+        let libraries = WAYLAND_LIBRARIES
+            .iter()
+            .map(|library| directory.join(library))
+            .collect::<Vec<_>>();
+        libraries
+            .iter()
+            .all(|path| path.is_file())
+            .then_some(libraries)
+    })
+}
+
+#[cfg(target_os = "linux")]
+fn build_wayland_preload(
+    existing: Option<&std::ffi::OsStr>,
+    libraries: &[std::path::PathBuf],
+) -> std::ffi::OsString {
+    let mut preload = existing
+        .filter(|value| !value.is_empty())
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    for library in libraries {
+        if !preload.is_empty() {
+            preload.push(":");
+        }
+        preload.push(library.as_os_str());
+    }
+    preload
+}
+
+#[cfg(target_os = "linux")]
+pub fn prepare_appimage_runtime() {
+    let force_x11 = std::env::var_os("AIMTRIX_FORCE_X11").is_some_and(|value| value == "1");
+    let use_native_wayland = should_use_native_wayland(
+        std::env::var_os("XDG_SESSION_TYPE").as_deref(),
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+        force_x11,
+    );
+    let should_preload = should_preload_host_wayland(
+        use_native_wayland,
+        std::env::var_os("APPIMAGE").as_deref(),
+        std::env::var_os("APPDIR").as_deref(),
+        std::env::var_os(WAYLAND_ABI_REEXEC).as_deref(),
+    );
+    if !should_preload {
+        return;
+    }
+
+    let directories = [
+        "/usr/lib",
+        "/lib",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/x86_64-linux-gnu",
+    ]
+    .map(std::path::PathBuf::from);
+    let Some(libraries) = find_host_wayland_libraries(&directories) else {
+        eprintln!("Aimtrix could not find a complete host Wayland ABI; continuing without preload");
+        return;
+    };
+    let preload = build_wayland_preload(std::env::var_os("LD_PRELOAD").as_deref(), &libraries);
+    let Ok(executable) = std::env::current_exe() else {
+        eprintln!(
+            "Aimtrix could not resolve its executable; continuing without Wayland ABI preload"
+        );
+        return;
+    };
+
+    use std::os::unix::process::CommandExt;
+    let error = std::process::Command::new(executable)
+        .args(std::env::args_os().skip(1))
+        .env("LD_PRELOAD", preload)
+        .env(WAYLAND_ABI_REEXEC, "1")
+        .exec();
+    eprintln!("Aimtrix could not restart with the host Wayland ABI: {error}");
 }
 
 #[cfg(target_os = "linux")]
@@ -40,6 +144,9 @@ fn configure_webview_runtime() {
         || std::path::Path::new("/sys/module/nvidia").exists();
     if nvidia_driver_loaded && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
         std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+    }
+    if std::env::var_os(WAYLAND_ABI_REEXEC).is_some_and(|value| value == "1") {
+        std::env::remove_var(WAYLAND_ABI_REEXEC);
     }
 }
 
@@ -221,8 +328,11 @@ pub fn run() {
 
 #[cfg(all(test, target_os = "linux"))]
 mod tests {
-    use super::should_use_native_wayland;
-    use std::ffi::OsStr;
+    use super::{
+        build_wayland_preload, find_host_wayland_libraries, should_preload_host_wayland,
+        should_use_native_wayland, WAYLAND_LIBRARIES,
+    };
+    use std::{ffi::OsStr, path::PathBuf};
 
     #[test]
     fn native_wayland_requires_a_wayland_session_and_display() {
@@ -250,5 +360,74 @@ mod tests {
             Some(OsStr::new("wayland-1")),
             true,
         ));
+    }
+
+    #[test]
+    fn preload_is_scoped_to_native_wayland_appimages_before_reexec() {
+        let appimage = Some(OsStr::new("/tmp/Aimtrix.AppImage"));
+        let appdir = Some(OsStr::new("/tmp/.mount_Aimtrix"));
+        assert!(should_preload_host_wayland(true, appimage, appdir, None));
+        assert!(!should_preload_host_wayland(false, appimage, appdir, None));
+        assert!(!should_preload_host_wayland(true, None, appdir, None));
+        assert!(!should_preload_host_wayland(true, appimage, None, None));
+        assert!(!should_preload_host_wayland(
+            true,
+            appimage,
+            appdir,
+            Some(OsStr::new("1"))
+        ));
+        assert!(should_preload_host_wayland(
+            true,
+            appimage,
+            appdir,
+            Some(OsStr::new(""))
+        ));
+        assert!(should_preload_host_wayland(
+            true,
+            appimage,
+            appdir,
+            Some(OsStr::new("unexpected"))
+        ));
+    }
+
+    #[test]
+    fn host_wayland_libraries_must_be_complete_in_one_directory() {
+        let root = std::env::temp_dir().join(format!("aimtrix-wayland-{}", std::process::id()));
+        let partial = root.join("partial");
+        let complete = root.join("complete");
+        std::fs::create_dir_all(&partial).unwrap();
+        std::fs::create_dir_all(&complete).unwrap();
+        std::fs::write(partial.join(WAYLAND_LIBRARIES[0]), []).unwrap();
+        for library in WAYLAND_LIBRARIES {
+            std::fs::write(complete.join(library), []).unwrap();
+        }
+
+        let result = find_host_wayland_libraries(&[partial, complete.clone()]).unwrap();
+        assert_eq!(
+            result,
+            WAYLAND_LIBRARIES
+                .iter()
+                .map(|library| complete.join(library))
+                .collect::<Vec<PathBuf>>()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn preload_preserves_existing_entries_before_host_wayland_libraries() {
+        let libraries = [
+            PathBuf::from("/usr/lib/libwayland-client.so.0"),
+            PathBuf::from("/usr/lib/libwayland-egl.so.1"),
+        ];
+        assert_eq!(
+            build_wayland_preload(Some(OsStr::new("/opt/tracer.so")), &libraries),
+            OsStr::new(
+                "/opt/tracer.so:/usr/lib/libwayland-client.so.0:/usr/lib/libwayland-egl.so.1"
+            )
+        );
+        assert_eq!(
+            build_wayland_preload(None, &libraries),
+            OsStr::new("/usr/lib/libwayland-client.so.0:/usr/lib/libwayland-egl.so.1")
+        );
     }
 }
