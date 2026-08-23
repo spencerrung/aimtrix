@@ -27,7 +27,11 @@ import {
 } from '../settings/profilePersonalization';
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { resolveHomeserver } from './discovery';
-import { matrixFormattedMessage } from './messageFormatting';
+import {
+  matrixFormattedMessage,
+  matrixReplyFormattedBody,
+  type MatrixMessageMention,
+} from './messageFormatting';
 import {
   databaseNames,
   type StoredMatrixSession,
@@ -37,6 +41,11 @@ import type { AimtrixPlatform } from '../platform/platform';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { SpaceHierarchyRoomData } from './spaceHierarchy';
 import type { PushRoute } from '../pwa/pushRouting';
+import {
+  createRootSpaceOrderContent,
+  isValidMsc3230Order,
+  sortRootSpaceIds,
+} from './rootSpaceOrdering';
 import {
   DIRECT_BACKGROUNDS_EVENT,
   ROOM_BACKGROUND_EVENT,
@@ -83,7 +92,8 @@ type Subscriber = () => void;
 type MatrixSdk = typeof import('matrix-js-sdk');
 const PERSONALIZATION_EVENT = 'dev.alucard.aimtrix.preferences.v1';
 const PROFILE_PERSONALIZATION_EVENT = 'dev.alucard.aimtrix.profile.v1';
-const SPACE_ORDER_EVENT = 'dev.alucard.aimtrix.space_order.v1';
+const SPACE_ORDER_EVENT = 'org.matrix.msc3230.space_order';
+const LEGACY_SPACE_ORDER_EVENT = 'dev.alucard.aimtrix.space_order.v1';
 
 let matrixSdkPromise: Promise<MatrixSdk> | undefined;
 
@@ -1204,20 +1214,69 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
-  private readRootSpaceOrder(): string[] {
-    if (this.rootSpaceOrderOverride) return this.rootSpaceOrderOverride;
+  private readLegacyRootSpaceOrder(): string[] {
     const event = (
       this.client as unknown as { getAccountData: (type: string) => MatrixEvent | undefined }
-    )?.getAccountData(SPACE_ORDER_EVENT);
+    )?.getAccountData(LEGACY_SPACE_ORDER_EVENT);
     const order = event?.getContent<{ order?: unknown }>().order;
     return Array.isArray(order)
       ? order.filter((spaceId): spaceId is string => typeof spaceId === 'string')
       : [];
   }
 
+  private joinedRootSpaceIds(): string[] {
+    return this.client?.getRooms()
+      .filter((room) => {
+        if (room.getType() !== 'm.space' || room.getMyMembership() !== 'join') return false;
+        const parents = room.currentState.getStateEvents('m.space.parent') as MatrixEvent[];
+        return !parents.some((event) => {
+          const via = event.getContent<{ via?: unknown }>().via;
+          return !event.isRedacted() && Array.isArray(via) && via.some((server) => typeof server === 'string');
+        });
+      })
+      .map((room) => room.roomId) ?? [];
+  }
+
+  private readSyncedRootSpaceOrder(): string[] {
+    const client = this.client;
+    if (!client) return [];
+    const rootIds = this.joinedRootSpaceIds();
+    const orders = new Map(rootIds.map((roomId) => [
+      roomId,
+      client.getRoom(roomId)?.getAccountData(SPACE_ORDER_EVENT)?.getContent(),
+    ]));
+    return sortRootSpaceIds(rootIds, orders, this.readLegacyRootSpaceOrder());
+  }
+
+  private migrateLegacyRootSpaceOrder(): void {
+    const client = this.client;
+    const sdk = this.sdk;
+    const legacyOrder = this.readLegacyRootSpaceOrder();
+    const rootIds = this.joinedRootSpaceIds();
+    if (this.rootSpaceOrderMigrationStarted || !client || !sdk || !legacyOrder.length || !rootIds.length) return;
+    const hasStandardOrder = rootIds.some((roomId) => isValidMsc3230Order(
+      client.getRoom(roomId)?.getAccountData(SPACE_ORDER_EVENT)?.getContent<{ order?: unknown }>().order,
+    ));
+    if (hasStandardOrder) return;
+
+    const orderedIds = sortRootSpaceIds(rootIds, {}, legacyOrder);
+    const content = createRootSpaceOrderContent(orderedIds);
+    this.rootSpaceOrderMigrationStarted = true;
+    void Promise.all(orderedIds.map((roomId) => client.setRoomAccountData(
+      roomId,
+      sdk.EventType.SpaceOrder,
+      content[roomId],
+    ))).then(() => this.scheduleWorkspacePublish()).catch(() => undefined);
+  }
+
+  private readRootSpaceOrder(): string[] {
+    return this.rootSpaceOrderOverride ?? this.readSyncedRootSpaceOrder();
+  }
+
   public async reorderRootSpaces(spaceIds: string[]): Promise<void> {
     const client = this.client;
-    if (!client || new Set(spaceIds).size !== spaceIds.length) {
+    const sdk = this.sdk;
+    if (!client || !sdk || new Set(spaceIds).size !== spaceIds.length) {
       throw new Error('The requested top-level space order is invalid.');
     }
     const joinedRoots = buildWorkspaceSnapshot(
@@ -1235,11 +1294,14 @@ export class MatrixController {
       throw new Error('Only joined top-level spaces can be reordered.');
     }
     this.rootSpaceOrderOverride = [...spaceIds];
-    const accountClient = client as unknown as {
-      setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
-    };
+    this.scheduleWorkspacePublish();
     try {
-      await accountClient.setAccountData(SPACE_ORDER_EVENT, { order: spaceIds });
+      const content = createRootSpaceOrderContent(spaceIds);
+      await Promise.all(spaceIds.map((spaceId) => client.setRoomAccountData(
+        spaceId,
+        sdk.EventType.SpaceOrder,
+        content[spaceId],
+      )));
       this.scheduleWorkspacePublish();
     } catch (error) {
       this.rootSpaceOrderOverride = undefined;
@@ -1767,8 +1829,15 @@ export class MatrixController {
             },
           };
         }
+        const extension = ({
+          'image/gif': 'gif',
+          'image/jpeg': 'jpg',
+          'image/png': 'png',
+          'image/svg+xml': 'svg',
+          'image/webp': 'webp',
+        } as Record<string, string>)[mimetype] ?? 'bin';
         const result = await client.uploadContent(blob, {
-          name: `${sticker.id}.svg`,
+          name: `${sticker.id}.${extension}`,
           type: mimetype,
           includeFilename: false,
         });
@@ -1868,12 +1937,24 @@ export class MatrixController {
     roomId: string,
     body: string,
     target: { id: string; senderId: string; body: string; threadRootId?: string },
+    mentions: MatrixMessageMention[] = [],
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
     if (!client || !sdk || !message) return;
     const quoted = target.body.split('\n').map((line) => `> <${target.senderId}> ${line}`).join('\n');
+    const formatted = matrixFormattedMessage(message, mentions);
+    const mentionUserIds = [...new Set([...formatted.usedMentionUserIds, target.senderId])];
+    const mentionContent = mentionUserIds.length
+      ? { 'm.mentions': { user_ids: mentionUserIds } }
+      : {};
+    const richContent = formatted.formattedBody
+      ? {
+          format: 'org.matrix.custom.html',
+          formatted_body: matrixReplyFormattedBody(roomId, target, formatted.formattedBody),
+        }
+      : {};
 
     if (target.threadRootId) {
       // Thread-scoped reply: use the 5-argument sendEvent overload so the SDK
@@ -1896,16 +1977,20 @@ export class MatrixController {
         {
           msgtype: sdk.MsgType.Text,
           body: `${quoted}\n\n${message}`,
+          ...mentionContent,
+          ...richContent,
           'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
-        },
+        } as RoomMessageEventContent,
       );
     } else {
       // Standard reply (no thread): use the 4-argument sendEvent overload.
       await client.sendEvent(roomId, sdk.EventType.RoomMessage, {
         msgtype: sdk.MsgType.Text,
         body: `${quoted}\n\n${message}`,
+        ...mentionContent,
+        ...richContent,
         'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
-      });
+      } as RoomMessageEventContent);
     }
     this.scheduleWorkspacePublish();
   }
@@ -1942,17 +2027,39 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
-  public async editMessage(roomId: string, eventId: string, body: string): Promise<void> {
+  public async editMessage(
+    roomId: string,
+    eventId: string,
+    body: string,
+    mentions: MatrixMessageMention[] = [],
+  ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
     if (!client || !sdk || !message) return;
+    const formatted = matrixFormattedMessage(message, mentions);
+    const newContent = {
+      msgtype: sdk.MsgType.Text,
+      body: formatted.body,
+      ...(formatted.usedMentionUserIds.length
+        ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } }
+        : {}),
+      ...(formatted.formattedBody
+        ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody }
+        : {}),
+    };
     await client.sendEvent(roomId, sdk.EventType.RoomMessage, {
       msgtype: sdk.MsgType.Text,
       body: `* ${message}`,
-      'm.new_content': { msgtype: sdk.MsgType.Text, body: message },
+      ...(formatted.usedMentionUserIds.length
+        ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } }
+        : {}),
+      ...(formatted.formattedBody
+        ? { format: 'org.matrix.custom.html', formatted_body: `* ${formatted.formattedBody}` }
+        : {}),
+      'm.new_content': newContent,
       'm.relates_to': { rel_type: sdk.RelationType.Replace, event_id: eventId },
-    });
+    } as RoomMessageEventContent);
     this.scheduleWorkspacePublish();
   }
 
@@ -1984,7 +2091,11 @@ export class MatrixController {
     await result;
   }
 
-  public async sendMessage(roomId: string, body: string, mentionUserIds: string[] = []): Promise<void> {
+  public async sendMessage(
+    roomId: string,
+    body: string,
+    mentions: MatrixMessageMention[] = [],
+  ): Promise<void> {
     const message = body.trim();
     const client = this.client;
     const sdk = this.sdk;
@@ -1994,13 +2105,15 @@ export class MatrixController {
     if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
       throw new Error('Encryption is not ready for this room.');
     }
-    const formatted = matrixFormattedMessage(message);
+    const formatted = matrixFormattedMessage(message, mentions);
     await client.sendMessage(roomId, {
       msgtype: sdk.MsgType.Text,
       body: formatted.body,
-      ...(mentionUserIds.length ? { 'm.mentions': { user_ids: mentionUserIds } } : {}),
+      ...(formatted.usedMentionUserIds.length
+        ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } }
+        : {}),
       ...(formatted.formattedBody ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody } : {}),
-    });
+    } as RoomMessageEventContent);
     if (this.notificationPreferences.notificationSounds) this.playSendTone();
     this.scheduleWorkspacePublish();
   }
@@ -2194,10 +2307,19 @@ export class MatrixController {
   }
 
   private signOnTonePlayed = false;
+  private rootSpaceOrderMigrationStarted = false;
 
   private readonly handleSync = (syncState: SyncState): void => {
     switch (syncState) {
       case 'PREPARED':
+        this.migrateLegacyRootSpaceOrder();
+        this.connection = 'online';
+        if (!this.signOnTonePlayed) {
+          this.signOnTonePlayed = true;
+          if (this.notificationPreferences.notificationSounds) this.playSignOnTone();
+        }
+        this.scheduleWorkspacePublish();
+        break;
       case 'SYNCING':
         this.connection = 'online';
         if (!this.signOnTonePlayed) {
@@ -2405,6 +2527,19 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   };
 
+  private readonly handleRoomAccountData = (event: MatrixEvent): void => {
+    if (event.getType() === SPACE_ORDER_EVENT && this.rootSpaceOrderOverride) {
+      const expected = createRootSpaceOrderContent(this.rootSpaceOrderOverride);
+      const complete = this.rootSpaceOrderOverride.every((spaceId) => {
+        const actual = this.client?.getRoom(spaceId)?.getAccountData(SPACE_ORDER_EVENT)
+          ?.getContent<{ order?: unknown }>().order;
+        return actual === expected[spaceId].order;
+      });
+      if (complete) this.rootSpaceOrderOverride = undefined;
+    }
+    this.scheduleWorkspacePublish();
+  };
+
   private readonly handleThreadUpdate = (thread: { room: Room }): void => {
     this.bumpRoomVersion(thread.room.roomId);
     this.scheduleWorkspacePublish();
@@ -2437,6 +2572,7 @@ export class MatrixController {
     this.client.on(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.on(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.on(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
+    this.client.on(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);
     this.client.on(this.sdk.RoomStateEvent.Events, this.handleRoomState);
     this.client.on(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.on(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
@@ -2451,6 +2587,7 @@ export class MatrixController {
     this.client.removeListener(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.removeListener(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.removeListener(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
+    this.client.removeListener(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);
     this.client.removeListener(this.sdk.RoomStateEvent.Events, this.handleRoomState);
     this.client.removeListener(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.removeListener(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);

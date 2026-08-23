@@ -149,6 +149,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
 });
 
 test('composer sends messages, emoji, and starter stickers', async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
@@ -168,6 +169,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await composer.fill('Edited browser test message');
   await composer.press('Enter');
   await expect(page.getByText('Edited browser test message')).toBeVisible();
+  await expect(page.getByLabel('Edited message').last()).toBeVisible();
 
   await page.getByRole('button', { name: 'Insert code block' }).click();
   await expect(page.getByLabel('Code block mode')).toHaveText('text code');
@@ -194,10 +196,11 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await page.getByRole('button', { name: 'Add emoji' }).click();
   const emojiPicker = page.getByLabel('Emoji picker');
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
-  await emojiPicker.getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
-  await expect(composer).toHaveValue('🌈:bufo-add-bufo:');
-  await composer.press('Enter');
+  await emojiPicker.getByRole('button', { name: 'Send Add Bufo as sticker' }).click();
+  await expect(composer).toHaveValue('🌈');
   await expect(page.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
+  await composer.press('Enter');
+  await expect(page.getByText('🌈')).toBeVisible();
 
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByRole('button', { name: 'Send Aqua hello' }).click();

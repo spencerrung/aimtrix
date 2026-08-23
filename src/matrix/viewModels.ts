@@ -93,6 +93,10 @@ export interface MessageSummary {
   pending?: boolean;
   edited?: boolean;
   mentionUserIds?: string[];
+  mentions?: Array<{
+    userId: string;
+    label: string;
+  }>;
   nudge?: boolean;
   replyTo?: {
     eventId: string;
