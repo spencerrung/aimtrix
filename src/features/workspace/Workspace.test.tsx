@@ -58,14 +58,14 @@ function renderWorkspace(
       roomId: string,
       body: string,
       mentions?: Array<{ userId: string; label: string }>,
-      inlineEmojis?: Array<{ shortcode: string; id: string; name: string; src: string }>,
+      inlineEmojis?: Array<{ marker: string; shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onSendReply?: (
       roomId: string,
       body: string,
       target: { id: string; senderId: string; body: string; threadRootId?: string },
       mentions?: Array<{ userId: string; label: string }>,
-      inlineEmojis?: Array<{ shortcode: string; id: string; name: string; src: string }>,
+      inlineEmojis?: Array<{ marker: string; shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onToggleReaction?: (roomId: string, eventId: string, key: string, ownReactionEventId?: string) => Promise<void>;
     onEditMessage?: (
@@ -73,7 +73,7 @@ function renderWorkspace(
       eventId: string,
       body: string,
       mentions?: Array<{ userId: string; label: string }>,
-      inlineEmojis?: Array<{ shortcode: string; id: string; name: string; src: string }>,
+      inlineEmojis?: Array<{ marker: string; shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onSendSticker?: (roomId: string, sticker: { id: string; name: string; src: string }) => Promise<void>;
     onReorderRootSpaces?: (spaceIds: string[]) => Promise<void>;
@@ -1000,12 +1000,13 @@ describe('Workspace demo', () => {
       fireEvent.click(bufoButton);
 
       const composer = screen.getByLabelText('Message Welcome Lounge');
-      expect(composer).toHaveValue(':bufo-wave:');
+      expect(composer).toHaveValue('\ue000');
       expect(document.querySelector('.composer__preview img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
       expect(composer).toHaveClass('has-emoji-preview');
       expect(onSendSticker).not.toHaveBeenCalled();
       fireEvent.keyDown(composer, { key: 'Enter' });
       await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', ':bufo-wave:', [], [{
+        marker: '\ue000',
         shortcode: ':bufo-wave:',
         id: 'bufo-wave',
         name: 'Bufo wave',
@@ -1320,11 +1321,12 @@ describe('Workspace demo', () => {
       expect(within(bufoListbox).getByText('bufo wave')).toBeInTheDocument();
       expect(within(bufoListbox).getByText('inline emoji')).toBeInTheDocument();
       fireEvent.keyDown(composer, { key: 'Tab' });
-      expect(composer).toHaveValue('hello :bufo-wave:');
+      expect(composer).toHaveValue('hello \ue000');
       expect(onSendSticker).not.toHaveBeenCalled();
 
       fireEvent.keyDown(composer, { key: 'Enter' });
       await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', 'hello :bufo-wave:', [], [{
+        marker: '\ue000',
         shortcode: ':bufo-wave:',
         id: 'bufo-wave',
         name: 'bufo wave',

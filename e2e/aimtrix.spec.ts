@@ -207,7 +207,8 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
   const ownMessageCount = await page.locator('.timeline-message--own').count();
   await emojiPicker.getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
-  await expect(composer).toHaveValue('🌈:bufo-add-bufo:');
+  await expect(composer).toHaveValue('🌈\ue000');
+  await expect(composer).toHaveJSProperty('selectionStart', 3);
   await expect(page.locator('.composer__preview img')).toBeVisible();
   await expect(page.getByRole('img', { name: 'Add Bufo' })).not.toBeVisible();
   await composer.press('Enter');

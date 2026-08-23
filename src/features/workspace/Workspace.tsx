@@ -119,6 +119,7 @@ type ComposerMention = {
 };
 
 type ComposerInlineEmoji = {
+  marker: string;
   shortcode: string;
   id: string;
   name: string;
@@ -134,23 +135,14 @@ function inlineEmojisStillInDraft(
   draft: string,
   pending: ComposerInlineEmoji[],
 ): ComposerInlineEmoji[] {
-  const available = new Map<string, number>();
-  for (const { shortcode } of pending) {
-    if (available.has(shortcode)) continue;
-    let count = 0;
-    let cursor = 0;
-    while ((cursor = draft.indexOf(shortcode, cursor)) >= 0) {
-      count += 1;
-      cursor += shortcode.length;
-    }
-    available.set(shortcode, count);
-  }
-  return pending.filter(({ shortcode }) => {
-    const remaining = available.get(shortcode) ?? 0;
-    if (!remaining) return false;
-    available.set(shortcode, remaining - 1);
-    return true;
-  });
+  return pending.filter(({ marker }) => draft.includes(marker));
+}
+
+function draftWithInlineEmojiFallbacks(draft: string, inlineEmojis: ComposerInlineEmoji[]): string {
+  return inlineEmojis.reduce(
+    (body, { marker, shortcode }) => body.replaceAll(marker, shortcode),
+    draft,
+  );
 }
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
@@ -541,33 +533,24 @@ function ComposerEmojiPreview({
   inlineEmojis: ComposerInlineEmoji[];
   scrollTop: number;
 }) {
-  const queues = new Map<string, ComposerInlineEmoji[]>();
-  for (const emoji of inlineEmojis) {
-    const shortcode = emoji.shortcode.toLowerCase();
-    queues.set(shortcode, [...(queues.get(shortcode) ?? []), emoji]);
-  }
+  const byMarker = new Map(inlineEmojis.map((emoji) => [emoji.marker, emoji]));
   const content: ReactNode[] = [];
-  const shortcodePattern = /:[a-z0-9][a-z0-9_+-]*:/gi;
   let cursor = 0;
-  let match: RegExpExecArray | null;
-  while ((match = shortcodePattern.exec(draft))) {
-    if (match.index > cursor) content.push(draft.slice(cursor, match.index));
-    const queue = queues.get(match[0].toLowerCase());
-    const emoji = queue?.shift();
+  for (let index = 0; index < draft.length; index += 1) {
+    const emoji = byMarker.get(draft[index]);
     if (emoji) {
+      if (index > cursor) content.push(draft.slice(cursor, index));
       content.push(
         <span
           className="composer__emoji-token"
-          style={{ display: 'inline-grid', width: '1.5em', height: '1.35em', placeItems: 'center', verticalAlign: '-0.22em' }}
-          key={`emoji:${match.index}:${emoji.id}`}
+          style={{ display: 'inline-grid', width: '1em', height: '1.35em', placeItems: 'center', verticalAlign: '-0.22em' }}
+          key={`emoji:${index}:${emoji.id}`}
         >
-          <EmojiAsset entry={emoji} alt="" style={{ width: '1.35em', height: '1.35em' }} />
+          <EmojiAsset entry={emoji} alt="" style={{ width: '1.35em', height: '1.35em', maxWidth: 'none' }} />
         </span>,
       );
-    } else {
-      content.push(match[0]);
+      cursor = index + 1;
     }
-    cursor = match.index + match[0].length;
   }
   if (cursor < draft.length) content.push(draft.slice(cursor));
   return (
@@ -2032,6 +2015,7 @@ function Conversation({
     });
   };
   const [inlineEmojisByRoom, setInlineEmojisByRoom] = useState<Record<string, ComposerInlineEmoji[]>>({});
+  const nextInlineEmojiMarker = useRef(0);
   const inlineEmojiSendInFlight = useRef(false);
   const [sendingInlineEmojis, setSendingInlineEmojis] = useState(false);
   const inlineEmojis = room?.id ? inlineEmojisByRoom[room.id] ?? [] : [];
@@ -2192,17 +2176,18 @@ function Conversation({
       setSendingInlineEmojis(true);
     }
     void (async () => {
-      const isFencedDraft = draft.startsWith('```');
+      const messageDraft = draftWithInlineEmojiFallbacks(draft, inlineEmojis);
+      const isFencedDraft = messageDraft.startsWith('```');
       const body = codeDraftMode
-        ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\``
-        : isFencedDraft || inlineEmojis.length ? draft : undefined;
+        ? `\`\`\`${codeLanguage}\n${messageDraft}\n\`\`\``
+        : isFencedDraft || inlineEmojis.length ? messageDraft : undefined;
       const editMentions = (editingMessage?.mentions ?? []).map((mention) => ({
         userId: mention.userId,
         label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
       }));
       const activeMentions = [...selectedMentions, ...editMentions]
         .filter((mention, index, values) =>
-          hasVisibleComposerMention(draft, mention.label) &&
+          hasVisibleComposerMention(messageDraft, mention.label) &&
           values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
         );
       const sentMessage = await onSubmit(body, activeMentions, inlineEmojis);
@@ -2221,11 +2206,18 @@ function Conversation({
   };
   const stageInlineSticker = (
     sticker: { id: string; name: string; src: string },
-    nextDraft: string,
-    nextCaret = nextDraft.length,
+    before: string,
+    after = '',
   ) => {
     const shortcode = `:${sticker.id}:`;
-    setInlineEmojis((current) => [...current, { shortcode, ...sticker }]);
+    let marker: string;
+    do {
+      marker = String.fromCharCode(0xe000 + (nextInlineEmojiMarker.current % 0x1900));
+      nextInlineEmojiMarker.current += 1;
+    } while (inlineEmojis.some((emoji) => emoji.marker === marker));
+    const nextDraft = `${before}${marker}${after}`;
+    const nextCaret = before.length + marker.length;
+    setInlineEmojis((current) => [...current, { marker, shortcode, ...sticker }]);
     onDraftChange(nextDraft);
     rememberEmoji(shortcode);
     setComposerCaret(nextCaret);
@@ -2676,12 +2668,10 @@ function Conversation({
         rememberEmoji(result.emoji);
       } else if (result.src) {
         const sticker = { id: result.id, name: result.name, src: result.src };
-        const shortcode = `:${result.id}:`;
-        stageInlineSticker(sticker, `${before}${shortcode}${after}`, before.length + shortcode.length);
+        stageInlineSticker(sticker, before, after);
       }
     } else {
-      const shortcode = `:${result.id}:`;
-      stageInlineSticker(result, `${before}${shortcode}${after}`, before.length + shortcode.length);
+      stageInlineSticker(result, before, after);
     }
     setColonDismissed(colon.query);
   };
@@ -3042,7 +3032,7 @@ function Conversation({
                     rememberEmoji(entry.emoji);
                   } else if (entry.src) {
                     const sticker = { id: entry.id, name: entry.name, src: entry.src };
-                    stageInlineSticker(sticker, `${draft}:${entry.id}:`);
+                    stageInlineSticker(sticker, draft);
                   }
                   setEmojiOpen(false);
                   setEmojiQuery('');
