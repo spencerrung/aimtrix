@@ -61,10 +61,10 @@ jobs:
           set -euo pipefail
           case "$target" in
             all)
-              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-22.04","bundles":"appimage,deb,rpm","target":"linux"},{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"},{"name":"Windows x86_64","os":"windows-2022","bundles":"nsis,msi","target":"windows"}]}'
+              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-24.04","bundles":"appimage,deb,rpm","target":"linux"},{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"},{"name":"Windows x86_64","os":"windows-2022","bundles":"nsis,msi","target":"windows"}]}'
               ;;
             linux)
-              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-22.04","bundles":"appimage,deb,rpm","target":"linux"}]}'
+              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-24.04","bundles":"appimage,deb,rpm","target":"linux"}]}'
               ;;
             macos)
               matrix='{"include":[{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"}]}'
@@ -125,6 +125,11 @@ jobs:
             librsvg2-dev \
             patchelf \
             xdg-utils
+          webkit_version=$(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)
+          dpkg --compare-versions "$webkit_version" ge 2.52 || {
+            echo "Linux releases require WebKitGTK 2.52 or newer; found $webkit_version" >&2
+            exit 1
+          }
 
       - name: Stage Linux GStreamer runtime
         if: runner.os == 'Linux'
@@ -240,7 +245,7 @@ jobs:
     name: Audit release assets
     needs: build
     if: ${{ needs.build.result == 'success' }}
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     steps:
       - name: Checkout release tag
         uses: actions/checkout@v7

@@ -959,7 +959,9 @@
   .drawer-profile { position: relative; display: grid; justify-items: center; padding: 83px 16px 17px; overflow: hidden; text-align: center; border-bottom: 1px solid var(--border-soft); }
   .drawer-profile__sky { position: absolute; inset: 0 0 auto; height: 112px; overflow: hidden; border-bottom: 1px solid color-mix(in srgb, var(--drawer-color) 50%, var(--border)); background: radial-gradient(circle at 78% 20%, rgba(255,255,255,0.55), transparent 24%), linear-gradient(135deg, color-mix(in srgb, var(--drawer-color) 58%, white), var(--drawer-color)); }
   .drawer-profile__sky::after { position: absolute; inset: 0; content: ""; background: repeating-linear-gradient(135deg, transparent 0 13px, rgba(255,255,255,0.08) 13px 14px); }
-  .drawer-profile__sky i { position: absolute; z-index: 1; width: 8px; height: 8px; border-radius: 50%; background: rgba(255,255,255,0.75); box-shadow: 0 0 10px white; animation: drawer-twinkle 2.8s ease-in-out infinite; }
+  .drawer-profile__sky i { position: absolute; z-index: 1; width: 8px; height: 8px; opacity: 0.65; border-radius: 50%; background: rgba(255,255,255,0.75); box-shadow: 0 0 10px white; transform: scale(0.9); }
+  .drawer-profile:hover .drawer-profile__sky i,
+  .drawer-profile:focus-within .drawer-profile__sky i { animation: drawer-twinkle 2.8s ease-in-out 1; }
   .drawer-profile__sky i:nth-child(1) { top: 24px; left: 34px; }
   .drawer-profile__sky i:nth-child(2) { top: 48px; right: 42px; animation-delay: 700ms; }
   .drawer-profile__sky i:nth-child(3) { top: 19px; right: 86px; width: 4px; height: 4px; animation-delay: 1.2s; }

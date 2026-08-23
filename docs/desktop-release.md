@@ -8,6 +8,8 @@ The release workflow produces:
 - macOS Apple Silicon and Intel `.dmg` bundles plus updater archives.
 - Windows x86_64 NSIS and MSI installers.
 
+Linux artifacts use an Ubuntu 24.04 runtime baseline and bundle WebKitGTK 2.52 or newer. On Wayland sessions Aimtrix selects GTK's native Wayland backend instead of the AppImage launcher fallback to XWayland. NVIDIA systems also receive the explicit-sync compatibility setting needed to keep accelerated rendering stable. Set `AIMTRIX_FORCE_X11=1` only as a troubleshooting escape hatch for a compositor that cannot run the native Wayland backend.
+
 The Tauri updater uses the AppImage, macOS `.app.tar.gz`, and Windows installer updater artifacts. Every updater entry in `latest.json` must contain an HTTPS URL and an inline signature. Native OS signing is separate from Tauri updater signing: a notarized or Authenticode-signed installer still needs a valid Tauri `.sig`.
 
 ## Release flow

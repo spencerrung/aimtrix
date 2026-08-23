@@ -4,6 +4,7 @@ export interface EmojiPackEntry {
   emoji?: string;
   aliases?: string[];
   src?: string;
+  previewSrc?: string;
   category?: string;
   subcategory?: string;
 }
@@ -105,6 +106,9 @@ export function parseEmojiManifest(value: unknown, manifestUrl: string): EmojiPa
       ? candidate.emoji
       : undefined;
     const src = candidate.src === undefined ? undefined : safeEmojiSource(candidate.src, manifestUrl);
+    const previewSrc = candidate.previewSrc === undefined
+      ? undefined
+      : safeEmojiSource(candidate.previewSrc, manifestUrl);
     const aliases = Array.isArray(candidate.aliases)
       ? candidate.aliases.flatMap((alias) => typeof alias === 'string' ? [alias.trim().slice(0, 80)] : []).filter(Boolean).slice(0, 24)
       : [];
@@ -115,11 +119,22 @@ export function parseEmojiManifest(value: unknown, manifestUrl: string): EmojiPa
       name,
       ...(emoji ? { emoji } : {}),
       ...(src ? { src } : {}),
+      ...(previewSrc ? { previewSrc } : {}),
       ...(aliases.length ? { aliases } : {}),
       ...(typeof candidate.category === 'string' ? { category: candidate.category.slice(0, 80) } : {}),
       ...(typeof candidate.subcategory === 'string' ? { subcategory: candidate.subcategory.slice(0, 80) } : {}),
     }];
   }).slice(0, 6000);
+}
+
+function builtInAnimatedPreview(pack: EmojiPackDefinition, entry: EmojiPackEntry): string | undefined {
+  if (pack.id !== 'bufo' || !entry.src) return undefined;
+  const url = new URL(entry.src);
+  if (!url.pathname.toLowerCase().endsWith('.gif')) return undefined;
+  url.pathname = url.pathname.replace(/\/([^/]+)\.gif$/i, '/previews/$1.webp');
+  url.search = '';
+  url.hash = '';
+  return url.toString();
 }
 
 export function emojiReactionKey(entry: Pick<EmojiPackEntry, 'id' | 'emoji'>): string {
@@ -147,7 +162,8 @@ export async function loadEmojiPacks(
       for (const entry of packEntries) {
         if (seenIds.has(entry.id)) continue;
         seenIds.add(entry.id);
-        entries.push(entry);
+        const previewSrc = entry.previewSrc ?? builtInAnimatedPreview(pack, entry);
+        entries.push(previewSrc ? { ...entry, previewSrc } : entry);
       }
     } catch {
       continue;

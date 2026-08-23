@@ -13,7 +13,7 @@ describe('emoji packs', () => {
     const entries = parseEmojiManifest({
       entries: [
         { id: 'smile', name: 'Smile', emoji: '😄', aliases: ['happy'] },
-        { id: 'bufo', name: 'Bufo', src: './bufo.png' },
+        { id: 'bufo', name: 'Bufo', src: './bufo.gif', previewSrc: './previews/bufo.webp' },
         { id: 'bufo', name: 'Duplicate', src: './duplicate.png' },
         { id: 'unsafe', name: 'Unsafe', src: 'javascript:alert(1)' },
         { id: 'empty', name: 'Empty' },
@@ -22,7 +22,12 @@ describe('emoji packs', () => {
 
     expect(entries).toEqual([
       { id: 'smile', name: 'Smile', emoji: '😄', aliases: ['happy'] },
-      { id: 'bufo', name: 'Bufo', src: 'https://assets.example.test/emoji/bufo.png' },
+      {
+        id: 'bufo',
+        name: 'Bufo',
+        src: 'https://assets.example.test/emoji/bufo.gif',
+        previewSrc: 'https://assets.example.test/emoji/previews/bufo.webp',
+      },
     ]);
     expect(emojiReactionKey(entries[0])).toBe('😄');
     expect(emojiReactionKey(entries[1])).toBe(':bufo:');
@@ -63,5 +68,21 @@ describe('emoji packs', () => {
 
     expect(fetcher).toHaveBeenCalledWith('http://localhost:3000/emoji/bufo.json', { credentials: 'omit' });
     expect(entries[0].src).toBe('http://localhost:3000/emoji/wave.png');
+  });
+
+  it('uses a static preview for built-in animated Bufo entries', async () => {
+    const fetcher = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({ entries: [{ id: 'bufo-wave', name: 'Wave', src: './bufo-wave.gif' }] }),
+    }) as unknown as typeof fetch;
+
+    const entries = await loadEmojiPacks([
+      { id: 'bufo', name: 'Bufo', manifestUrl: '/emoji/packs/bufo/manifest.json', source: 'built-in' },
+    ], undefined, fetcher);
+
+    expect(entries[0].previewSrc).toBe(
+      'http://localhost:3000/emoji/packs/bufo/previews/bufo-wave.webp',
+    );
   });
 });

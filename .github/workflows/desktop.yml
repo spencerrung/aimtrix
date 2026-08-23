@@ -37,7 +37,7 @@ jobs:
       matrix:
         include:
           - name: Linux
-            os: ubuntu-22.04
+            os: ubuntu-24.04
           - name: macOS
             os: macos-14
           - name: Windows
@@ -56,6 +56,11 @@ jobs:
             librsvg2-dev \
             patchelf \
             xdg-utils
+          webkit_version=$(dpkg-query -W -f='${Version}' libwebkit2gtk-4.1-0)
+          dpkg --compare-versions "$webkit_version" ge 2.52 || {
+            echo "Linux builds require WebKitGTK 2.52 or newer; found $webkit_version" >&2
+            exit 1
+          }
 
       - name: Set up Node.js
         uses: actions/setup-node@v7

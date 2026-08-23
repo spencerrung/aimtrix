@@ -314,6 +314,45 @@ describe('Workspace demo', () => {
     expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', ':bufo-wave:', undefined);
   });
 
+  it('keeps animated emoji on a static preview until pointer hover', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      json: () => Promise.resolve({
+        entries: [{
+          id: 'bufo-wave',
+          name: 'Bufo wave',
+          src: './bufo-wave.gif',
+          previewSrc: './previews/bufo-wave.webp',
+        }],
+      }),
+    }));
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const } });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
+    const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
+    fireEvent.change(within(picker).getByRole('textbox', { name: 'Search reaction emoji' }), {
+      target: { value: 'bufo' },
+    });
+
+    const image = (await within(picker).findByRole('button', { name: 'React with :bufo-wave:' }))
+      .querySelector('img')!;
+    expect(image).toHaveAttribute(
+      'src',
+      'http://localhost:3000/emoji/packs/standard/previews/bufo-wave.webp',
+    );
+    fireEvent.pointerEnter(image);
+    expect(image).toHaveAttribute(
+      'src',
+      'http://localhost:3000/emoji/packs/standard/bufo-wave.gif',
+    );
+    fireEvent.pointerLeave(image);
+    expect(image).toHaveAttribute(
+      'src',
+      'http://localhost:3000/emoji/packs/standard/previews/bufo-wave.webp',
+    );
+  });
+
   it('renders image-backed pack shortcodes inline in messages', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,

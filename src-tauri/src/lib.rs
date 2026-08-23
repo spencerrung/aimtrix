@@ -13,6 +13,37 @@ const ALLOWED_KEYS: [&str; 3] = [
 ];
 
 #[cfg(target_os = "linux")]
+fn should_use_native_wayland(
+    session_type: Option<&std::ffi::OsStr>,
+    wayland_display: Option<&std::ffi::OsStr>,
+    force_x11: bool,
+) -> bool {
+    !force_x11
+        && session_type.is_some_and(|value| value == "wayland")
+        && wayland_display.is_some_and(|value| !value.is_empty())
+}
+
+#[cfg(target_os = "linux")]
+fn configure_webview_runtime() {
+    let force_x11 = std::env::var_os("AIMTRIX_FORCE_X11").is_some_and(|value| value == "1");
+    if should_use_native_wayland(
+        std::env::var_os("XDG_SESSION_TYPE").as_deref(),
+        std::env::var_os("WAYLAND_DISPLAY").as_deref(),
+        force_x11,
+    ) {
+        std::env::set_var("GDK_BACKEND", "wayland");
+    } else if force_x11 {
+        std::env::set_var("GDK_BACKEND", "x11");
+    }
+
+    let nvidia_driver_loaded = std::path::Path::new("/proc/driver/nvidia/version").is_file()
+        || std::path::Path::new("/sys/module/nvidia").exists();
+    if nvidia_driver_loaded && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
+        std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
+    }
+}
+
+#[cfg(target_os = "linux")]
 fn configure_gstreamer_runtime() {
     let resource_root = std::env::var_os("APPDIR")
         .map(std::path::PathBuf::from)
@@ -150,7 +181,10 @@ fn configure_tray<R: Runtime>(app: &mut tauri::App<R>) -> tauri::Result<()> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
-    configure_gstreamer_runtime();
+    {
+        configure_webview_runtime();
+        configure_gstreamer_runtime();
+    }
 
     let mut builder = tauri::Builder::default();
 
@@ -183,4 +217,38 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Tauri application");
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::should_use_native_wayland;
+    use std::ffi::OsStr;
+
+    #[test]
+    fn native_wayland_requires_a_wayland_session_and_display() {
+        assert!(should_use_native_wayland(
+            Some(OsStr::new("wayland")),
+            Some(OsStr::new("wayland-1")),
+            false,
+        ));
+        assert!(!should_use_native_wayland(
+            Some(OsStr::new("x11")),
+            Some(OsStr::new("wayland-1")),
+            false,
+        ));
+        assert!(!should_use_native_wayland(
+            Some(OsStr::new("wayland")),
+            None,
+            false,
+        ));
+    }
+
+    #[test]
+    fn x11_escape_hatch_overrides_wayland_detection() {
+        assert!(!should_use_native_wayland(
+            Some(OsStr::new("wayland")),
+            Some(OsStr::new("wayland-1")),
+            true,
+        ));
+    }
 }
