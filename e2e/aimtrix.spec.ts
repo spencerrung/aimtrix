@@ -214,7 +214,9 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(page.locator('.timeline-message--own')).toHaveCount(ownMessageCount + 1);
   const inlineEmojiMessage = page.locator('.timeline-message--own').last();
   await expect(inlineEmojiMessage).toContainText('🌈');
-  await expect(inlineEmojiMessage.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
+  const sentInlineEmoji = inlineEmojiMessage.getByRole('img', { name: 'Add Bufo' });
+  await expect(sentInlineEmoji).toBeVisible();
+  await expect(sentInlineEmoji).toHaveCSS('display', 'inline');
 
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByRole('button', { name: 'Send Aqua hello' }).click();

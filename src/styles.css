@@ -586,7 +586,7 @@
   .media-viewer > img.is-actual-size { max-width: none; max-height: none; }
   .media-viewer > p { padding: 30px; color: var(--text-soft); text-align: center; }
   .message-sticker { width: min(180px, 45vw); max-height: 180px; margin-top: 7px; object-fit: contain; }
-  .emoji-asset { width: 1.6em; height: 1.6em; object-fit: contain; }
+  .emoji-asset { display: inline; width: 1.6em; height: 1.6em; object-fit: contain; }
   .message-audio { width: min(420px, 100%); margin-top: 7px; }
   .message-media-gate { display: flex; width: fit-content; align-items: center; gap: 6px; margin-top: 7px; padding: 8px 10px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); font-size: 0.66rem; font-weight: 700; }
   .message-file { display: flex; width: fit-content; align-items: center; gap: 7px; margin-top: 7px; padding: 9px 11px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); font-size: 0.72rem; font-weight: 700; text-decoration: none; }
