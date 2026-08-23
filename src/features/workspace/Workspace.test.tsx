@@ -47,6 +47,17 @@ function rect(top: number): DOMRect {
   };
 }
 
+function setComposerText(composer: HTMLElement, text: string) {
+  composer.textContent = text;
+  composer.focus();
+  const range = document.createRange();
+  range.selectNodeContents(composer);
+  range.collapse(false);
+  window.getSelection()?.removeAllRanges();
+  window.getSelection()?.addRange(range);
+  fireEvent.input(composer);
+}
+
 
 function renderWorkspace(
   overrides: {
@@ -58,14 +69,14 @@ function renderWorkspace(
       roomId: string,
       body: string,
       mentions?: Array<{ userId: string; label: string }>,
-      inlineEmojis?: Array<{ marker: string; shortcode: string; id: string; name: string; src: string }>,
+      inlineEmojis?: Array<{ start: number; end: number; shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onSendReply?: (
       roomId: string,
       body: string,
       target: { id: string; senderId: string; body: string; threadRootId?: string },
       mentions?: Array<{ userId: string; label: string }>,
-      inlineEmojis?: Array<{ marker: string; shortcode: string; id: string; name: string; src: string }>,
+      inlineEmojis?: Array<{ start: number; end: number; shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onToggleReaction?: (roomId: string, eventId: string, key: string, ownReactionEventId?: string) => Promise<void>;
     onEditMessage?: (
@@ -73,7 +84,7 @@ function renderWorkspace(
       eventId: string,
       body: string,
       mentions?: Array<{ userId: string; label: string }>,
-      inlineEmojis?: Array<{ marker: string; shortcode: string; id: string; name: string; src: string }>,
+      inlineEmojis?: Array<{ start: number; end: number; shortcode: string; id: string; name: string; src: string }>,
     ) => Promise<void>;
     onSendSticker?: (roomId: string, sticker: { id: string; name: string; src: string }) => Promise<void>;
     onReorderRootSpaces?: (spaceIds: string[]) => Promise<void>;
@@ -128,24 +139,24 @@ describe('Workspace demo', () => {
     renderWorkspace();
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: 'A shiny new demo message' } });
+    setComposerText(composer, 'A shiny new demo message');
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     expect(screen.getByText('A shiny new demo message')).toBeInTheDocument();
-    expect(composer).toHaveValue('');
+    expect(composer).toBeEmptyDOMElement();
   });
 
   it('selects a room member mention with arrows and Tab and sends standard mention metadata', () => {
     const onSendMessage = vi.fn().mockResolvedValue(undefined);
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onSendMessage });
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: '@' } });
+    setComposerText(composer, '@');
     const suggestions = screen.getByRole('listbox', { name: 'Mention a room member' });
     expect(within(suggestions).getByRole('option', { name: /Spencer/ })).toHaveAttribute('aria-selected', 'true');
     fireEvent.keyDown(composer, { key: 'ArrowDown' });
     expect(within(suggestions).getByRole('option', { name: /Mara/ })).toHaveAttribute('aria-selected', 'true');
     fireEvent.keyDown(composer, { key: 'Tab' });
-    expect(composer).toHaveValue('@Mara ');
+    expect(composer).toHaveTextContent('@Mara');
     fireEvent.keyDown(composer, { key: 'Enter' });
     expect(onSendMessage).toHaveBeenCalledWith('welcome', '@Mara', [{
       userId: '@mara:example.com',
@@ -157,9 +168,9 @@ describe('Workspace demo', () => {
     const onSendMessage = vi.fn().mockResolvedValue(undefined);
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onSendMessage });
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: '@mar' } });
+    setComposerText(composer, '@mar');
     fireEvent.click(screen.getByRole('option', { name: /Mara/ }));
-    fireEvent.change(composer, { target: { value: 'No mention now' } });
+    setComposerText(composer, 'No mention now');
     fireEvent.keyDown(composer, { key: 'Enter' });
 
     expect(onSendMessage).toHaveBeenCalledWith('welcome', 'No mention now');
@@ -287,11 +298,11 @@ describe('Workspace demo', () => {
   it('turns a triple-backtick trigger into a multiline code draft without showing the fence', () => {
     renderWorkspace();
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: '```' } });
-    expect(composer).toHaveValue('');
+    setComposerText(composer, '```');
+    expect(composer).toBeEmptyDOMElement();
     expect(screen.getByLabelText('Code block mode')).toHaveTextContent('text code');
 
-    fireEvent.change(composer, { target: { value: 'const hello = "world";' } });
+    setComposerText(composer, 'const hello = "world";');
     fireEvent.keyDown(composer, { key: 'Enter' });
     const codeBlock = screen.getByRole('region', { name: 'text code block' });
     expect(codeBlock).toHaveTextContent('const hello = "world";');
@@ -301,12 +312,12 @@ describe('Workspace demo', () => {
     renderWorkspace();
     const composer = screen.getByLabelText('Message Welcome Lounge');
     fireEvent.click(screen.getByRole('button', { name: 'Insert code block' }));
-    expect(composer).toHaveValue('');
+    expect(composer).toBeEmptyDOMElement();
     expect(screen.getByLabelText('Code block mode')).toHaveTextContent('text code');
 
     fireEvent.change(screen.getByRole('combobox', { name: 'Code language' }), { target: { value: 'javascript' } });
-    fireEvent.change(composer, { target: { value: 'const answer = 42;' } });
-    expect(composer).not.toHaveValue(expect.stringContaining('```'));
+    setComposerText(composer, 'const answer = 42;');
+    expect(composer).not.toHaveTextContent('```');
     expect(screen.getByLabelText('Code block mode')).toHaveTextContent('javascript code');
   });
 
@@ -356,7 +367,7 @@ describe('Workspace demo', () => {
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
     composer.focus();
-    fireEvent.change(composer, { target: { value: 'Wait for the network' } });
+    setComposerText(composer, 'Wait for the network');
     fireEvent.keyDown(composer, { key: 'Enter' });
     expect(onSendMessage).toHaveBeenCalledWith('welcome', 'Wait for the network');
 
@@ -504,9 +515,9 @@ describe('Workspace demo', () => {
     composer.focus();
     fireEvent.keyDown(composer, { key: 'ArrowUp' });
 
-    expect(composer).toHaveValue('The goal: 2006 in spirit, 2026 where it matters.');
+    expect(composer).toHaveTextContent('The goal: 2006 in spirit, 2026 where it matters.');
     expect(screen.getByText('Editing message')).toBeInTheDocument();
-    fireEvent.change(composer, { target: { value: 'The goal: old-school, without old bugs.' } });
+    setComposerText(composer, 'The goal: old-school, without old bugs.');
     fireEvent.keyDown(composer, { key: 'Enter' });
 
     await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2', 'The goal: old-school, without old bugs.', []));
@@ -517,10 +528,10 @@ describe('Workspace demo', () => {
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' as const }, onEditMessage });
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: 'keep writing' } });
+    setComposerText(composer, 'keep writing');
     fireEvent.keyDown(composer, { key: 'ArrowUp' });
 
-    expect(composer).toHaveValue('keep writing');
+    expect(composer).toHaveTextContent('keep writing');
     expect(onEditMessage).not.toHaveBeenCalled();
     expect(screen.queryByText('Editing message')).not.toBeInTheDocument();
   });
@@ -537,12 +548,12 @@ describe('Workspace demo', () => {
     renderWorkspace();
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: 'do not lose this' } });
+    setComposerText(composer, 'do not lose this');
     fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
-    expect(composer).toHaveValue('The goal: 2006 in spirit, 2026 where it matters.');
+    expect(composer).toHaveTextContent('The goal: 2006 in spirit, 2026 where it matters.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel reply or edit' }));
 
-    expect(composer).toHaveValue('do not lose this');
+    expect(composer).toHaveTextContent('do not lose this');
   });
 
   it('uses Up Arrow in an empty thread composer to edit the latest own thread reply', async () => {
@@ -629,13 +640,19 @@ describe('Workspace demo', () => {
     const matrixWorkspace = { ...demoWorkspace, mode: 'matrix' as const };
     renderWorkspace({ workspace: matrixWorkspace, onUploadAttachment });
     const image = new File(['pixels'], '', { type: 'image/png' });
-    const imageClipboard = { items: [{ type: 'image/png', getAsFile: () => image }] };
+    const imageClipboard = {
+      items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
+      files: [],
+      getData: () => '',
+    };
     const composer = screen.getByLabelText('Message Welcome Lounge');
 
-    fireEvent.paste(composer, { clipboardData: { items: [{ type: 'text/plain', getAsFile: () => null }] } });
+    fireEvent.paste(composer, { clipboardData: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }], files: [], getData: () => 'text' } });
     expect(onUploadAttachment).not.toHaveBeenCalled();
     fireEvent.paste(composer, { clipboardData: imageClipboard });
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', expect.objectContaining({ name: 'pasted-image.png' }), expect.any(Function), undefined));
+    fireEvent.paste(composer, { clipboardData: { items: [], files: [image], getData: () => '' } });
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const threadComposer = screen.getByLabelText('Message thread');
@@ -862,7 +879,7 @@ describe('Workspace demo', () => {
     expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: 'Bring me back to this' } });
+    setComposerText(composer, 'Bring me back to this');
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     await waitFor(() => expect(screen.getByText('Bring me back to this')).toBeInTheDocument());
@@ -913,11 +930,11 @@ describe('Workspace demo', () => {
     fireEvent.scroll(timeline);
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
-    fireEvent.change(composer, { target: { value: 'This should remain a draft' } });
+    setComposerText(composer, 'This should remain a draft');
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
     await waitFor(() => expect(screen.getByText('That message did not send. Your draft has been restored.')).toBeInTheDocument());
-    expect(composer).toHaveValue('This should remain a draft');
+    expect(composer).toHaveTextContent('This should remain a draft');
     expect(timeline.scrollTop).toBe(400);
     expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
   });
@@ -969,7 +986,7 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add emoji' }));
     fireEvent.click(screen.getByRole('button', { name: 'Insert 🌈' }));
 
-    expect(screen.getByLabelText('Message Welcome Lounge')).toHaveValue('🌈');
+    expect(screen.getByLabelText('Message Welcome Lounge')).toHaveTextContent('🌈');
   });
 
   it('stages an image-backed emoji until the composer is submitted', async () => {
@@ -1000,13 +1017,12 @@ describe('Workspace demo', () => {
       fireEvent.click(bufoButton);
 
       const composer = screen.getByLabelText('Message Welcome Lounge');
-      expect(composer).toHaveValue('\ue000');
-      expect(document.querySelector('.composer__preview img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
-      expect(composer).toHaveClass('has-emoji-preview');
+      expect(composer.querySelector('[data-inline-composer-token="true"] img')).toHaveAttribute('src', 'http://localhost:3000/emoji/packs/standard/bufo-wave.png');
       expect(onSendSticker).not.toHaveBeenCalled();
       fireEvent.keyDown(composer, { key: 'Enter' });
       await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', ':bufo-wave:', [], [{
-        marker: '\ue000',
+        start: 0,
+        end: 11,
         shortcode: ':bufo-wave:',
         id: 'bufo-wave',
         name: 'Bufo wave',
@@ -1015,9 +1031,9 @@ describe('Workspace demo', () => {
       fireEvent.keyDown(composer, { key: 'Enter' });
       expect(onSendMessage).toHaveBeenCalledTimes(1);
       expect(onSendSticker).not.toHaveBeenCalled();
-      expect(composer).toHaveValue('');
+      expect(composer).toBeEmptyDOMElement();
       finishMessageSend();
-      await waitFor(() => expect(composer).toHaveValue(''));
+      await waitFor(() => expect(composer).toBeEmptyDOMElement());
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1308,25 +1324,27 @@ describe('Workspace demo', () => {
       });
       const composer = screen.getByLabelText('Message Welcome Lounge');
       composer.focus();
-      fireEvent.change(composer, { target: { value: 'hello :smi' } });
+      setComposerText(composer, 'hello :smi');
 
       const listbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
       expect(within(listbox).getByText(':smile:')).toBeInTheDocument();
 
       fireEvent.keyDown(composer, { key: 'Enter' });
-      expect(composer).toHaveValue('hello 😄');
+      expect(composer).toHaveTextContent('hello 😄');
 
-      fireEvent.change(composer, { target: { value: 'hello :bufo' } });
+      setComposerText(composer, 'hello :bufo');
       const bufoListbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
       expect(within(bufoListbox).getByText('bufo wave')).toBeInTheDocument();
       expect(within(bufoListbox).getByText('inline emoji')).toBeInTheDocument();
       fireEvent.keyDown(composer, { key: 'Tab' });
-      expect(composer).toHaveValue('hello \ue000');
+      expect(composer).toHaveTextContent('hello');
+      expect(composer.querySelector('[data-inline-composer-token="true"]')).toBeInTheDocument();
       expect(onSendSticker).not.toHaveBeenCalled();
 
       fireEvent.keyDown(composer, { key: 'Enter' });
       await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', 'hello :bufo-wave:', [], [{
-        marker: '\ue000',
+        start: 6,
+        end: 17,
         shortcode: ':bufo-wave:',
         id: 'bufo-wave',
         name: 'bufo wave',

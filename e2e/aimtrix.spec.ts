@@ -165,7 +165,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(page.getByText('Browser test message')).toBeVisible();
   await expect(composer).toBeFocused();
   await composer.press('ArrowUp');
-  await expect(composer).toHaveValue('Browser test message');
+  await expect(composer).toHaveText('Browser test message');
   await composer.fill('Edited browser test message');
   await composer.press('Enter');
   await expect(page.getByText('Edited browser test message')).toBeVisible();
@@ -176,7 +176,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await composer.press('ArrowDown');
   await expect(mentionSuggestions.getByRole('option', { name: /Mara/ })).toHaveAttribute('aria-selected', 'true');
   await composer.press('Tab');
-  await expect(composer).toHaveValue('@Mara ');
+  await expect(composer).toContainText('@Mara');
   await composer.press('Enter');
   await expect(page.getByText('@Mara', { exact: true }).last()).toBeVisible();
 
@@ -200,17 +200,44 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
 
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByRole('button', { name: 'Insert 🌈' }).click();
-  await expect(composer).toHaveValue('🌈');
+  await expect(composer).toHaveText('🌈');
 
   await page.getByRole('button', { name: 'Add emoji' }).click();
   const emojiPicker = page.getByLabel('Emoji picker');
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
   const ownMessageCount = await page.locator('.timeline-message--own').count();
   await emojiPicker.getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
-  await expect(composer).toHaveValue('🌈\ue000');
-  await expect(composer).toHaveJSProperty('selectionStart', 3);
-  await expect(page.locator('.composer__preview img')).toBeVisible();
-  await expect(page.getByRole('img', { name: 'Add Bufo' })).not.toBeVisible();
+  const composerToken = composer.locator('[data-inline-composer-token="true"]');
+  await expect(composerToken).toBeVisible();
+  expect(await composer.evaluate((element) => {
+    const selection = window.getSelection();
+    return Boolean(selection?.isCollapsed && selection.anchorNode && element.contains(selection.anchorNode));
+  })).toBe(true);
+  await page.keyboard.type('!');
+  await expect(composer).toContainText('🌈!');
+  await page.keyboard.press('Backspace');
+  await expect(composer).toHaveText('🌈');
+  await page.keyboard.press('Backspace');
+  await expect(composerToken).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add emoji' }).click();
+  await page.getByLabel('Emoji picker').getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
+  await page.getByLabel('Emoji picker').getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
+  await expect(composer.getByRole('img', { name: 'Add Bufo' })).toBeVisible();
+  await composer.evaluate((element) => {
+    const token = element.querySelector('[data-inline-composer-token="true"]');
+    if (!token) throw new Error('Inline emoji token was not rendered.');
+    const range = document.createRange();
+    range.setStartBefore(token);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  });
+  await page.keyboard.press('Delete');
+  await expect(composer.locator('[data-inline-composer-token="true"]')).toHaveCount(0);
+  await page.getByRole('button', { name: 'Add emoji' }).click();
+  await page.getByLabel('Emoji picker').getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
+  await page.getByLabel('Emoji picker').getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
   await composer.press('Enter');
   await expect(page.locator('.timeline-message--own')).toHaveCount(ownMessageCount + 1);
   const inlineEmojiMessage = page.locator('.timeline-message--own').last();
@@ -306,7 +333,7 @@ test('thread summaries open a resizable conversation with its own composer', asy
   }
   const threadComposer = thread.getByLabel('Message thread');
   await threadComposer.fill('Thread browser test message');
-  await expect(page.getByLabel('Message Welcome Lounge')).toHaveValue('');
+  await expect(page.getByLabel('Message Welcome Lounge')).toHaveText('');
   await threadComposer.press('Enter');
   await expect(thread.getByText('Thread browser test message')).toBeVisible();
   await expect(threadComposer).toBeFocused();

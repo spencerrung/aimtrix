@@ -90,7 +90,14 @@ import {
 import type { UserPreferences } from '../../settings/preferences';
 import type { PushRoute } from '../../pwa/pushRouting';
 import type { InstallAndUpdate } from '../../platform/platform';
+import { readNativeClipboardImage } from '../../platform/clipboardImage';
 import { deriveTimelineDaySeparators } from './timelineGrouping';
+import {
+  InlineComposer,
+  type InlineComposerHandle,
+  type InlineComposerSelection,
+  type InlineComposerTokenOccurrence,
+} from './InlineComposer';
 import {
   defaultProfilePersonalization,
   type ProfilePersonalization,
@@ -118,8 +125,7 @@ type ComposerMention = {
   label: string;
 };
 
-type ComposerInlineEmoji = {
-  marker: string;
+type ComposerInlineEmoji = InlineComposerTokenOccurrence & {
   shortcode: string;
   id: string;
   name: string;
@@ -131,19 +137,6 @@ function hasVisibleComposerMention(body: string, label: string): boolean {
   return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(body);
 }
 
-function inlineEmojisStillInDraft(
-  draft: string,
-  pending: ComposerInlineEmoji[],
-): ComposerInlineEmoji[] {
-  return pending.filter(({ marker }) => draft.includes(marker));
-}
-
-function draftWithInlineEmojiFallbacks(draft: string, inlineEmojis: ComposerInlineEmoji[]): string {
-  return inlineEmojis.reduce(
-    (body, { marker, shortcode }) => body.replaceAll(marker, shortcode),
-    draft,
-  );
-}
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 const MAX_VISIBLE_EMOJI_RESULTS = 240;
@@ -521,62 +514,6 @@ function IconButton({
     >
       {children}
     </button>
-  );
-}
-
-function ComposerEmojiPreview({
-  draft,
-  inlineEmojis,
-  scrollTop,
-}: {
-  draft: string;
-  inlineEmojis: ComposerInlineEmoji[];
-  scrollTop: number;
-}) {
-  const byMarker = new Map(inlineEmojis.map((emoji) => [emoji.marker, emoji]));
-  const content: ReactNode[] = [];
-  let cursor = 0;
-  for (let index = 0; index < draft.length; index += 1) {
-    const emoji = byMarker.get(draft[index]);
-    if (emoji) {
-      if (index > cursor) content.push(draft.slice(cursor, index));
-      content.push(
-        <span
-          className="composer__emoji-token"
-          style={{ display: 'inline-grid', width: '1em', height: '1.35em', placeItems: 'center', verticalAlign: '-0.22em' }}
-          key={`emoji:${index}:${emoji.id}`}
-        >
-          <EmojiAsset entry={emoji} alt="" style={{ width: '1.35em', height: '1.35em', maxWidth: 'none' }} />
-        </span>,
-      );
-      cursor = index + 1;
-    }
-  }
-  if (cursor < draft.length) content.push(draft.slice(cursor));
-  return (
-    <span
-      className="composer__preview"
-      aria-hidden="true"
-      style={{
-        gridArea: '1 / 1',
-        display: 'block',
-        minHeight: 34,
-        maxHeight: 130,
-        padding: '8px 10px',
-        overflow: 'hidden',
-        color: 'var(--text)',
-        background: 'var(--surface-raised)',
-        fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-        fontSize: '0.88rem',
-        lineHeight: 1.35,
-        whiteSpace: 'pre-wrap',
-        overflowWrap: 'break-word',
-        boxShadow: 'inset 0 1px 2px rgba(30,50,65,0.1)',
-        pointerEvents: 'none',
-      }}
-    >
-      <span style={{ display: 'block', transform: `translateY(-${scrollTop}px)` }}>{content}</span>
-    </span>
   );
 }
 
@@ -1984,7 +1921,6 @@ function Conversation({
   const [colonIndex, setColonIndex] = useState(0);
   const [colonDismissed, setColonDismissed] = useState<string>();
   const [composerCaret, setComposerCaret] = useState(0);
-  const [composerScrollTop, setComposerScrollTop] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
   const [timelineDetached, setTimelineDetached] = useState(false);
   const [threadPanelWidth, setThreadPanelWidth] = useState(() => {
@@ -1998,7 +1934,8 @@ function Conversation({
   const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
   const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
   const fileInput = useRef<HTMLInputElement>(null);
-  const mainComposer = useRef<HTMLTextAreaElement>(null);
+  const mainComposer = useRef<InlineComposerHandle>(null);
+  const composerForm = useRef<HTMLFormElement>(null);
   const threadComposer = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('text');
@@ -2015,7 +1952,6 @@ function Conversation({
     });
   };
   const [inlineEmojisByRoom, setInlineEmojisByRoom] = useState<Record<string, ComposerInlineEmoji[]>>({});
-  const nextInlineEmojiMarker = useRef(0);
   const inlineEmojiSendInFlight = useRef(false);
   const [sendingInlineEmojis, setSendingInlineEmojis] = useState(false);
   const inlineEmojis = room?.id ? inlineEmojisByRoom[room.id] ?? [] : [];
@@ -2176,7 +2112,7 @@ function Conversation({
       setSendingInlineEmojis(true);
     }
     void (async () => {
-      const messageDraft = draftWithInlineEmojiFallbacks(draft, inlineEmojis);
+      const messageDraft = draft;
       const isFencedDraft = messageDraft.startsWith('```');
       const body = codeDraftMode
         ? `\`\`\`${codeLanguage}\n${messageDraft}\n\`\`\``
@@ -2210,20 +2146,16 @@ function Conversation({
     after = '',
   ) => {
     const shortcode = `:${sticker.id}:`;
-    let marker: string;
-    do {
-      marker = String.fromCharCode(0xe000 + (nextInlineEmojiMarker.current % 0x1900));
-      nextInlineEmojiMarker.current += 1;
-    } while (inlineEmojis.some((emoji) => emoji.marker === marker));
-    const nextDraft = `${before}${marker}${after}`;
-    const nextCaret = before.length + marker.length;
-    setInlineEmojis((current) => [...current, { marker, shortcode, ...sticker }]);
-    onDraftChange(nextDraft);
+    mainComposer.current?.replaceRange(
+      before.length,
+      draft.length - after.length,
+      { id: sticker.id, shortcode, src: sticker.src, alt: sticker.name, title: sticker.name },
+    );
     rememberEmoji(shortcode);
-    setComposerCaret(nextCaret);
     requestAnimationFrame(() => {
       mainComposer.current?.focus();
-      mainComposer.current?.setSelectionRange(nextCaret, nextCaret);
+      const caret = before.length + shortcode.length;
+      mainComposer.current?.setSelection({ start: caret, end: caret });
     });
   };
   const insertMention = (member: MemberSummary) => {
@@ -2231,7 +2163,8 @@ function Conversation({
     setSelectedMentions((current) => current.some((mention) => mention.userId === member.id && mention.label === label)
       ? current
       : [...current, { userId: member.id, label }]);
-    onDraftChange(draft.replace(/@[^\s@]*$/, `@${label} `));
+    const match = draft.match(/@[^\s@]*$/);
+    if (match?.index !== undefined) mainComposer.current?.replaceRange(match.index, draft.length, `@${label} `);
     requestAnimationFrame(() => mainComposer.current?.focus());
   };
   const insertThreadMention = (member: MemberSummary) => {
@@ -2288,37 +2221,38 @@ function Conversation({
     }).finally(() => requestAnimationFrame(() => threadComposer.current?.focus()));
   };
   const codeDraft = codeDraftMode || draft.startsWith('```');
-  const resizeComposer = useCallback(() => {
-    const element = mainComposer.current;
-    if (!element) return;
-    element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, 130)}px`;
-  }, []);
-
-  useLayoutEffect(() => {
-    resizeComposer();
-  }, [draft, resizeComposer]);
-
-  const uploadPastedImage = (event: ClipboardEvent<HTMLTextAreaElement>, threadRootId?: string) => {
-    const item = [...event.clipboardData.items].find((candidate) => candidate.type.startsWith('image/'));
-    const image = item?.getAsFile();
-    if (!image) return;
-    event.preventDefault();
+  const uploadPastedImageFile = (image: File, threadRootId?: string) => {
     const extension = image.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
     const file = image.name ? image : new File([image], `pasted-image.${extension}`, { type: image.type });
     onUploadAttachment(file, threadRootId);
   };
+  const uploadPastedImage = (event: ClipboardEvent<HTMLElement>, threadRootId?: string) => {
+    const image = [...event.clipboardData.items]
+      .map((item) => item.getAsFile())
+      .find((file) => file?.type.startsWith('image/'))
+      ?? Array.from(event.clipboardData.files ?? []).find((file) => file.type.startsWith('image/'));
+    if (!image) {
+      if (!event.clipboardData.getData('text/plain')) {
+        void readNativeClipboardImage().then((nativeImage) => {
+          if (nativeImage) uploadPastedImageFile(nativeImage, threadRootId);
+        });
+      }
+      return;
+    }
+    event.preventDefault();
+    uploadPastedImageFile(image, threadRootId);
+  };
 
   const insertCodeBlock = () => {
-    const element = mainComposer.current;
-    const start = element?.selectionStart ?? draft.length;
-    const end = element?.selectionEnd ?? start;
+    const selection = mainComposer.current?.getSelection();
+    const start = selection?.start ?? draft.length;
+    const end = selection?.end ?? start;
     const selected = draft.slice(start, end) || draft;
     setCodeDraftMode(true);
     onDraftChange(selected);
     requestAnimationFrame(() => {
       mainComposer.current?.focus();
-      mainComposer.current?.setSelectionRange(0, selected.length);
+      mainComposer.current?.setSelection({ start: 0, end: selected.length });
     });
   };
   const sendCodeFile = () => {
@@ -2334,49 +2268,49 @@ function Conversation({
       }
     });
   };
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, selection: InlineComposerSelection | null): boolean => {
     if (colonResults.length) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setColonIndex((index) => (index + 1) % colonResults.length);
-        return;
+        return true;
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         setColonIndex((index) => (index - 1 + colonResults.length) % colonResults.length);
-        return;
+        return true;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault();
         pickColonResult(colonResults[colonIndex % colonResults.length]);
-        return;
+        return true;
       }
       if (event.key === 'Escape') {
         event.preventDefault();
         setColonDismissed(colon?.query);
-        return;
+        return true;
       }
     }
     if (mentionMatches.length) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setMentionIndex((index) => (index + 1) % mentionMatches.length);
-        return;
+        return true;
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         setMentionIndex((index) => (index - 1 + mentionMatches.length) % mentionMatches.length);
-        return;
+        return true;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault();
         insertMention(mentionMatches[mentionIndex % mentionMatches.length]);
-        return;
+        return true;
       }
       if (event.key === 'Escape') {
         event.preventDefault();
         setMentionDismissed(mentionQuery);
-        return;
+        return true;
       }
     }
     if (
@@ -2386,20 +2320,18 @@ function Conversation({
       && !event.ctrlKey
       && !event.metaKey
       && !draft
-      && event.currentTarget.selectionStart === 0
-      && event.currentTarget.selectionEnd === 0
+      && selection?.start === 0
+      && selection.end === 0
     ) {
       const latestOwnText = [...messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
       if (latestOwnText) {
         event.preventDefault();
         startEdit(latestOwnText);
+        return true;
       }
-      return;
+      return false;
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
+    return false;
   };
 
   const runProgrammaticScroll = useCallback((scroll: () => void) => {
@@ -2664,7 +2596,7 @@ function Conversation({
     const after = draft.slice(colon.caret);
     if (result.type === 'emoji') {
       if (result.emoji) {
-        onDraftChange(`${before}${result.emoji}${after}`);
+        mainComposer.current?.replaceRange(colon.start, colon.caret, result.emoji);
         rememberEmoji(result.emoji);
       } else if (result.src) {
         const sticker = { id: result.id, name: result.name, src: result.src };
@@ -3028,7 +2960,7 @@ function Conversation({
                 title={entry.name}
                 onClick={() => {
                   if (entry.emoji) {
-                    onDraftChange(`${draft}${entry.emoji}`);
+                    mainComposer.current?.insertText(entry.emoji);
                     rememberEmoji(entry.emoji);
                   } else if (entry.src) {
                     const sticker = { id: entry.id, name: entry.name, src: entry.src };
@@ -3081,7 +3013,7 @@ function Conversation({
           onClick={() => insertMention(member)}
         ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
       </div> : null}
-      <form className="composer" onSubmit={submit}>
+      <form ref={composerForm} className="composer" onSubmit={submit}>
         <input
           ref={fileInput}
           className="sr-only"
@@ -3098,44 +3030,57 @@ function Conversation({
         </IconButton>
         <label className="composer__field">
           <span className="sr-only">Message {room.name}</span>
-          <span className="composer__input" style={{ display: 'grid', minWidth: 0 }}>
-            {inlineEmojis.length ? <ComposerEmojiPreview draft={draft} inlineEmojis={inlineEmojis} scrollTop={composerScrollTop} /> : null}
-            <textarea
-              ref={mainComposer}
-              className={inlineEmojis.length ? 'has-emoji-preview' : undefined}
-              style={inlineEmojis.length ? {
-                gridArea: '1 / 1',
-                zIndex: 1,
-                color: 'transparent',
-                caretColor: 'var(--text)',
-                background: 'transparent',
-                boxShadow: 'none',
-              } : undefined}
-              rows={1}
-              value={draft}
-              placeholder={`Message ${room.name}`}
-              onChange={(event) => {
-                const nextDraft = event.target.value;
-                setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
-                setInlineEmojis((current) => inlineEmojisStillInDraft(nextDraft, current));
-                setComposerCaret(event.target.selectionStart ?? nextDraft.length);
-                if (nextDraft === '```') {
-                  setCodeDraftMode(true);
-                  setCodeLanguage('text');
-                  onDraftChange('');
-                } else {
-                  onDraftChange(nextDraft);
+          <InlineComposer
+            ref={mainComposer}
+            ariaLabel={`Message ${room.name}`}
+            placeholder={`Message ${room.name}`}
+            value={{
+              text: draft,
+              tokens: inlineEmojis.map(({ name, ...emoji }) => ({ ...emoji, alt: name, title: name })),
+            }}
+            onChange={(nextValue) => {
+              const nextDraft = nextValue.text;
+              setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
+              setInlineEmojis(nextValue.tokens.map(({ alt, title, ...token }) => ({
+                ...token,
+                name: alt ?? title ?? token.id,
+              })));
+              if (nextDraft === '```') {
+                setCodeDraftMode(true);
+                setCodeLanguage('text');
+                onDraftChange('');
+              } else {
+                onDraftChange(nextDraft);
+              }
+            }}
+            onSelectionChange={(selection) => setComposerCaret(selection?.end ?? draft.length)}
+            onKeyDown={handleKeyDown}
+            onSubmit={() => composerForm.current?.requestSubmit()}
+            onImagePaste={({ files }) => {
+              void (async () => {
+                if (files.length) {
+                  files.forEach((image) => uploadPastedImageFile(image));
+                  return;
                 }
-              }}
-              onSelect={(event) => setComposerCaret(event.currentTarget.selectionStart ?? 0)}
-              onScroll={(event) => setComposerScrollTop(event.currentTarget.scrollTop)}
-              onFocus={() => setComposerFocused(true)}
-              onBlur={() => setComposerFocused(false)}
-              onKeyDown={handleKeyDown}
-              onPaste={uploadPastedImage}
-              disabled={sending || sendingInlineEmojis}
-            />
-          </span>
+                const image = await readNativeClipboardImage();
+                if (image) uploadPastedImageFile(image);
+              })();
+            }}
+            onFocus={() => setComposerFocused(true)}
+            onBlur={() => setComposerFocused(false)}
+            disabled={sending || sendingInlineEmojis}
+            style={{
+              width: '100%',
+              minHeight: 34,
+              padding: '8px 10px',
+              color: 'var(--text)',
+              background: 'var(--surface-raised)',
+              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+              fontSize: '0.88rem',
+              lineHeight: 1.35,
+              boxShadow: 'inset 0 1px 2px rgba(30,50,65,0.1)',
+            }}
+          />
         </label>
         {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
         {gifEndpoint ? (
