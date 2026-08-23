@@ -41,6 +41,42 @@ fn configure_webview_runtime() {
     if nvidia_driver_loaded && std::env::var_os("__NV_DISABLE_EXPLICIT_SYNC").is_none() {
         std::env::set_var("__NV_DISABLE_EXPLICIT_SYNC", "1");
     }
+
+    // linuxdeploy bundles Wayland libraries from the build runner. Those can
+    // be older than the Mesa EGL stack on the host, producing
+    // `EGL_BAD_PARAMETER` before WebKitGTK can create its first view. Keep
+    // WebKitGTK and Mesa on the host's Wayland ABI while retaining the
+    // AppImage's other bundled dependencies.
+    let host_library_dirs = [
+        "/usr/lib",
+        "/lib",
+        "/usr/lib/x86_64-linux-gnu",
+        "/lib/x86_64-linux-gnu",
+    ];
+    let wayland_libraries = [
+        "libwayland-client.so.0",
+        "libwayland-egl.so.1",
+        "libwayland-cursor.so.0",
+        "libwayland-server.so.0",
+    ];
+    let host_wayland_preload = wayland_libraries
+        .iter()
+        .filter_map(|library| {
+            host_library_dirs
+                .iter()
+                .map(|directory| std::path::Path::new(directory).join(library))
+                .find(|path| path.is_file())
+        })
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    if !host_wayland_preload.is_empty() {
+        let mut preload = host_wayland_preload.join(":");
+        if let Some(existing) = std::env::var_os("LD_PRELOAD") {
+            preload.push(':');
+            preload.push_str(&existing.to_string_lossy());
+        }
+        std::env::set_var("LD_PRELOAD", preload);
+    }
 }
 
 #[cfg(target_os = "linux")]
