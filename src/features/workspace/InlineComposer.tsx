@@ -418,9 +418,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, InlineComposerPro
     }
   };
 
-  const empty = value.text.length === 0;
   return <div style={{ position: 'relative', minWidth: 0 }} className={className}>
-    {placeholder && empty ? <span aria-hidden="true" style={{ position: 'absolute', inset: '0 auto auto 0', color: 'currentColor', opacity: 0.5, pointerEvents: 'none', whiteSpace: 'nowrap', overflow: 'hidden', maxWidth: '100%' }}>{placeholder}</span> : null}
     <div
       ref={rootRef}
       role="textbox"
@@ -431,6 +429,7 @@ export const InlineComposer = forwardRef<InlineComposerHandle, InlineComposerPro
       suppressContentEditableWarning
       spellCheck
       data-inline-composer="true"
+      data-placeholder={placeholder}
       onInput={handleInput}
       onKeyDown={handleKeyDown}
       onKeyUp={() => onSelectionChange?.(getSelection())}
@@ -449,13 +448,11 @@ export const InlineComposer = forwardRef<InlineComposerHandle, InlineComposerPro
         handleInput(event);
       }}
       style={{
-        minHeight: '1.5em',
         maxHeight: 130,
         overflowY: 'auto',
         overflowX: 'hidden',
         whiteSpace: 'pre-wrap',
         overflowWrap: 'anywhere',
-        outline: 'none',
         cursor: disabled ? 'not-allowed' : 'text',
         opacity: disabled ? 0.6 : undefined,
         ...style,

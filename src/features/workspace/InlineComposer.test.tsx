@@ -143,7 +143,7 @@ describe('InlineComposer', () => {
 
     act(() => ref.current?.clear());
     expect(screen.getByTestId('value')).toHaveTextContent('{"text":"","tokens":[]}');
-    expect(screen.getByText('Write a message')).toBeInTheDocument();
+    expect(editor).toHaveAttribute('data-placeholder', 'Write a message');
     expect(editor).toHaveStyle({ maxHeight: '130px', overflowY: 'auto' });
   });
 });

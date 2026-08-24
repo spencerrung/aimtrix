@@ -3069,17 +3069,6 @@ function Conversation({
             onFocus={() => setComposerFocused(true)}
             onBlur={() => setComposerFocused(false)}
             disabled={sending || sendingInlineEmojis}
-            style={{
-              width: '100%',
-              minHeight: 34,
-              padding: '8px 10px',
-              color: 'var(--text)',
-              background: 'var(--surface-raised)',
-              fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
-              fontSize: '0.88rem',
-              lineHeight: 1.35,
-              boxShadow: 'inset 0 1px 2px rgba(30,50,65,0.1)',
-            }}
           />
         </label>
         {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}

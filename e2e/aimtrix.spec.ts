@@ -160,6 +160,10 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
   const composer = page.getByLabel('Message Welcome Lounge');
+  await expect.poll(() => composer.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return { paddingLeft: style.paddingLeft, boxSizing: style.boxSizing };
+  })).toEqual({ paddingLeft: '10px', boxSizing: 'border-box' });
   await composer.fill('Browser test message');
   await composer.press('Enter');
   await expect(page.getByText('Browser test message')).toBeVisible();
