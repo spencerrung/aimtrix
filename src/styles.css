@@ -586,7 +586,7 @@
   .media-viewer > img.is-actual-size { max-width: none; max-height: none; }
   .media-viewer > p { padding: 30px; color: var(--text-soft); text-align: center; }
   .message-sticker { width: min(180px, 45vw); max-height: 180px; margin-top: 7px; object-fit: contain; }
-  .emoji-asset { width: 1.6em; height: 1.6em; object-fit: contain; }
+  .emoji-asset { display: inline; width: 1.6em; height: 1.6em; object-fit: contain; }
   .message-audio { width: min(420px, 100%); margin-top: 7px; }
   .message-media-gate { display: flex; width: fit-content; align-items: center; gap: 6px; margin-top: 7px; padding: 8px 10px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-soft); font-size: 0.66rem; font-weight: 700; }
   .message-file { display: flex; width: fit-content; align-items: center; gap: 7px; margin-top: 7px; padding: 9px 11px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); font-size: 0.72rem; font-weight: 700; text-decoration: none; }
@@ -641,11 +641,11 @@
   @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-3px); } }
   .composer { display: flex; min-width: 0; align-items: flex-end; gap: 4px; margin: 0 11px 11px; padding: 5px; border: 1px solid var(--border); border-radius: 9px; background: var(--surface-inset); box-shadow: inset 0 1px 3px rgba(30,50,65,0.14), 0 1px var(--chrome-highlight); }
   .jump-to-latest { position: absolute; z-index: 4; right: 24px; bottom: 74px; padding: 7px 10px; color: var(--blue-deep); border: 1px solid var(--blue); border-radius: 7px; background: var(--surface-raised); box-shadow: var(--small-shadow); font: inherit; font-size: 0.7rem; font-weight: 800; }
-  .composer__tools { display: flex; gap: 1px; }
   .composer__field { min-width: 0; flex: 1; }
   .composer__code-language { max-width: 54px; padding: 4px; color: var(--text-soft); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-inset); font: 0.62rem ui-monospace, monospace; }
   .composer-code-preview { align-self: center; padding: 4px 6px; color: var(--text-faint); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-inset); font: 700 0.58rem ui-monospace, monospace; text-transform: uppercase; white-space: nowrap; }
-  .composer textarea { display: block; width: 100%; min-height: 34px; max-height: 130px; padding: 8px 10px; resize: none; color: var(--text); border: 0; outline: 0; background: var(--surface-raised); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 0.88rem; line-height: 1.35; box-shadow: inset 0 1px 2px rgba(30,50,65,0.1); }
+  .composer [data-inline-composer="true"] { box-sizing: border-box; width: 100%; min-height: 34px; padding: 8px 10px; color: var(--text); border: 0; background: var(--surface-raised); font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 0.88rem; line-height: 1.35; box-shadow: inset 0 1px 2px rgba(30,50,65,0.1); }
+  .composer [data-inline-composer="true"]:empty::before { content: attr(data-placeholder); color: currentColor; opacity: 0.5; pointer-events: none; }
   .send-button { display: grid; width: 32px; height: 29px; padding: 0; place-items: center; color: white; border: 1px solid var(--blue-deep); border-radius: 7px; background: linear-gradient(rgba(255,255,255,0.42), transparent 48%), linear-gradient(#55b2ef, #1875b6); box-shadow: inset 0 1px rgba(255,255,255,0.6); }
 
   .details-panel { min-width: 0; min-height: 0; overflow-y: auto; border-left: 1px solid var(--border-strong); background: var(--surface-soft); }
@@ -848,7 +848,7 @@
   :root[data-theme="aqua"] .conversation-intro { background: radial-gradient(circle at 50% 10%, rgba(141,224,244,0.2), transparent 60%); }
   :root[data-theme="aqua"] .timeline-message:hover { background: linear-gradient(90deg, rgba(219,247,247,0.55), transparent 78%); }
   :root[data-theme="aqua"] .composer { border-top-color: #76a8ad; background: linear-gradient(#e9f9f8, #b9dfd5); }
-  :root[data-theme="aqua"] .composer textarea { background: rgba(255,255,255,0.9); }
+  :root[data-theme="aqua"] .composer [data-inline-composer="true"] { background: rgba(255,255,255,0.9); }
   :root[data-theme="aqua"] .buddy-drawer { background: linear-gradient(#edfafa, #f5f8ed); }
   :root[data-theme="aqua"] .details-panel__banner, :root[data-theme="aqua"] .settings-titlebar, :root[data-theme="aqua"] .profile-dialog__titlebar, :root[data-theme="aqua"] .room-background-dialog > header { background: linear-gradient(rgba(255,255,255,0.85), transparent 48%), linear-gradient(#bdebf3, #72bed1 73%, #80b887); }
   :root[data-theme="aqua"] .drawer-profile__sky { background: radial-gradient(circle at 78% 20%, #fffbd0 0 6%, transparent 7%), linear-gradient(#65c9ef 0 65%, #8ed25a 66%); }
@@ -929,7 +929,7 @@
   .colon-complete small { color: var(--text-faint); font-size: 0.58rem; font-weight: 700; text-transform: uppercase; }
   .mention-complete { position: absolute; z-index: 12; bottom: 65px; left: 12px; display: grid; width: min(320px, calc(100% - 24px)); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 12px 35px rgba(28, 46, 60, 0.32); }
   .mention-complete button { display: flex; align-items: center; gap: 8px; padding: 8px 10px; color: var(--text); border: 0; background: transparent; text-align: left; }
-  .mention-complete button:hover, .mention-complete button:focus-visible { background: var(--blue-soft); outline: 0; }
+  .mention-complete button:hover, .mention-complete button:focus-visible, .mention-complete button.is-active { background: var(--blue-soft); outline: 0; }
   .mention-complete span { display: grid; min-width: 0; }
   .mention-complete strong, .mention-complete small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .mention-complete small { color: var(--text-faint); font-size: 0.63rem; }
@@ -1247,7 +1247,6 @@
     .header-call-actions { display: none; }
     .timeline { padding-inline: 10px; }
     .composer { margin-inline: 6px; padding-bottom: max(5px, env(safe-area-inset-bottom, 0px)); }
-    .composer__tools .icon-button:nth-child(2), .composer__tools .icon-button:nth-child(3) { display: none; }
     .login-stage { padding: 10px; }
     .login-window { width: calc(100vw - 20px); }
     .login-window__hero { padding-inline: 21px; }

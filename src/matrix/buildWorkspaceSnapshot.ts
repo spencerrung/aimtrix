@@ -121,6 +121,16 @@ function readersEqual(
   });
 }
 
+function mentionsEqual(
+  left: NonNullable<MessageSummary['mentions']>,
+  right: NonNullable<MessageSummary['mentions']>,
+): boolean {
+  return left.length === right.length && left.every((mention, index) => {
+    const other = right[index];
+    return mention.userId === other.userId && mention.label === other.label;
+  });
+}
+
 function messagesEqual(left: MessageSummary, right: MessageSummary): boolean {
   return left.senderId === right.senderId &&
     left.senderName === right.senderName &&
@@ -134,6 +144,10 @@ function messagesEqual(left: MessageSummary, right: MessageSummary): boolean {
     left.codeFile === right.codeFile &&
     left.codeLanguage === right.codeLanguage &&
     left.edited === right.edited &&
+    (left.mentionUserIds?.join('\u0000') ?? '') === (right.mentionUserIds?.join('\u0000') ?? '') &&
+    (left.mentions === undefined
+      ? right.mentions === undefined
+      : right.mentions !== undefined && mentionsEqual(left.mentions, right.mentions)) &&
     left.pinned === right.pinned &&
     left.pending === right.pending &&
     left.isOwn === right.isOwn &&
@@ -165,6 +179,8 @@ interface MessageContent {
   [key: string]: unknown;
   body?: string;
   msgtype?: string;
+  format?: string;
+  formatted_body?: string;
   url?: string;
   file?: EncryptedMediaInfo & { url?: string };
   info?: { mimetype?: string };
@@ -172,6 +188,22 @@ interface MessageContent {
   'm.relates_to'?: RelationContent;
   'm.mentions'?: { user_ids?: string[] };
   'dev.alucard.aimtrix.nudge.v1'?: { version?: unknown };
+}
+
+function originalEventContent(event: MatrixEvent): MessageContent {
+  const candidate = event as MatrixEvent & {
+    getOriginalContent?: <T>() => T;
+  };
+  return candidate.getOriginalContent
+    ? candidate.getOriginalContent<MessageContent>()
+    : event.getContent<MessageContent>();
+}
+
+function sdkReplacingEvent(event: MatrixEvent): MatrixEvent | undefined {
+  const candidate = event as MatrixEvent & {
+    replacingEvent?: () => MatrixEvent | null;
+  };
+  return candidate.replacingEvent?.() ?? undefined;
 }
 
 function mapPresence(value?: string): PresenceState {
@@ -205,6 +237,7 @@ function eventBody(
   mediaUrl?: string;
   edited?: boolean;
   mentionUserIds?: string[];
+  formattedBody?: string;
   nudge?: boolean;
   encryptedFile?: MessageSummary['encryptedFile'];
   mimeType?: string;
@@ -217,7 +250,7 @@ function eventBody(
   if (type === matrixEventType.encrypted) {
     return { body: 'Waiting for encryption keys…', kind: 'encrypted' };
   }
-  const originalContent = event.getContent<MessageContent>();
+  const originalContent = originalEventContent(event);
   if (type === matrixEventType.sticker) {
     if (typeof originalContent.body !== 'string') return undefined;
     const file = originalContent.file;
@@ -231,7 +264,19 @@ function eventBody(
   }
   if (type !== matrixEventType.message) return undefined;
 
-  const replacementContent = replacement?.getContent<MessageContent>()['m.new_content'];
+  const sdkReplacement = sdkReplacingEvent(event);
+  const candidateReplacement = replacement ?? sdkReplacement;
+  const candidateRelation = candidateReplacement
+    ? originalEventContent(candidateReplacement)['m.relates_to']
+    : undefined;
+  const validReplacement = candidateReplacement &&
+    !candidateReplacement.isRedacted() &&
+    candidateReplacement.getSender() === event.getSender() &&
+    candidateRelation?.rel_type === 'm.replace' &&
+    candidateRelation.event_id === event.getId()
+    ? candidateReplacement
+    : undefined;
+  const replacementContent = validReplacement?.getContent<MessageContent>()['m.new_content'];
   const content = replacementContent ?? originalContent;
   if (typeof content.body !== 'string') return undefined;
   const body = originalContent['m.relates_to']?.['m.in_reply_to']
@@ -246,6 +291,9 @@ function eventBody(
         edited: Boolean(replacementContent),
         mentionUserIds: Array.isArray(content['m.mentions']?.user_ids)
           ? content['m.mentions']?.user_ids.filter((id): id is string => typeof id === 'string')
+          : undefined,
+        formattedBody: content.format === 'org.matrix.custom.html' && typeof content.formatted_body === 'string'
+          ? content.formatted_body
           : undefined,
       };
     case matrixMessageType.notice:
@@ -275,11 +323,51 @@ function eventBody(
         codeLanguage: typeof (content['dev.alucard.aimtrix.code.v1'] as { language?: unknown } | undefined)?.language === 'string'
           ? (content['dev.alucard.aimtrix.code.v1'] as { language: string }).language
           : undefined,
+        edited: Boolean(replacementContent),
       };
     }
     default:
       return undefined;
   }
+}
+
+function decodeMentionLabel(value: string): string {
+  return value
+    .replace(/<[^>]*>/g, '')
+    .replaceAll('&amp;', '&')
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&quot;', '"')
+    .replaceAll('&#39;', "'")
+    .trim();
+}
+
+function messageMentions(
+  body: string,
+  formattedBody: string | undefined,
+  userIds: string[] | undefined,
+): MessageSummary['mentions'] {
+  const allowed = new Set(userIds ?? []);
+  if (!allowed.size) return undefined;
+  const labels = new Map<string, string>();
+  const anchor = /<a\s+[^>]*href=(['"])(https:\/\/matrix\.to\/#\/[^'"]+)\1[^>]*>([\s\S]*?)<\/a>/gi;
+  let match: RegExpExecArray | null;
+  while (formattedBody && (match = anchor.exec(formattedBody))) {
+    try {
+      const fragment = new URL(match[2]).hash.replace(/^#\//, '');
+      const userId = decodeURIComponent(fragment);
+      const label = decodeMentionLabel(match[3]);
+      if (allowed.has(userId) && label && body.includes(label)) labels.set(userId, label);
+    } catch {
+      // Malformed rich mention links fall back to the readable plain body.
+    }
+  }
+  return [...allowed].map((userId) => {
+    return {
+      userId,
+      label: labels.get(userId) ?? (body.includes(userId) ? userId : ''),
+    };
+  }).filter((mention) => mention.label);
 }
 
 function messagesForEvents(
@@ -303,13 +391,23 @@ function messagesForEvents(
   const threadRootByEventId = new Map<string, string>();
 
   for (const event of events) {
-    const content = event.getContent<MessageContent>();
+    const content = originalEventContent(event);
     const relation = content['m.relates_to'];
     const eventId = event.getId();
     const senderId = event.getSender();
     if (relation?.rel_type === 'm.replace' && relation.event_id) {
+      const original = eventById.get(relation.event_id);
+      const newContent = content['m.new_content'];
       const existing = replacements.get(relation.event_id);
-      if (!existing || existing.getTs() < event.getTs()) replacements.set(relation.event_id, event);
+      if (
+        original &&
+        newContent &&
+        !event.isRedacted() &&
+        event.getSender() === original.getSender() &&
+        (!existing ||
+          existing.getTs() < event.getTs() ||
+          (existing.getTs() === event.getTs() && (existing.getId() ?? '') < (event.getId() ?? '')))
+      ) replacements.set(relation.event_id, event);
     }
     // Detect thread relations: rel_type "m.thread" or unstable "io.element.thread"
     if (
@@ -340,7 +438,7 @@ function messagesForEvents(
   }
 
   const messages = events.flatMap((event): MessageSummary[] => {
-    const content = event.getContent<MessageContent>();
+    const content = originalEventContent(event);
     if (content['m.relates_to']?.rel_type === 'm.replace') return [];
     const eventId = event.getId();
     const senderId = event.getSender();
@@ -378,6 +476,11 @@ function messagesForEvents(
       codeLanguage: rendered.codeLanguage,
       edited: rendered.edited,
       mentionUserIds: rendered.mentionUserIds,
+      mentions: messageMentions(
+        rendered.body,
+        rendered.formattedBody,
+        rendered.mentionUserIds,
+      ),
       nudge: rendered.nudge,
       threadRootId: threadRootByEventId.get(eventId),
       isThreadRoot: threadRootIds.has(eventId),

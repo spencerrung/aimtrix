@@ -75,6 +75,91 @@ describe('buildWorkspaceSnapshot stickers', () => {
     expect(message.mentionUserIds).toEqual(['@me:test']);
   });
 
+  it('maps cross-client rich mention labels to their canonical Matrix IDs', () => {
+    const client = fakeClient([
+      fakeEvent('m.room.message', {
+        msgtype: 'm.text',
+        body: '@Spencer hello',
+        format: 'org.matrix.custom.html',
+        formatted_body: '<a href="https://matrix.to/#/%40me%3Atest">@Spencer</a> hello',
+        'm.mentions': { user_ids: ['@me:test'] },
+      }),
+    ]);
+    const [message] = buildWorkspaceSnapshot(client, 'online').messagesByRoom['!room:test'];
+    expect(message.mentions).toEqual([{ userId: '@me:test', label: '@Spencer' }]);
+  });
+
+  it('applies the latest valid Matrix replacement and keeps original event metadata', () => {
+    const original = fakeEvent(
+      'm.room.message',
+      { msgtype: 'm.text', body: 'Before' },
+      '$original:test',
+      '@mara:test',
+    );
+    const replacement = fakeEvent(
+      'm.room.message',
+      {
+        msgtype: 'm.text',
+        body: '* After',
+        'm.new_content': { msgtype: 'm.text', body: 'After' },
+        'm.relates_to': { rel_type: 'm.replace', event_id: '$original:test' },
+      },
+      '$replacement:test',
+      '@mara:test',
+    );
+    const client = fakeClient([original, replacement]);
+
+    const messages = buildWorkspaceSnapshot(client, 'online').messagesByRoom['!room:test'];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      id: '$original:test',
+      body: 'After',
+      timestamp: 1000,
+      edited: true,
+    });
+  });
+
+  it('rejects SDK replacement aggregates that do not target the original event', () => {
+    const wrongReplacement = fakeEvent(
+      'm.room.message',
+      {
+        msgtype: 'm.text',
+        body: '* Wrong',
+        'm.new_content': { msgtype: 'm.text', body: 'Wrong' },
+        'm.relates_to': { rel_type: 'm.replace', event_id: '$someone-else:test' },
+      },
+      '$wrong:test',
+      '@mara:test',
+    );
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Original' }, '$original:test', '@mara:test');
+    Object.assign(original, { replacingEvent: () => wrongReplacement });
+    const [message] = buildWorkspaceSnapshot(fakeClient([original]), 'online').messagesByRoom['!room:test'];
+
+    expect(message).toMatchObject({ body: 'Original' });
+    expect(message.edited).toBe(false);
+  });
+
+  it('breaks equal-timestamp replacement ties by greatest event ID', () => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Original' }, '$original:test', '@mara:test');
+    const replacement = (eventId: string, body: string) => fakeEvent(
+      'm.room.message',
+      {
+        msgtype: 'm.text',
+        body: `* ${body}`,
+        'm.new_content': { msgtype: 'm.text', body },
+        'm.relates_to': { rel_type: 'm.replace', event_id: '$original:test' },
+      },
+      eventId,
+      '@mara:test',
+    );
+    const messages = buildWorkspaceSnapshot(
+      fakeClient([original, replacement('$z:test', 'Greatest'), replacement('$a:test', 'Later in array')]),
+      'online',
+    ).messagesByRoom['!room:test'];
+
+    expect(messages[0].body).toBe('Greatest');
+  });
+
   it('renders plain stickers from their original Matrix media URL', () => {
     const client = fakeClient([
       fakeEvent('m.sticker', {

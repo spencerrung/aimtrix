@@ -90,6 +90,14 @@ import {
 import type { UserPreferences } from '../../settings/preferences';
 import type { PushRoute } from '../../pwa/pushRouting';
 import type { InstallAndUpdate } from '../../platform/platform';
+import { readNativeClipboardImage } from '../../platform/clipboardImage';
+import { deriveTimelineDaySeparators } from './timelineGrouping';
+import {
+  InlineComposer,
+  type InlineComposerHandle,
+  type InlineComposerSelection,
+  type InlineComposerTokenOccurrence,
+} from './InlineComposer';
 import {
   defaultProfilePersonalization,
   type ProfilePersonalization,
@@ -111,6 +119,24 @@ type LinkPreview = {
   imageUrl?: string;
   siteName?: string;
 };
+
+type ComposerMention = {
+  userId: string;
+  label: string;
+};
+
+type ComposerInlineEmoji = InlineComposerTokenOccurrence & {
+  shortcode: string;
+  id: string;
+  name: string;
+  src: string;
+};
+
+function hasVisibleComposerMention(body: string, label: string): boolean {
+  const escaped = `@${label}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(body);
+}
+
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 const MAX_VISIBLE_EMOJI_RESULTS = 240;
@@ -269,7 +295,53 @@ function CodeFileMessage({ message, source }: { message: MessageSummary; source:
 
 const CUSTOM_EMOJI_PATTERN = /(:[a-z0-9][a-z0-9_+-]*:)/gi;
 
-function InlineMessageText({ body, emojiCatalog, hasMentions }: { body: string; emojiCatalog: EmojiPackEntry[]; hasMentions: boolean }) {
+function MentionedText({ body, mentions, keyPrefix }: { body: string; mentions: NonNullable<MessageSummary['mentions']>; keyPrefix: string }) {
+  const segments: ReactNode[] = [];
+  let cursor = 0;
+  const candidates = mentions
+    .filter((mention) => mention.label && body.includes(mention.label))
+    .sort((left, right) => right.label.length - left.label.length);
+  while (cursor < body.length) {
+    let selected: (typeof candidates)[number] | undefined;
+    let selectedIndex = -1;
+    for (const candidate of candidates) {
+      let index = body.indexOf(candidate.label, cursor);
+      while (index >= 0) {
+        const previous = body.slice(0, index).match(/.$/u)?.[0];
+        const next = body.slice(index + candidate.label.length).match(/^./u)?.[0];
+        if (
+          (!previous || !/[\p{L}\p{N}_]/u.test(previous)) &&
+          (!next || !/[\p{L}\p{N}_]/u.test(next))
+        ) break;
+        index = body.indexOf(candidate.label, index + candidate.label.length);
+      }
+      if (index >= 0 && (selectedIndex < 0 || index < selectedIndex)) {
+        selected = candidate;
+        selectedIndex = index;
+      }
+    }
+    if (!selected || selectedIndex < 0) {
+      segments.push(<LinkifiedText body={body.slice(cursor)} key={`${keyPrefix}:tail`} />);
+      break;
+    }
+    if (selectedIndex > cursor) {
+      segments.push(<LinkifiedText body={body.slice(cursor, selectedIndex)} key={`${keyPrefix}:text:${cursor}`} />);
+    }
+    segments.push(
+      <a
+        className="message-mention"
+        href={`https://matrix.to/#/${encodeURIComponent(selected.userId)}`}
+        target="_blank"
+        rel="noreferrer"
+        key={`${keyPrefix}:mention:${selected.userId}:${selectedIndex}`}
+      >{selected.label}</a>,
+    );
+    cursor = selectedIndex + selected.label.length;
+  }
+  return <>{segments}</>;
+}
+
+function InlineMessageText({ body, emojiCatalog, mentions = [] }: { body: string; emojiCatalog: EmojiPackEntry[]; mentions?: MessageSummary['mentions'] }) {
   const renderPlainText = (text: string, keyPrefix: string) => text.split(CUSTOM_EMOJI_PATTERN).map((token, tokenIndex) => {
     const entry = token.startsWith(':') && token.endsWith(':')
       ? emojiCatalog.find((candidate) => candidate.src && emojiReactionKey(candidate).toLowerCase() === token.toLowerCase())
@@ -277,16 +349,13 @@ function InlineMessageText({ body, emojiCatalog, hasMentions }: { body: string; 
     if (entry?.src) {
       return <EmojiAsset entry={entry} style={{ verticalAlign: 'middle' }} alt={entry.name} title={entry.name} key={`${keyPrefix}:emoji:${tokenIndex}`} />;
     }
-    if (!hasMentions) return <LinkifiedText body={token} key={`${keyPrefix}:text:${tokenIndex}`} />;
-    return <Fragment key={`${keyPrefix}:mentions:${tokenIndex}`}>{token.split(/(@[\w.-]+)/g).map((mentionToken, mentionIndex) => mentionToken.startsWith('@')
-      ? <mark className="message-mention" key={mentionIndex}>{mentionToken}</mark>
-      : <LinkifiedText body={mentionToken} key={mentionIndex} />,
-    )}</Fragment>;
+    if (!mentions.length) return <LinkifiedText body={token} key={`${keyPrefix}:text:${tokenIndex}`} />;
+    return <MentionedText body={token} mentions={mentions} keyPrefix={`${keyPrefix}:${tokenIndex}`} key={`${keyPrefix}:mentions:${tokenIndex}`} />;
   });
   return <>{renderPlainText(body, 'inline')}</>;
 }
 
-function MessageText({ body, emojiCatalog, hasMentions = false }: { body: string; emojiCatalog: EmojiPackEntry[]; hasMentions?: boolean }) {
+function MessageText({ body, emojiCatalog, mentions }: { body: string; emojiCatalog: EmojiPackEntry[]; mentions?: MessageSummary['mentions'] }) {
   const blocks = body.split(/```(?:(typescript|javascript|python|rust|bash|json|yaml)\n)?([\s\S]*?)```/gi);
   return <>{blocks.map((block, index) => {
     if (index % 3 === 1) return null;
@@ -300,7 +369,7 @@ function MessageText({ body, emojiCatalog, hasMentions = false }: { body: string
       if (part.startsWith('`') && part.endsWith('`')) return <code key={partIndex}>{part.slice(1, -1)}</code>;
       if (part.startsWith('**') && part.endsWith('**')) return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
       if (part.startsWith('_') && part.endsWith('_')) return <em key={partIndex}>{part.slice(1, -1)}</em>;
-      return <InlineMessageText body={part} emojiCatalog={emojiCatalog} hasMentions={hasMentions} key={partIndex} />;
+      return <InlineMessageText body={part} emojiCatalog={emojiCatalog} mentions={mentions} key={partIndex} />;
     })}</p>;
   })}</>;
 }
@@ -319,7 +388,7 @@ interface WorkspaceProps {
   matrixSettingsActions?: MatrixSettingsActions;
   install?: InstallAndUpdate;
   pushRoute?: PushRoute;
-  onSendMessage?: (roomId: string, body: string, mentionUserIds?: string[]) => Promise<void>;
+  onSendMessage?: (roomId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onSendNudge?: (roomId: string) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
@@ -336,8 +405,10 @@ interface WorkspaceProps {
     roomId: string,
     body: string,
     target: { id: string; senderId: string; body: string; threadRootId?: string },
+    mentions?: ComposerMention[],
+    inlineEmojis?: ComposerInlineEmoji[],
   ) => Promise<void>;
-  onEditMessage?: (roomId: string, eventId: string, body: string) => Promise<void>;
+  onEditMessage?: (roomId: string, eventId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onRedactMessage?: (roomId: string, eventId: string) => Promise<void>;
   onTogglePinnedMessage?: (roomId: string, eventId: string, pinned: boolean) => Promise<void>;
   onToggleReaction?: (
@@ -452,6 +523,7 @@ function SpaceButton({
   reorderable,
   onSelect,
   onDragStart,
+  onDragEnd,
   onDrop,
   onMove,
 }: {
@@ -459,8 +531,9 @@ function SpaceButton({
   active: boolean;
   reorderable: boolean;
   onSelect: () => void;
-  onDragStart?: () => void;
-  onDrop?: () => void;
+  onDragStart?: (event: DragEvent<HTMLButtonElement>) => void;
+  onDragEnd?: () => void;
+  onDrop?: (event: DragEvent<HTMLButtonElement>) => void;
   onMove?: (offset: -1 | 1) => void;
 }) {
   const mediaSrc = useMediaSource(space.avatarUrl, 80);
@@ -473,22 +546,23 @@ function SpaceButton({
       type="button"
       aria-label={space.name}
       aria-pressed={active}
-      title={reorderable ? `${space.name} · drag to reorder` : space.name}
+      title={reorderable ? `${space.name} · drag or press Alt+Arrow keys to reorder` : space.name}
       draggable={reorderable}
       aria-keyshortcuts={reorderable ? 'Alt+ArrowUp Alt+ArrowDown' : undefined}
       onClick={onSelect}
       onDragStart={(event) => {
         if (!reorderable) return;
         event.dataTransfer.effectAllowed = 'move';
-        onDragStart?.();
+        onDragStart?.(event);
       }}
+      onDragEnd={onDragEnd}
       onDragOver={(event) => {
         if (reorderable) event.preventDefault();
       }}
       onDrop={(event) => {
         if (!reorderable) return;
         event.preventDefault();
-        onDrop?.();
+        onDrop?.(event);
       }}
       onKeyDown={(event) => {
         if (!reorderable || !event.altKey) return;
@@ -500,11 +574,12 @@ function SpaceButton({
         <img
           src={mediaSrc}
           alt=""
+          draggable={false}
           loading="lazy"
           onError={() => setFailedSrc(mediaSrc)}
         />
       ) : (
-        <span style={{ '--space-color': space.color } as CSSProperties}>{space.initials}</span>
+        <span draggable={false} style={{ '--space-color': space.color } as CSSProperties}>{space.initials}</span>
       )}
       {space.unreadCount > 0 ? (
         <b className={space.highlighted ? 'is-highlighted' : ''}>{space.unreadCount}</b>
@@ -524,38 +599,58 @@ function SpaceRail({
   onSelect: (spaceId: string) => void;
   onReorder?: (spaceIds: string[]) => Promise<void>;
 }) {
-  const [draggedSpaceId, setDraggedSpaceId] = useState<string>();
-  const [localOrder, setLocalOrder] = useState<string[]>([]);
+  const draggedSpaceIdRef = useRef<string | undefined>(undefined);
+  const [localOrder, setLocalOrder] = useState<string[]>();
+  const [reorderStatus, setReorderStatus] = useState('');
+  const [reordering, setReordering] = useState(false);
   const systemSpaces = workspace.spaces.filter((space) => space.kind !== 'matrix');
   const matrixRoots = workspace.spaces.filter(
     (space) => space.kind === 'matrix' && space.parentSpaceIds.length === 0,
   );
-  const orderedIds = [
-    ...localOrder.filter((spaceId) => matrixRoots.some((space) => space.id === spaceId)),
-    ...matrixRoots.map((space) => space.id).filter((spaceId) => !localOrder.includes(spaceId)),
+  const workspaceJoinedIds = matrixRoots
+    .filter((space) => space.membership === 'join')
+    .map((space) => space.id);
+  const orderedJoinedIds = [
+    ...(localOrder ?? []).filter((spaceId) => workspaceJoinedIds.includes(spaceId)),
+    ...workspaceJoinedIds.filter((spaceId) => !localOrder?.includes(spaceId)),
   ];
-  const orderedRoots = orderedIds.flatMap((spaceId) => {
-    const space = matrixRoots.find((candidate) => candidate.id === spaceId);
-    return space ? [space] : [];
+  const orderedRoots = matrixRoots.map((space, index) => {
+    if (space.membership !== 'join') return space;
+    const joinedIndex = matrixRoots.slice(0, index).filter((candidate) => candidate.membership === 'join').length;
+    const ordered = matrixRoots.find((candidate) => candidate.id === orderedJoinedIds[joinedIndex]);
+    return ordered ?? space;
   });
   const reorder = async (spaceId: string, targetIndex: number) => {
-    const sourceIndex = orderedIds.indexOf(spaceId);
+    if (reordering) return;
+    const sourceIndex = orderedJoinedIds.indexOf(spaceId);
     if (sourceIndex < 0) return;
-    const next = [...orderedIds];
+    const next = [...orderedJoinedIds];
     next.splice(sourceIndex, 1);
-    const adjustedIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
-    next.splice(Math.max(0, Math.min(adjustedIndex, next.length)), 0, spaceId);
-    if (next.every((id, index) => id === orderedIds[index])) return;
+    next.splice(Math.max(0, Math.min(targetIndex, next.length)), 0, spaceId);
+    if (next.every((id, index) => id === orderedJoinedIds[index])) return;
     setLocalOrder(next);
+    setReordering(true);
+    const movedName = matrixRoots.find((space) => space.id === spaceId)?.name ?? 'Space';
+    setReorderStatus(`Saving ${movedName} at position ${next.indexOf(spaceId) + 1} of ${next.length}.`);
     try {
       await onReorder?.(next);
+      setReorderStatus(`${movedName} moved to position ${next.indexOf(spaceId) + 1} of ${next.length}.`);
+      if (workspace.mode === 'matrix') setLocalOrder(undefined);
     } catch {
-      setLocalOrder(orderedIds);
+      setLocalOrder(undefined);
+      setReorderStatus(`Aimtrix could not save the new position for ${movedName}. The previous order was restored.`);
+    } finally {
+      setReordering(false);
     }
   };
 
   return (
     <nav className="space-rail" aria-label="Spaces">
+      {reorderStatus ? (
+        <span className="sr-only" role="status" aria-label="Space reorder status" aria-live="polite">
+          {reorderStatus}
+        </span>
+      ) : null}
       <div className="space-rail__brand"><BrandMark compact /></div>
       <div className="space-rail__items">
         {systemSpaces.map((space) => (
@@ -568,8 +663,9 @@ function SpaceRail({
           />
         ))}
         {orderedRoots.length ? <div className="space-rail__divider" role="separator" /> : null}
-        {orderedRoots.map((space, rootIndex) => {
-          const reorderable = space.membership === 'join' && (workspace.mode === 'demo' || Boolean(onReorder));
+        {orderedRoots.map((space) => {
+          const reorderable = !reordering && space.membership === 'join' && (workspace.mode === 'demo' || Boolean(onReorder));
+          const rootIndex = orderedJoinedIds.indexOf(space.id);
           return (
             <SpaceButton
               key={space.id}
@@ -577,12 +673,22 @@ function SpaceRail({
               active={activeSpace === space.id}
               reorderable={reorderable}
               onSelect={() => onSelect(space.id)}
-              onDragStart={() => setDraggedSpaceId(space.id)}
-              onDrop={() => {
-                if (draggedSpaceId) void reorder(draggedSpaceId, rootIndex);
-                setDraggedSpaceId(undefined);
+              onDragStart={(event) => {
+                event.dataTransfer.setData('application/x-aimtrix-space', space.id);
+                event.dataTransfer.setData('text/plain', space.id);
+                draggedSpaceIdRef.current = space.id;
               }}
-              onMove={(offset) => void reorder(space.id, rootIndex + (offset > 0 ? 2 : -1))}
+              onDragEnd={() => {
+                draggedSpaceIdRef.current = undefined;
+              }}
+              onDrop={(event) => {
+                const sourceId = event.dataTransfer.getData('application/x-aimtrix-space')
+                  || event.dataTransfer.getData('text/plain')
+                  || draggedSpaceIdRef.current;
+                if (sourceId) void reorder(sourceId, rootIndex);
+                draggedSpaceIdRef.current = undefined;
+              }}
+              onMove={(offset) => void reorder(space.id, rootIndex + offset)}
             />
           );
         })}
@@ -1456,8 +1562,9 @@ const TimelineMessage = memo(function TimelineMessage({
   const canViewImage = message.mediaKind === 'image' && message.kind !== 'sticker';
   const reactionEmojis = useMemo(() => {
     const fallback = reactionFallback.map<EmojiPackEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
-    const source = emojiCatalog.length
-      ? [...emojiCatalog, ...fallback.filter((fallbackEntry) => !emojiCatalog.some((entry) => entry.emoji === fallbackEntry.emoji))]
+    const portableCatalog = emojiCatalog.filter((entry): entry is TextEmojiEntry => Boolean(entry.emoji));
+    const source = portableCatalog.length
+      ? [...portableCatalog, ...fallback.filter((fallbackEntry) => !portableCatalog.some((entry) => entry.emoji === fallbackEntry.emoji))]
       : fallback;
     const query = reactionQuery.trim().toLowerCase().replace(/^:/, '').replace(/:$/, '').replace(/[_-]+/g, ' ');
     const matches = source.filter((entry) =>
@@ -1538,7 +1645,7 @@ const TimelineMessage = memo(function TimelineMessage({
             {message.senderName}
           </strong>
           <time dateTime={new Date(message.timestamp).toISOString()}>{formatTime(message.timestamp)}</time>
-          {message.edited ? <span className="sending-label">edited</span> : null}
+          {message.edited ? <span className="sending-label edited-label" aria-label="Edited message">edited</span> : null}
           {message.pinned ? <span className="sending-label pinned-label"><Pin size={10} /> pinned</span> : null}
           {message.pending ? <span className="sending-label">sending…</span> : null}
         </header>
@@ -1560,7 +1667,7 @@ const TimelineMessage = memo(function TimelineMessage({
           canViewImage ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => setMediaViewerOpen(true)}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button> : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
         ) : (
           <div className={`message-kind--${message.kind}`}>
-            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} emojiCatalog={emojiCatalog} hasMentions={Boolean(message.mentionUserIds?.length)} />
+            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} emojiCatalog={emojiCatalog} mentions={message.mentions} />
           </div>
         )}
         <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
@@ -1716,7 +1823,6 @@ function Conversation({
   editingThreadMessage,
   onBack,
   onDraftChange,
-  onMentionSelected,
   onThreadDraftChange,
   onSubmit,
   onThreadSubmit,
@@ -1773,9 +1879,8 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: (body?: string, mentionUserIds?: string[]) => Promise<boolean>;
-  onMentionSelected: (userId: string) => void;
-  onThreadSubmit: () => Promise<void>;
+  onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<boolean>;
+  onThreadSubmit: (mentions?: ComposerMention[]) => Promise<boolean>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
   onOpenBackground: () => void;
@@ -1793,7 +1898,7 @@ function Conversation({
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
   emojiPacks: EmojiPackDefinition[];
   emojiAssetBaseUrl?: string;
-  onSendSticker: (sticker: { id: string; name: string; src: string }) => void;
+  onSendSticker: (sticker: { id: string; name: string; src: string }) => Promise<boolean>;
   onUploadAttachment: (file: File, threadRootId?: string, codeLanguage?: string) => Promise<boolean>;
   onCancelUpload: () => void;
   onRetryUpload: () => void;
@@ -1839,17 +1944,68 @@ function Conversation({
   const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
   const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
   const fileInput = useRef<HTMLInputElement>(null);
-  const mainComposer = useRef<HTMLTextAreaElement>(null);
+  const mainComposer = useRef<InlineComposerHandle>(null);
+  const composerForm = useRef<HTMLFormElement>(null);
   const threadComposer = useRef<HTMLTextAreaElement>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('text');
   const [codeDraftMode, setCodeDraftMode] = useState(false);
-  const [, setMentionUserIds] = useState<string[]>([]);
-  const mentionUserIdsRef = useRef<string[]>([]);
+  const [mentionsByRoom, setMentionsByRoom] = useState<Record<string, ComposerMention[]>>({});
+  const selectedMentions = room?.id ? mentionsByRoom[room.id] ?? [] : [];
+  const mentionsBeforeEdit = useRef<ComposerMention[]>([]);
+  const inlineEmojisBeforeEdit = useRef<ComposerInlineEmoji[]>([]);
+  const setSelectedMentions = (update: ComposerMention[] | ((current: ComposerMention[]) => ComposerMention[])) => {
+    if (!room?.id) return;
+    setMentionsByRoom((current) => {
+      const next = typeof update === 'function' ? update(current[room.id] ?? []) : update;
+      return { ...current, [room.id]: next };
+    });
+  };
+  const [inlineEmojisByRoom, setInlineEmojisByRoom] = useState<Record<string, ComposerInlineEmoji[]>>({});
+  const inlineEmojiSendInFlight = useRef(false);
+  const [sendingInlineEmojis, setSendingInlineEmojis] = useState(false);
+  const inlineEmojis = room?.id ? inlineEmojisByRoom[room.id] ?? [] : [];
+  const setInlineEmojis = (
+    update: ComposerInlineEmoji[] | ((current: ComposerInlineEmoji[]) => ComposerInlineEmoji[]),
+  ) => {
+    if (!room?.id) return;
+    setInlineEmojisByRoom((current) => {
+      const next = typeof update === 'function' ? update(current[room.id] ?? []) : update;
+      return { ...current, [room.id]: next };
+    });
+  };
   const mentionQuery = draft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
-  const mentionMatches = mentionQuery === undefined ? [] : members.filter((member) =>
+  const [mentionIndex, setMentionIndex] = useState(0);
+  const [mentionDismissed, setMentionDismissed] = useState<string>();
+  const mentionMatches = mentionQuery === undefined || mentionDismissed === mentionQuery ? [] : members.filter((member) =>
     member.id.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery),
   ).slice(0, 6);
+  const [lastMentionQuery, setLastMentionQuery] = useState(mentionQuery);
+  if (lastMentionQuery !== mentionQuery) {
+    setLastMentionQuery(mentionQuery);
+    setMentionIndex(0);
+  }
+  const [threadMentionsByRoot, setThreadMentionsByRoot] = useState<Record<string, ComposerMention[]>>({});
+  const selectedThreadMentions = threadRoot?.id ? threadMentionsByRoot[threadRoot.id] ?? [] : [];
+  const threadMentionsBeforeEdit = useRef<ComposerMention[]>([]);
+  const setSelectedThreadMentions = (update: ComposerMention[] | ((current: ComposerMention[]) => ComposerMention[])) => {
+    if (!threadRoot?.id) return;
+    setThreadMentionsByRoot((current) => {
+      const next = typeof update === 'function' ? update(current[threadRoot.id] ?? []) : update;
+      return { ...current, [threadRoot.id]: next };
+    });
+  };
+  const threadMentionQuery = threadDraft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
+  const [threadMentionIndex, setThreadMentionIndex] = useState(0);
+  const [threadMentionDismissed, setThreadMentionDismissed] = useState<string>();
+  const threadMentionMatches = threadMentionQuery === undefined || threadMentionDismissed === threadMentionQuery ? [] : members.filter((member) =>
+    member.id.toLowerCase().includes(threadMentionQuery) || member.displayName.toLowerCase().includes(threadMentionQuery),
+  ).slice(0, 6);
+  const [lastThreadMentionQuery, setLastThreadMentionQuery] = useState(threadMentionQuery);
+  if (lastThreadMentionQuery !== threadMentionQuery) {
+    setLastThreadMentionQuery(threadMentionQuery);
+    setThreadMentionIndex(0);
+  }
   const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<EmojiPackEntry[]>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
@@ -1894,6 +2050,12 @@ function Conversation({
         `${message.senderName} ${message.body}`.toLowerCase().includes(messageQuery.trim().toLowerCase()),
       )
     : messages;
+  const daySeparators = useMemo(() => new Map(
+    deriveTimelineDaySeparators(messages).map((separator) => [
+      messages[separator.beforeIndex]?.id,
+      separator,
+    ] as const),
+  ), [messages]);
   const [entryUnreadState, setEntryUnreadState] = useState<{
     roomId?: string;
     marker?: EntryUnreadMarker;
@@ -1953,64 +2115,154 @@ function Conversation({
     .slice(0, emojiQuery.trim() ? 48 : MAX_VISIBLE_EMOJI_RESULTS);
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const isFencedDraft = draft.startsWith('```');
-    const body = codeDraftMode
-      ? `\`\`\`${codeLanguage}\n${draft}\n\`\`\``
-      : isFencedDraft ? draft : undefined;
-    const resolvedMentionIds = members
-      .filter((member) => new RegExp(`(^|\\s)@${member.displayName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?=\\s|$)`, 'u').test(draft))
-      .map((member) => member.id);
-    const selectedMentionIds = [...new Set([...mentionUserIdsRef.current, ...resolvedMentionIds])];
-    void onSubmit(body, selectedMentionIds).then((sent) => {
-      if (sent) returnToLatest();
-    }).finally(() => {
+    if (inlineEmojiSendInFlight.current) return;
+    const sendingEmoji = inlineEmojis.length > 0;
+    if (sendingEmoji) {
+      inlineEmojiSendInFlight.current = true;
+      setSendingInlineEmojis(true);
+    }
+    void (async () => {
+      const messageDraft = draft;
+      const isFencedDraft = messageDraft.startsWith('```');
+      const body = codeDraftMode
+        ? `\`\`\`${codeLanguage}\n${messageDraft}\n\`\`\``
+        : isFencedDraft || inlineEmojis.length ? messageDraft : undefined;
+      const editMentions = (editingMessage?.mentions ?? []).map((mention) => ({
+        userId: mention.userId,
+        label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
+      }));
+      const activeMentions = [...selectedMentions, ...editMentions]
+        .filter((mention, index, values) =>
+          hasVisibleComposerMention(messageDraft, mention.label) &&
+          values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
+        );
+      const sentMessage = await onSubmit(body, activeMentions, inlineEmojis);
+      if (!sentMessage) return;
+      setInlineEmojis([]);
+      setSelectedMentions([]);
+      returnToLatest();
+    })().finally(() => {
+      if (sendingEmoji) {
+        inlineEmojiSendInFlight.current = false;
+        setSendingInlineEmojis(false);
+      }
       setCodeDraftMode(false);
-      setMentionUserIds([]);
-      mentionUserIdsRef.current = [];
       requestAnimationFrame(() => mainComposer.current?.focus());
     });
   };
+  const stageInlineSticker = (
+    sticker: { id: string; name: string; src: string },
+    before: string,
+    after = '',
+  ) => {
+    const shortcode = `:${sticker.id}:`;
+    mainComposer.current?.replaceRange(
+      before.length,
+      draft.length - after.length,
+      { id: sticker.id, shortcode, src: sticker.src, alt: sticker.name, title: sticker.name },
+    );
+    rememberEmoji(shortcode);
+    requestAnimationFrame(() => {
+      mainComposer.current?.focus();
+      const caret = before.length + shortcode.length;
+      mainComposer.current?.setSelection({ start: caret, end: caret });
+    });
+  };
   const insertMention = (member: MemberSummary) => {
-    onMentionSelected(member.id);
-    if (!mentionUserIdsRef.current.includes(member.id)) {
-      mentionUserIdsRef.current = [...mentionUserIdsRef.current, member.id];
-      setMentionUserIds(mentionUserIdsRef.current);
-    }
-    onDraftChange(draft.replace(/@[^\s@]*$/, `@${member.displayName} `));
+    const label = member.displayName;
+    setSelectedMentions((current) => current.some((mention) => mention.userId === member.id && mention.label === label)
+      ? current
+      : [...current, { userId: member.id, label }]);
+    const match = draft.match(/@[^\s@]*$/);
+    if (match?.index !== undefined) mainComposer.current?.replaceRange(match.index, draft.length, `@${label} `);
     requestAnimationFrame(() => mainComposer.current?.focus());
   };
-  const codeDraft = codeDraftMode || draft.startsWith('```');
-  const resizeComposer = useCallback(() => {
-    const element = mainComposer.current;
-    if (!element) return;
-    element.style.height = 'auto';
-    element.style.height = `${Math.min(element.scrollHeight, 130)}px`;
-  }, []);
-
-  useLayoutEffect(() => {
-    resizeComposer();
-  }, [draft, resizeComposer]);
-
-  const uploadPastedImage = (event: ClipboardEvent<HTMLTextAreaElement>, threadRootId?: string) => {
-    const item = [...event.clipboardData.items].find((candidate) => candidate.type.startsWith('image/'));
-    const image = item?.getAsFile();
-    if (!image) return;
+  const insertThreadMention = (member: MemberSummary) => {
+    const label = member.displayName;
+    setSelectedThreadMentions((current) => current.some((mention) => mention.userId === member.id && mention.label === label)
+      ? current
+      : [...current, { userId: member.id, label }]);
+    onThreadDraftChange(threadDraft.replace(/@[^\s@]*$/, `@${label} `));
+    requestAnimationFrame(() => threadComposer.current?.focus());
+  };
+  const startEdit = (message: MessageSummary) => {
+    mentionsBeforeEdit.current = selectedMentions;
+    inlineEmojisBeforeEdit.current = inlineEmojis;
+    setInlineEmojis([]);
+    setSelectedMentions((message.mentions ?? []).map((mention) => ({
+      userId: mention.userId,
+      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
+    })));
+    onStartEdit(message);
+  };
+  const cancelContext = () => {
+    setSelectedMentions(mentionsBeforeEdit.current);
+    setInlineEmojis(inlineEmojisBeforeEdit.current);
+    mentionsBeforeEdit.current = [];
+    inlineEmojisBeforeEdit.current = [];
+    onCancelContext();
+  };
+  const startThreadEdit = (message: MessageSummary) => {
+    threadMentionsBeforeEdit.current = selectedThreadMentions;
+    setSelectedThreadMentions((message.mentions ?? []).map((mention) => ({
+      userId: mention.userId,
+      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
+    })));
+    onStartThreadEdit(message);
+  };
+  const cancelThreadEdit = () => {
+    setSelectedThreadMentions(threadMentionsBeforeEdit.current);
+    threadMentionsBeforeEdit.current = [];
+    onCancelThreadEdit();
+  };
+  const submitThread = (event: FormEvent) => {
     event.preventDefault();
+    const editMentions = (editingThreadMessage?.mentions ?? []).map((mention) => ({
+      userId: mention.userId,
+      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
+    }));
+    const activeMentions = [...selectedThreadMentions, ...editMentions]
+      .filter((mention, index, values) =>
+        hasVisibleComposerMention(threadDraft, mention.label) &&
+        values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
+      );
+    void onThreadSubmit(activeMentions).then((sent) => {
+      if (sent) setSelectedThreadMentions([]);
+    }).finally(() => requestAnimationFrame(() => threadComposer.current?.focus()));
+  };
+  const codeDraft = codeDraftMode || draft.startsWith('```');
+  const uploadPastedImageFile = (image: File, threadRootId?: string) => {
     const extension = image.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
     const file = image.name ? image : new File([image], `pasted-image.${extension}`, { type: image.type });
     onUploadAttachment(file, threadRootId);
   };
+  const uploadPastedImage = (event: ClipboardEvent<HTMLElement>, threadRootId?: string) => {
+    const image = [...event.clipboardData.items]
+      .map((item) => item.getAsFile())
+      .find((file) => file?.type.startsWith('image/'))
+      ?? Array.from(event.clipboardData.files ?? []).find((file) => file.type.startsWith('image/'));
+    if (!image) {
+      if (!event.clipboardData.getData('text/plain')) {
+        void readNativeClipboardImage().then((nativeImage) => {
+          if (nativeImage) uploadPastedImageFile(nativeImage, threadRootId);
+        });
+      }
+      return;
+    }
+    event.preventDefault();
+    uploadPastedImageFile(image, threadRootId);
+  };
 
   const insertCodeBlock = () => {
-    const element = mainComposer.current;
-    const start = element?.selectionStart ?? draft.length;
-    const end = element?.selectionEnd ?? start;
+    const selection = mainComposer.current?.getSelection();
+    const start = selection?.start ?? draft.length;
+    const end = selection?.end ?? start;
     const selected = draft.slice(start, end) || draft;
     setCodeDraftMode(true);
     onDraftChange(selected);
     requestAnimationFrame(() => {
       mainComposer.current?.focus();
-      mainComposer.current?.setSelectionRange(0, selected.length);
+      mainComposer.current?.setSelection({ start: 0, end: selected.length });
     });
   };
   const sendCodeFile = () => {
@@ -2026,27 +2278,49 @@ function Conversation({
       }
     });
   };
-  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, selection: InlineComposerSelection | null): boolean => {
     if (colonResults.length) {
       if (event.key === 'ArrowDown') {
         event.preventDefault();
         setColonIndex((index) => (index + 1) % colonResults.length);
-        return;
+        return true;
       }
       if (event.key === 'ArrowUp') {
         event.preventDefault();
         setColonIndex((index) => (index - 1 + colonResults.length) % colonResults.length);
-        return;
+        return true;
       }
       if (event.key === 'Enter' || event.key === 'Tab') {
         event.preventDefault();
         pickColonResult(colonResults[colonIndex % colonResults.length]);
-        return;
+        return true;
       }
       if (event.key === 'Escape') {
         event.preventDefault();
         setColonDismissed(colon?.query);
-        return;
+        return true;
+      }
+    }
+    if (mentionMatches.length) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setMentionIndex((index) => (index + 1) % mentionMatches.length);
+        return true;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setMentionIndex((index) => (index - 1 + mentionMatches.length) % mentionMatches.length);
+        return true;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        insertMention(mentionMatches[mentionIndex % mentionMatches.length]);
+        return true;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setMentionDismissed(mentionQuery);
+        return true;
       }
     }
     if (
@@ -2056,20 +2330,18 @@ function Conversation({
       && !event.ctrlKey
       && !event.metaKey
       && !draft
-      && event.currentTarget.selectionStart === 0
-      && event.currentTarget.selectionEnd === 0
+      && selection?.start === 0
+      && selection.end === 0
     ) {
       const latestOwnText = [...messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
       if (latestOwnText) {
         event.preventDefault();
-        onStartEdit(latestOwnText);
+        startEdit(latestOwnText);
+        return true;
       }
-      return;
+      return false;
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
+    return false;
   };
 
   const runProgrammaticScroll = useCallback((scroll: () => void) => {
@@ -2333,12 +2605,15 @@ function Conversation({
     const before = draft.slice(0, colon.start);
     const after = draft.slice(colon.caret);
     if (result.type === 'emoji') {
-      const key = emojiReactionKey(result);
-      onDraftChange(`${before}${key}${after}`);
-      rememberEmoji(key);
+      if (result.emoji) {
+        mainComposer.current?.replaceRange(colon.start, colon.caret, result.emoji);
+        rememberEmoji(result.emoji);
+      } else if (result.src) {
+        const sticker = { id: result.id, name: result.name, src: result.src };
+        stageInlineSticker(sticker, before, after);
+      }
     } else {
-      onDraftChange(`${before}${after}`);
-      onSendSticker({ id: result.id, name: result.name, src: result.src });
+      stageInlineSticker(result, before, after);
     }
     setColonDismissed(colon.query);
   };
@@ -2384,6 +2659,28 @@ function Conversation({
   const stopPanelResize = () => { resizeStart.current = undefined; };
 
   const handleThreadComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (threadMentionMatches.length) {
+      if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        setThreadMentionIndex((index) => (index + 1) % threadMentionMatches.length);
+        return;
+      }
+      if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        setThreadMentionIndex((index) => (index - 1 + threadMentionMatches.length) % threadMentionMatches.length);
+        return;
+      }
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        event.preventDefault();
+        insertThreadMention(threadMentionMatches[threadMentionIndex % threadMentionMatches.length]);
+        return;
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setThreadMentionDismissed(threadMentionQuery);
+        return;
+      }
+    }
     if (
       event.key === 'ArrowUp'
       && !event.shiftKey
@@ -2397,13 +2694,13 @@ function Conversation({
       const latestOwnText = activeThread && [...activeThread.messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
       if (latestOwnText) {
         event.preventDefault();
-        onStartThreadEdit(latestOwnText);
+        startThreadEdit(latestOwnText);
       }
       return;
     }
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
-      void onThreadSubmit().finally(() => requestAnimationFrame(() => threadComposer.current?.focus()));
+      event.currentTarget.form?.requestSubmit();
     }
   };
 
@@ -2489,6 +2786,15 @@ function Conversation({
           {visibleMessages.length ? (
             visibleMessages.map((message) => (
               <Fragment key={message.id}>
+                {daySeparators.get(message.id) ? (
+                  <div
+                    className="unread-divider day-separator"
+                    role="separator"
+                    aria-label={`Messages from ${daySeparators.get(message.id)!.accessibleLabel}`}
+                  >
+                    <span>{daySeparators.get(message.id)!.label}</span>
+                  </div>
+                ) : null}
                 {activeEntryUnreadMarker?.firstUnreadMessageId === message.id ? (
                   <div
                     className="unread-divider"
@@ -2505,7 +2811,7 @@ function Conversation({
                   onReply={onStartReply}
                   onOpenThread={onOpenThread}
                   onStartThread={onStartThread}
-                  onEdit={onStartEdit}
+                  onEdit={startEdit}
                   onDelete={onDeleteMessage}
                   onPin={onTogglePin}
                   canPin={Boolean(room.canManage)}
@@ -2566,7 +2872,7 @@ function Conversation({
                 onReply={onStartReply}
                 onOpenThread={onOpenThread}
                 onStartThread={onStartThread}
-                onEdit={onStartThreadEdit}
+                onEdit={startThreadEdit}
                 onDelete={onDeleteMessage}
                 onPin={onTogglePin}
                 canPin={Boolean(room?.canManage)}
@@ -2580,15 +2886,30 @@ function Conversation({
               />
             ))}
           </div>
-          <form className="thread-panel__composer" onSubmit={(event) => { event.preventDefault(); void onThreadSubmit().finally(() => requestAnimationFrame(() => threadComposer.current?.focus())); }}>
-            {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={onCancelThreadEdit}><X size={14} /></button></div> : null}
+          {threadMentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a thread member">
+            {threadMentionMatches.map((member, index) => <button
+              type="button"
+              role="option"
+              aria-selected={index === threadMentionIndex % threadMentionMatches.length}
+              className={index === threadMentionIndex % threadMentionMatches.length ? 'is-active' : ''}
+              key={member.id}
+              onMouseEnter={() => setThreadMentionIndex(index)}
+              onClick={() => insertThreadMention(member)}
+            ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
+          </div> : null}
+          <form className="thread-panel__composer" onSubmit={submitThread}>
+            {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={cancelThreadEdit}><X size={14} /></button></div> : null}
             <label>
               <span className="sr-only">Message thread</span>
               <textarea
                 ref={threadComposer}
                 aria-label="Message thread"
                 value={threadDraft}
-                onChange={(event) => onThreadDraftChange(event.target.value)}
+                onChange={(event) => {
+                  const nextDraft = event.target.value;
+                  setSelectedThreadMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
+                  onThreadDraftChange(nextDraft);
+                }}
                 onKeyDown={handleThreadComposerKeyDown}
                 onPaste={(event) => uploadPastedImage(event, threadRoot.id)}
                 placeholder="Reply in thread"
@@ -2612,7 +2933,7 @@ function Conversation({
             <strong>{editingMessage ? 'Editing message' : `Replying to ${replyTarget?.senderName}`}</strong>
             <span>{editingMessage?.body || replyTarget?.body}</span>
           </div>
-          <button type="button" aria-label="Cancel reply or edit" onClick={onCancelContext}><X size={15} /></button>
+          <button type="button" aria-label="Cancel reply or edit" onClick={cancelContext}><X size={15} /></button>
         </div>
       ) : null}
       {gifOpen && gifEndpoint ? (
@@ -2628,7 +2949,7 @@ function Conversation({
                 key={`${sticker.id}:${sticker.src}`}
                 aria-label={`Send ${sticker.name}`}
                 onClick={() => {
-                  onSendSticker(sticker);
+                  void onSendSticker(sticker);
                   setStickerOpen(false);
                 }}
               ><ResolvedStickerImage sticker={sticker} /></button>
@@ -2645,12 +2966,16 @@ function Conversation({
               <button
                 type="button"
                 key={emojiReactionKey(entry)}
-                aria-label={`Insert ${emojiReactionKey(entry)}`}
+                aria-label={entry.emoji ? `Insert ${entry.emoji}` : `Insert :${entry.id}:`}
                 title={entry.name}
                 onClick={() => {
-                  const key = emojiReactionKey(entry);
-                  onDraftChange(`${draft}${key}`);
-                  rememberEmoji(key);
+                  if (entry.emoji) {
+                    mainComposer.current?.insertText(entry.emoji);
+                    rememberEmoji(entry.emoji);
+                  } else if (entry.src) {
+                    const sticker = { id: entry.id, name: entry.name, src: entry.src };
+                    stageInlineSticker(sticker, draft);
+                  }
                   setEmojiOpen(false);
                   setEmojiQuery('');
                 }}
@@ -2679,16 +3004,26 @@ function Conversation({
               ) : (
                 <span className="colon-complete__sticker"><ResolvedStickerImage sticker={result} /></span>
               )}
-              <span className="colon-complete__name">:{result.name.replace(/\s+/g, '')}:</span>
-              {result.type === 'sticker' ? <small>sticker</small> : null}
+              <span className="colon-complete__name">
+                {result.type === 'emoji' && result.emoji ? `:${result.name.replace(/\s+/g, '')}:` : result.name}
+              </span>
+              {result.type === 'sticker' || (result.type === 'emoji' && !result.emoji) ? <small>inline emoji</small> : null}
             </button>
           ))}
         </div>
       ) : null}
       {mentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a room member">
-        {mentionMatches.map((member) => <button type="button" role="option" key={member.id} onClick={() => insertMention(member)}><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
+        {mentionMatches.map((member, index) => <button
+          type="button"
+          role="option"
+          aria-selected={index === mentionIndex % mentionMatches.length}
+          className={index === mentionIndex % mentionMatches.length ? 'is-active' : ''}
+          key={member.id}
+          onMouseEnter={() => setMentionIndex(index)}
+          onClick={() => insertMention(member)}
+        ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
       </div> : null}
-      <form className="composer" onSubmit={submit}>
+      <form ref={composerForm} className="composer" onSubmit={submit}>
         <input
           ref={fileInput}
           className="sr-only"
@@ -2705,27 +3040,45 @@ function Conversation({
         </IconButton>
         <label className="composer__field">
           <span className="sr-only">Message {room.name}</span>
-          <textarea
+          <InlineComposer
             ref={mainComposer}
-            rows={1}
-            value={draft}
+            ariaLabel={`Message ${room.name}`}
             placeholder={`Message ${room.name}`}
-            onChange={(event) => {
-              setComposerCaret(event.target.selectionStart ?? event.target.value.length);
-              if (event.target.value === '```') {
+            value={{
+              text: draft,
+              tokens: inlineEmojis.map(({ name, ...emoji }) => ({ ...emoji, alt: name, title: name })),
+            }}
+            onChange={(nextValue) => {
+              const nextDraft = nextValue.text;
+              setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
+              setInlineEmojis(nextValue.tokens.map(({ alt, title, ...token }) => ({
+                ...token,
+                name: alt ?? title ?? token.id,
+              })));
+              if (nextDraft === '```') {
                 setCodeDraftMode(true);
                 setCodeLanguage('text');
                 onDraftChange('');
               } else {
-                onDraftChange(event.target.value);
+                onDraftChange(nextDraft);
               }
             }}
-            onSelect={(event) => setComposerCaret(event.currentTarget.selectionStart ?? 0)}
+            onSelectionChange={(selection) => setComposerCaret(selection?.end ?? draft.length)}
+            onKeyDown={handleKeyDown}
+            onSubmit={() => composerForm.current?.requestSubmit()}
+            onImagePaste={({ files }) => {
+              void (async () => {
+                if (files.length) {
+                  files.forEach((image) => uploadPastedImageFile(image));
+                  return;
+                }
+                const image = await readNativeClipboardImage();
+                if (image) uploadPastedImageFile(image);
+              })();
+            }}
             onFocus={() => setComposerFocused(true)}
             onBlur={() => setComposerFocused(false)}
-            onKeyDown={handleKeyDown}
-            onPaste={uploadPastedImage}
-            disabled={sending}
+            disabled={sending || sendingInlineEmojis}
           />
         </label>
         {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
@@ -2761,7 +3114,7 @@ function Conversation({
         </select>
         <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
         {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
-        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending}>
+        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending || sendingInlineEmojis}>
           <Send size={17} />
         </button>
       </form>
@@ -3437,7 +3790,6 @@ export function Workspace({
   const [editingMessage, setEditingMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
   const [editingThreadMessage, setEditingThreadMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
   const typingTimer = useRef<number | undefined>(undefined);
-  const mentionIdsByRoom = useRef<Record<string, string[]>>({});
   const lastTypingSentAt = useRef(0);
   const requestedRoomHistory = useRef(new Set<string>());
   const historyRequests = useRef(new Map<string, Promise<void>>());
@@ -3694,7 +4046,7 @@ export function Workspace({
   };
 
   const sendSticker = async (sticker: { id: string; name: string; src: string }) => {
-    if (!effectiveRoomId) return;
+    if (!effectiveRoomId) return false;
     try {
       if (workspace.mode === 'demo') {
         const message: MessageSummary = {
@@ -3714,10 +4066,13 @@ export function Workspace({
           [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message],
         }));
       } else {
-        await onSendSticker?.(effectiveRoomId, sticker);
+        if (!onSendSticker) return false;
+        await onSendSticker(effectiveRoomId, sticker);
       }
+      return true;
     } catch {
       setNotice('That sticker could not be uploaded to Matrix.');
+      return false;
     }
   };
 
@@ -3853,13 +4208,13 @@ export function Workspace({
     onPreferencesChange(nextPreferences);
   };
 
-  const submitMessage = async (draftOverride?: string, mentionUserIds?: string[]): Promise<boolean> => {
+  const submitMessage = async (
+    draftOverride?: string,
+    mentions: ComposerMention[] = [],
+    inlineEmojis: ComposerInlineEmoji[] = [],
+  ): Promise<boolean> => {
     if (!effectiveRoomId || !draft.trim() || sending) return false;
     const body = (draftOverride ?? draft).trim();
-    const selectedMentionIds = [...new Set([
-      ...(mentionIdsByRoom.current[effectiveRoomId] ?? []),
-      ...(mentionUserIds ?? []),
-    ])];
     setDrafts((current) => ({ ...current, [effectiveRoomId]: '' }));
     setSending(true);
     setNotice(undefined);
@@ -3875,7 +4230,8 @@ export function Workspace({
             ),
           }));
         } else if (onEditMessage) {
-          await onEditMessage(effectiveRoomId, editingMessage.message.id, body);
+          if (inlineEmojis.length) await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions, inlineEmojis);
+          else await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions);
         }
       } else if (workspace.mode === 'demo') {
         const message: MessageSummary = {
@@ -3888,6 +4244,8 @@ export function Workspace({
           timestamp: Date.now(),
           kind: 'text',
           isOwn: true,
+          mentionUserIds: mentions.map((mention) => mention.userId),
+          mentions,
         };
         setDemoMessages((current) => ({
           ...current,
@@ -3896,20 +4254,22 @@ export function Workspace({
         sentMessage = true;
       } else if (replyTarget && onSendReply) {
         const threadRootId = replyThreadRootId ?? replyTarget.threadRootId;
-        await onSendReply(effectiveRoomId, body, {
+        const target = {
           id: replyTarget.id,
           senderId: replyTarget.senderId,
           body: replyTarget.body,
           threadRootId,
-        });
+        };
+        if (inlineEmojis.length) await onSendReply(effectiveRoomId, body, target, mentions, inlineEmojis);
+        else await onSendReply(effectiveRoomId, body, target, mentions);
         sentMessage = true;
       } else if (onSendMessage) {
-        if (selectedMentionIds.length) await onSendMessage(effectiveRoomId, body, selectedMentionIds);
+        if (inlineEmojis.length) await onSendMessage(effectiveRoomId, body, mentions, inlineEmojis);
+        else if (mentions.length) await onSendMessage(effectiveRoomId, body, mentions);
         else await onSendMessage(effectiveRoomId, body);
         sentMessage = true;
       }
       setReplyTarget(undefined);
-      delete mentionIdsByRoom.current[effectiveRoomId];
       setReplyThreadRootId(undefined);
       setEditingMessage(undefined);
       if (preferences.sendTypingNotifications) void onSendTyping?.(effectiveRoomId, false);
@@ -3923,8 +4283,8 @@ export function Workspace({
     }
   };
 
-  const submitThreadMessage = async () => {
-    if (!effectiveRoomId || !activeThreadRoot || !threadDraft.trim() || threadSending) return;
+  const submitThreadMessage = async (mentions: ComposerMention[] = []): Promise<boolean> => {
+    if (!effectiveRoomId || !activeThreadRoot || !threadDraft.trim() || threadSending) return false;
     const body = threadDraft.trim();
     setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: '' }));
     setThreadSending(true);
@@ -3938,7 +4298,7 @@ export function Workspace({
             ),
           }));
         } else if (onEditMessage) {
-          await onEditMessage(effectiveRoomId, editingThreadMessage.message.id, body);
+          await onEditMessage(effectiveRoomId, editingThreadMessage.message.id, body, mentions);
         }
       } else if (workspace.mode === 'demo') {
         const message: MessageSummary = {
@@ -3952,6 +4312,8 @@ export function Workspace({
           kind: 'text',
           isOwn: true,
           threadRootId: activeThreadRoot.id,
+          mentionUserIds: mentions.map((mention) => mention.userId),
+          mentions,
         };
         setDemoThreadMessages((current) => ({
           ...current,
@@ -3963,12 +4325,14 @@ export function Workspace({
           senderId: activeThreadRoot.senderId,
           body: activeThreadRoot.body,
           threadRootId: activeThreadRoot.id,
-        });
+        }, mentions);
       }
       setEditingThreadMessage(undefined);
+      return true;
     } catch {
       setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: body }));
       setNotice('That thread reply did not send. Your draft has been restored.');
+      return false;
     } finally {
       setThreadSending(false);
     }
@@ -4124,11 +4488,6 @@ export function Workspace({
               setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: nextDraft }));
             }}
             onSubmit={submitMessage}
-            onMentionSelected={(userId) => {
-              if (!effectiveRoomId) return;
-              const selected = mentionIdsByRoom.current[effectiveRoomId] ?? [];
-              if (!selected.includes(userId)) mentionIdsByRoom.current[effectiveRoomId] = [...selected, userId];
-            }}
             onThreadSubmit={submitThreadMessage}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onCollapseConversation={() => setPanelCollapsed('conversation', true)}
@@ -4167,7 +4526,7 @@ export function Workspace({
             onReact={handleReact}
             emojiPacks={availableEmojiPacks}
             emojiAssetBaseUrl={config.emojiPacks.assetBaseUrl}
-            onSendSticker={(sticker) => void sendSticker(sticker)}
+            onSendSticker={sendSticker}
             onUploadAttachment={(file, threadRootId, codeLanguage) => uploadAttachment(file, threadRootId, codeLanguage)}
             onCancelUpload={() => onCancelUpload?.()}
             onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload); }}

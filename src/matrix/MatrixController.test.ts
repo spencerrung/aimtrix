@@ -14,6 +14,7 @@ type ControllerInternals = {
   notifyForMessage: (event: unknown, room: unknown) => void;
   playMessageTone: () => void;
   handleDecrypted: (event: unknown) => void;
+  migrateLegacyRootSpaceOrder: () => void;
   scheduleWorkspacePublish: () => void;
 };
 
@@ -65,6 +66,97 @@ function pushPlatform(subscription?: {
 }
 
 describe('MatrixController protocol integration', () => {
+  it('sends intentional mentions with portable Matrix HTML and Unicode emoji', async () => {
+    const sendMessage = vi.fn().mockResolvedValue({});
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, {
+      getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+      sendMessage,
+    } as unknown as Partial<MatrixClient>, {
+      MsgType: { Text: 'm.text' },
+    });
+
+    await controller.sendMessage('!room:test', '@Mara 👩🏽‍💻 ship it', [{
+      userId: '@mara:test',
+      label: 'Mara',
+    }]);
+
+    expect(sendMessage).toHaveBeenCalledWith('!room:test', {
+      msgtype: 'm.text',
+      body: '@Mara 👩🏽‍💻 ship it',
+      format: 'org.matrix.custom.html',
+      formatted_body: '<p><a href="https://matrix.to/#/%40mara%3Atest">@Mara</a> 👩🏽‍💻 ship it</p>',
+      'm.mentions': { user_ids: ['@mara:test'] },
+    });
+  });
+
+  it('uploads selected custom emoji and sends one rich text event', async () => {
+    const uploadContent = vi.fn().mockResolvedValue({ content_uri: 'mxc://test/bufo' });
+    const sendMessage = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      headers: { get: () => null },
+      blob: () => Promise.resolve(new Blob(['png'], { type: 'image/png' })),
+    }));
+    try {
+      const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+      inject(controller, {
+        getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+        uploadContent,
+        sendMessage,
+      } as unknown as Partial<MatrixClient>, {
+        MsgType: { Text: 'm.text' },
+      });
+
+      await controller.sendMessage('!room:test', 'ugh :bufo-wave:', [], [{
+        shortcode: ':bufo-wave:',
+        id: 'bufo-wave',
+        name: 'Bufo wave',
+        src: '/emoji/bufo-wave.png',
+      }]);
+
+      expect(uploadContent).toHaveBeenCalledWith(expect.any(Blob), {
+        name: 'bufo-wave.png',
+        type: 'image/png',
+        includeFilename: false,
+      });
+      expect(sendMessage).toHaveBeenCalledTimes(1);
+      expect(sendMessage).toHaveBeenCalledWith('!room:test', {
+        msgtype: 'm.text',
+        body: 'ugh :bufo-wave:',
+        format: 'org.matrix.custom.html',
+        formatted_body: '<p>ugh <img data-mx-emoticon src="mxc://test/bufo" alt=":bufo-wave:" title=":bufo-wave:" height="32"></p>',
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('keeps mention metadata inside standard Matrix replacement content', async () => {
+    const sendEvent = vi.fn().mockResolvedValue({});
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, { sendEvent }, {
+      EventType: { RoomMessage: 'm.room.message' },
+      MsgType: { Text: 'm.text' },
+      RelationType: { Replace: 'm.replace' },
+    });
+
+    await controller.editMessage('!room:test', '$original:test', '@Mara corrected', [{
+      userId: '@mara:test',
+      label: 'Mara',
+    }]);
+
+    expect(sendEvent).toHaveBeenCalledWith('!room:test', 'm.room.message', expect.objectContaining({
+      body: '* @Mara corrected',
+      'm.mentions': { user_ids: ['@mara:test'] },
+      'm.relates_to': { rel_type: 'm.replace', event_id: '$original:test' },
+      'm.new_content': expect.objectContaining({
+        body: '@Mara corrected',
+        'm.mentions': { user_ids: ['@mara:test'] },
+        formatted_body: expect.stringContaining('https://matrix.to/#/%40mara%3Atest'),
+      }),
+    }));
+  });
   it('ignores crypto-store decryptions that are not in a loaded room timeline', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     const internals = controller as unknown as ControllerInternals;
@@ -432,12 +524,12 @@ describe('MatrixController protocol integration', () => {
       MsgType: { Text: 'm.text' },
     });
 
-    await controller.sendReply('!room:test', 'Absolutely.', {
+    await controller.sendReply('!room:test', 'Absolutely, @Mara.', {
       id: '$reply-to:test',
       senderId: '@mara:test',
       body: 'Ship it?',
       threadRootId: '$root:test',
-    });
+    }, [{ userId: '@mara:test', label: 'Mara' }]);
 
     expect(sendEvent).toHaveBeenCalledWith(
       '!room:test',
@@ -445,6 +537,8 @@ describe('MatrixController protocol integration', () => {
       'm.room.message',
       expect.objectContaining({
         msgtype: 'm.text',
+        'm.mentions': { user_ids: ['@mara:test'] },
+        formatted_body: expect.stringMatching(/^<mx-reply>.*<\/mx-reply><p>Absolutely, <a href="https:\/\/matrix\.to\/#\/%40mara%3Atest">@Mara<\/a>\.<\/p>$/),
         'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
       }),
     );
@@ -565,6 +659,41 @@ describe('MatrixController protocol integration', () => {
     vi.unstubAllGlobals();
   });
 
+  it('uploads custom PNG emoji with matching portable sticker metadata', async () => {
+    const uploadContent = vi.fn().mockResolvedValue({ content_uri: 'mxc://test/bufo' });
+    const sendEvent = vi.fn().mockResolvedValue({});
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(new Blob(['png'], { type: 'image/png' })),
+    }));
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, {
+      getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+      uploadContent,
+      sendEvent,
+    } as unknown as Partial<MatrixClient>, {
+      EventType: { Sticker: 'm.sticker' },
+    });
+
+    await controller.sendSticker('!room:test', {
+      id: 'bufo-wave',
+      name: 'Bufo wave',
+      src: '/emoji/bufo-wave.png',
+    });
+
+    expect(uploadContent).toHaveBeenCalledWith(expect.any(Blob), {
+      name: 'bufo-wave.png',
+      type: 'image/png',
+      includeFilename: false,
+    });
+    expect(sendEvent).toHaveBeenCalledWith('!room:test', 'm.sticker', expect.objectContaining({
+      body: 'Bufo wave',
+      url: 'mxc://test/bufo',
+      info: expect.objectContaining({ mimetype: 'image/png' }),
+    }));
+    vi.unstubAllGlobals();
+  });
+
   it('persists Matrix space child order with standard state events', async () => {
     const sendStateEvent = vi.fn().mockResolvedValue({});
     const childEvents = new Map([
@@ -609,6 +738,116 @@ describe('MatrixController protocol integration', () => {
       'm.space.child',
       { via: ['test'], suggested: true, order: '000001' },
       '!one:test',
+    );
+  });
+
+  it('persists top-level spaces with standard MSC3230 room account data', async () => {
+    const setRoomAccountData = vi.fn().mockResolvedValue({});
+    const room = (roomId: string, name: string, parentId?: string) => ({
+      roomId,
+      name,
+      getType: () => 'm.space',
+      getMyMembership: () => 'join',
+      getLiveTimeline: () => ({ getEvents: () => [] }),
+      getThreads: () => [],
+      getMember: () => ({ powerLevel: 100 }),
+      getMembers: () => [],
+      getJoinedMembers: () => [],
+      getUnreadNotificationCount: () => 0,
+      getRoomUnreadNotificationCount: () => 0,
+      getEventReadUpTo: () => null,
+      getLastActiveTimestamp: () => 0,
+      getDefaultRoomName: () => name,
+      getMxcAvatarUrl: () => undefined,
+      getAccountData: () => undefined,
+      currentState: {
+        getStateEvents: (type: string, stateKey?: string) => {
+          if (stateKey !== undefined) return undefined;
+          if (type !== 'm.space.parent' || !parentId) return [];
+          return [{
+            getStateKey: () => parentId,
+            getContent: () => ({ via: ['test'] }),
+            isRedacted: () => false,
+          }];
+        },
+        maySendStateEvent: () => true,
+      },
+    });
+    const spaces = [
+      room('!one:test', 'One'),
+      room('!nested:test', 'Nested', '!one:test'),
+      room('!two:test', 'Two'),
+    ];
+    const client = {
+      getSafeUserId: () => '@you:test',
+      getUser: () => null,
+      getAccountData: () => undefined,
+      getVisibleRooms: () => spaces,
+      getRooms: () => spaces,
+      getRoom: (roomId: string) => spaces.find((space) => space.roomId === roomId),
+      getRoomPushRule: () => undefined,
+      setRoomAccountData,
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>, {
+      EventType: { SpaceOrder: 'org.matrix.msc3230.space_order' },
+    });
+
+    await controller.reorderRootSpaces(['!two:test', '!one:test']);
+
+    expect(setRoomAccountData).toHaveBeenNthCalledWith(
+      1,
+      '!two:test',
+      'org.matrix.msc3230.space_order',
+      { order: '000000' },
+    );
+    expect(setRoomAccountData).toHaveBeenNthCalledWith(
+      2,
+      '!one:test',
+      'org.matrix.msc3230.space_order',
+      { order: '000001' },
+    );
+    expect(setRoomAccountData).toHaveBeenCalledTimes(2);
+  });
+
+  it('migrates the legacy private root order to standard room account data once', async () => {
+    const setRoomAccountData = vi.fn().mockResolvedValue({});
+    const room = (roomId: string) => ({
+      roomId,
+      getType: () => 'm.space',
+      getMyMembership: () => 'join',
+      getAccountData: () => undefined,
+      currentState: { getStateEvents: () => [] },
+    });
+    const spaces = [room('!one:test'), room('!two:test')];
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, {
+      getRooms: () => spaces,
+      getRoom: (roomId: string) => spaces.find((space) => space.roomId === roomId),
+      getAccountData: (type: string) => type === 'dev.alucard.aimtrix.space_order.v1'
+        ? { getContent: () => ({ order: ['!two:test', '!one:test'] }) }
+        : undefined,
+      setRoomAccountData,
+    } as unknown as Partial<MatrixClient>, {
+      EventType: { SpaceOrder: 'org.matrix.msc3230.space_order' },
+    });
+
+    const internals = controller as unknown as ControllerInternals;
+    internals.migrateLegacyRootSpaceOrder();
+    internals.migrateLegacyRootSpaceOrder();
+
+    await vi.waitFor(() => expect(setRoomAccountData).toHaveBeenCalledTimes(2));
+    expect(setRoomAccountData).toHaveBeenNthCalledWith(
+      1,
+      '!two:test',
+      'org.matrix.msc3230.space_order',
+      { order: '000000' },
+    );
+    expect(setRoomAccountData).toHaveBeenNthCalledWith(
+      2,
+      '!one:test',
+      'org.matrix.msc3230.space_order',
+      { order: '000001' },
     );
   });
 
