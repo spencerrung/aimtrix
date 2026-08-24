@@ -1236,6 +1236,7 @@
     .composer [data-inline-composer="true"] { min-height: 40px; padding-block: 9px; font-size: 16px; }
     .composer__code-language { min-width: 52px; height: 40px; font-size: 16px; }
     .composer-code-preview { min-height: 40px; align-items: center; font-size: 0.68rem; }
+    .jump-to-latest { bottom: 118px; }
     input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), textarea, select, [contenteditable="true"] { font-size: 16px !important; }
     .thread-panel__composer { padding-bottom: max(10px, env(safe-area-inset-bottom, 0px)); }
     .theme-switcher button { min-width: 50px; padding-inline: 6px; }
