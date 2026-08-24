@@ -574,11 +574,12 @@ function SpaceButton({
         <img
           src={mediaSrc}
           alt=""
+          draggable={false}
           loading="lazy"
           onError={() => setFailedSrc(mediaSrc)}
         />
       ) : (
-        <span style={{ '--space-color': space.color } as CSSProperties}>{space.initials}</span>
+        <span draggable={false} style={{ '--space-color': space.color } as CSSProperties}>{space.initials}</span>
       )}
       {space.unreadCount > 0 ? (
         <b className={space.highlighted ? 'is-highlighted' : ''}>{space.unreadCount}</b>

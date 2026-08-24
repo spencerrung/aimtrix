@@ -1089,6 +1089,8 @@ describe('Workspace demo', () => {
     const friends = within(spaces).getByRole('button', { name: 'Friends' });
     const homelab = within(spaces).getByRole('button', { name: 'Homelab' });
 
+    expect(friends.querySelector('span')).toHaveAttribute('draggable', 'false');
+
     fireEvent.dragStart(friends, { dataTransfer });
     expect(dataTransfer.setData).toHaveBeenCalledWith('application/x-aimtrix-space', 'friends');
     fireEvent.dragOver(homelab, { dataTransfer });
