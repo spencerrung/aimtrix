@@ -531,9 +531,9 @@ function SpaceButton({
   active: boolean;
   reorderable: boolean;
   onSelect: () => void;
-  onDragStart?: () => void;
+  onDragStart?: (event: DragEvent<HTMLButtonElement>) => void;
   onDragEnd?: () => void;
-  onDrop?: () => void;
+  onDrop?: (event: DragEvent<HTMLButtonElement>) => void;
   onMove?: (offset: -1 | 1) => void;
 }) {
   const mediaSrc = useMediaSource(space.avatarUrl, 80);
@@ -553,7 +553,7 @@ function SpaceButton({
       onDragStart={(event) => {
         if (!reorderable) return;
         event.dataTransfer.effectAllowed = 'move';
-        onDragStart?.();
+        onDragStart?.(event);
       }}
       onDragEnd={onDragEnd}
       onDragOver={(event) => {
@@ -562,7 +562,7 @@ function SpaceButton({
       onDrop={(event) => {
         if (!reorderable) return;
         event.preventDefault();
-        onDrop?.();
+        onDrop?.(event);
       }}
       onKeyDown={(event) => {
         if (!reorderable || !event.altKey) return;
@@ -598,7 +598,7 @@ function SpaceRail({
   onSelect: (spaceId: string) => void;
   onReorder?: (spaceIds: string[]) => Promise<void>;
 }) {
-  const [draggedSpaceId, setDraggedSpaceId] = useState<string>();
+  const draggedSpaceIdRef = useRef<string | undefined>(undefined);
   const [localOrder, setLocalOrder] = useState<string[]>();
   const [reorderStatus, setReorderStatus] = useState('');
   const [reordering, setReordering] = useState(false);
@@ -672,11 +672,20 @@ function SpaceRail({
               active={activeSpace === space.id}
               reorderable={reorderable}
               onSelect={() => onSelect(space.id)}
-              onDragStart={() => setDraggedSpaceId(space.id)}
-              onDragEnd={() => setDraggedSpaceId(undefined)}
-              onDrop={() => {
-                if (draggedSpaceId) void reorder(draggedSpaceId, rootIndex);
-                setDraggedSpaceId(undefined);
+              onDragStart={(event) => {
+                event.dataTransfer.setData('application/x-aimtrix-space', space.id);
+                event.dataTransfer.setData('text/plain', space.id);
+                draggedSpaceIdRef.current = space.id;
+              }}
+              onDragEnd={() => {
+                draggedSpaceIdRef.current = undefined;
+              }}
+              onDrop={(event) => {
+                const sourceId = event.dataTransfer.getData('application/x-aimtrix-space')
+                  || event.dataTransfer.getData('text/plain')
+                  || draggedSpaceIdRef.current;
+                if (sourceId) void reorder(sourceId, rootIndex);
+                draggedSpaceIdRef.current = undefined;
               }}
               onMove={(offset) => void reorder(space.id, rootIndex + offset)}
             />

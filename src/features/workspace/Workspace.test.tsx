@@ -1080,11 +1080,17 @@ describe('Workspace demo', () => {
   it('drags a top-level space downward without adding drag badges to its icon', () => {
     const { container } = renderWorkspace();
     const spaces = screen.getByRole('navigation', { name: 'Spaces' });
-    const dataTransfer = { effectAllowed: 'none' };
+    const transferData = new Map<string, string>();
+    const dataTransfer = {
+      effectAllowed: 'none',
+      setData: vi.fn((type: string, value: string) => transferData.set(type, value)),
+      getData: vi.fn((type: string) => transferData.get(type) ?? ''),
+    };
     const friends = within(spaces).getByRole('button', { name: 'Friends' });
     const homelab = within(spaces).getByRole('button', { name: 'Homelab' });
 
     fireEvent.dragStart(friends, { dataTransfer });
+    expect(dataTransfer.setData).toHaveBeenCalledWith('application/x-aimtrix-space', 'friends');
     fireEvent.dragOver(homelab, { dataTransfer });
     fireEvent.drop(homelab, { dataTransfer });
 
