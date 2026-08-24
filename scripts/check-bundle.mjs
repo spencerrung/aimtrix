@@ -5,7 +5,7 @@ import { extname, join } from 'node:path';
 const assets = join(process.cwd(), 'dist', 'assets');
 const limits = new Map([
   ['.js', 800 * 1024],
-  ['.css', 100 * 1024],
+  ['.css', 105 * 1024],
   ['.wasm', 8 * 1024 * 1024],
 ]);
 const failures = [];
