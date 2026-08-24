@@ -495,17 +495,19 @@ function IconButton({
   onClick,
   disabled,
   active = false,
+  className,
 }: {
   label: string;
   children: ReactNode;
   onClick?: () => void;
   disabled?: boolean;
   active?: boolean;
+  className?: string;
 }) {
   const isDisabled = disabled ?? onClick === undefined;
   return (
     <button
-      className={`icon-button${active ? ' icon-button--active' : ''}`}
+      className={`icon-button${active ? ' icon-button--active' : ''}${className ? ` ${className}` : ''}`}
       type="button"
       aria-label={label}
       title={label}
@@ -2434,6 +2436,18 @@ function Conversation({
     return () => observer.disconnect();
   }, [restoreTimelineViewport, room?.id]);
 
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    if (!viewport) return;
+    const preserveTimeline = () => requestAnimationFrame(restoreTimelineViewport);
+    viewport.addEventListener('resize', preserveTimeline);
+    viewport.addEventListener('scroll', preserveTimeline);
+    return () => {
+      viewport.removeEventListener('resize', preserveTimeline);
+      viewport.removeEventListener('scroll', preserveTimeline);
+    };
+  }, [restoreTimelineViewport]);
+
   const latestMessageId = messages.at(-1)?.id;
   const activeRoomId = room?.id;
   const reportLatestRead = useCallback(() => {
@@ -2745,8 +2759,8 @@ function Conversation({
             </span>
           ) : null}
           <IconButton label="Decorate conversation background" onClick={onOpenBackground}><Paintbrush size={17} /></IconButton>
-          <IconButton label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
-          <IconButton label="Toggle room details" onClick={onToggleDetails}>
+          <IconButton className="conversation-header__desktop-action" label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
+          <IconButton className="conversation-header__desktop-action" label="Toggle room details" onClick={onToggleDetails}>
             <PanelRight size={18} />
           </IconButton>
         </div>
@@ -3035,7 +3049,7 @@ function Conversation({
             event.target.value = '';
           }}
         />
-        <IconButton label="Attach a file" onClick={() => fileInput.current?.click()}>
+        <IconButton className="composer__attachment" label="Attach a file" onClick={() => fileInput.current?.click()}>
           <Paperclip size={18} />
         </IconButton>
         <label className="composer__field">
@@ -3081,39 +3095,41 @@ function Conversation({
             disabled={sending || sendingInlineEmojis}
           />
         </label>
-        {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
-        {gifEndpoint ? (
-          <IconButton label="Search GIFs" active={gifOpen} onClick={() => {
+        <div className="composer__actions">
+          {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
+          {gifEndpoint ? (
+            <IconButton label="Search GIFs" active={gifOpen} onClick={() => {
             setGifOpen((open) => !open);
             setStickerOpen(false);
             setEmojiOpen(false);
-          }}><Film size={18} /></IconButton>
-        ) : null}
-        <IconButton
-          label="Open sticker pack"
-          active={stickerOpen}
-          onClick={() => {
+            }}><Film size={18} /></IconButton>
+          ) : null}
+          <IconButton
+            label="Open sticker pack"
+            active={stickerOpen}
+            onClick={() => {
             if (!stickerOpen && defaultStickerPack && stickerPacks.some((pack) => pack.manifestUrl === defaultStickerPack)) {
               setStickerManifest(defaultStickerPack);
             }
             setStickerOpen((open) => !open);
             setEmojiOpen(false);
             setGifOpen(false);
-          }}
-        ><Sticker size={18} /></IconButton>
-        <IconButton label="Add emoji" active={emojiOpen} onClick={() => {
+            }}
+          ><Sticker size={18} /></IconButton>
+          <IconButton label="Add emoji" active={emojiOpen} onClick={() => {
           setEmojiOpen((open) => !open);
           setStickerOpen(false);
           setGifOpen(false);
-        }}>
-          <Smile size={19} />
-        </IconButton>
-        <IconButton label="Send a nudge" onClick={() => onSendNudge?.()}><BellRing size={18} /></IconButton>
-        <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => setCodeLanguage(event.target.value)}>
-          <option value="text">Text</option><option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="yaml">YAML</option>
-        </select>
-        <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
-        {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
+          }}>
+            <Smile size={19} />
+          </IconButton>
+          <IconButton label="Send a nudge" onClick={() => onSendNudge?.()}><BellRing size={18} /></IconButton>
+          <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => setCodeLanguage(event.target.value)}>
+            <option value="text">Text</option><option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="yaml">YAML</option>
+          </select>
+          <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
+          {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
+        </div>
         <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending || sendingInlineEmojis}>
           <Send size={17} />
         </button>
@@ -3687,6 +3703,7 @@ export function Workspace({
   onLeaveRoom,
   onSignOut,
 }: WorkspaceProps) {
+  const appStage = useRef<HTMLDivElement>(null);
   const locationKey = `aimtrix.location.v2:${workspace.user.id}`;
   const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>(() => {
     try {
@@ -4386,8 +4403,27 @@ export function Workspace({
     panelResizeStart.current = undefined;
   };
 
+  useEffect(() => {
+    const viewport = window.visualViewport;
+    const syncViewportHeight = () => {
+      const height = viewport?.height ?? window.innerHeight;
+      appStage.current?.style.setProperty('--aimtrix-viewport-height', `${Math.round(height)}px`);
+    };
+    syncViewportHeight();
+    viewport?.addEventListener('resize', syncViewportHeight);
+    viewport?.addEventListener('scroll', syncViewportHeight);
+    window.addEventListener('resize', syncViewportHeight);
+    window.addEventListener('orientationchange', syncViewportHeight);
+    return () => {
+      viewport?.removeEventListener('resize', syncViewportHeight);
+      viewport?.removeEventListener('scroll', syncViewportHeight);
+      window.removeEventListener('resize', syncViewportHeight);
+      window.removeEventListener('orientationchange', syncViewportHeight);
+    };
+  }, []);
+
   return (
-    <div className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
+    <div ref={appStage} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
       <section className={`aimtrix-window${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
           <div className="app-titlebar__identity">

@@ -37,7 +37,7 @@ npm run proof:push-sw
 PLAYWRIGHT_PREVIEW=1 npm run test:e2e
 ```
 
-The Playwright production-preview run covers both desktop Chromium and Pixel 7 mobile emulation. The current suite covers navigation, responsive panels, messaging/local echo/editing, threads, emoji/stickers, search, profile/settings, media viewers, backdrops, focus behavior, and Axe WCAG A/AA checks. The PWA-specific suite additionally covers the browser install event fallback, explicit offline/reconnect messaging, and the update prompt's draft/encryption warning.
+The Playwright production-preview run covers both desktop Chromium and Pixel 7 mobile emulation. The current suite covers navigation, responsive panels, messaging/local echo/editing, threads, emoji/stickers, search, profile/settings, media viewers, backdrops, focus behavior, keyboard-sized viewport resizing, narrow landscape resizing, and Axe WCAG A/AA checks. The PWA-specific suite additionally covers the browser install event fallback, explicit offline/reconnect messaging, and the update prompt's draft/encryption warning.
 
 The two push proofs have deliberately different boundaries:
 
@@ -81,7 +81,8 @@ Record the date, device, OS build, browser build, homeserver, and Aimtrix commit
 
 - [ ] Desktop and mobile layouts keep the active room, composer, thread controls, and dialogs reachable at the tested viewport sizes.
 - [ ] iOS/iPadOS safe-area insets do not cover the composer, install prompt, or update prompt.
-- [ ] Virtual keyboards do not hide the composer or trap focus after sending.
+- [ ] On iOS Safari, Android Chrome, and the installed PWA, opening and closing the virtual keyboard keeps the active composer visible, avoids input zoom, and preserves the intended recent-message position.
+- [ ] Portrait, narrow landscape, long messages, replies, attachment/emoji/GIF pickers, settings, login, and offline state keep their primary controls reachable.
 - [ ] Keyboard-only navigation has visible focus; Escape closes transient dialogs; reduced-motion mode suppresses decorative animation.
 - [ ] Camera/microphone permissions can be granted, denied, and retried without a misleading success state.
 - [ ] Offline and reconnect banners identify that Matrix history may be unavailable until sync resumes.
