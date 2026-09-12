@@ -306,7 +306,7 @@ export function MatrixSettingsPanel({
               <div><dt>Server name</dt><dd>{snapshot.server.serverName}</dd></div>
               <div><dt>Homeserver API</dt><dd>{snapshot.server.homeserverUrl}</dd></div>
               <div><dt>Current device</dt><dd>{snapshot.server.deviceId}</dd></div>
-              <div><dt>Local storage</dt><dd>Persistent IndexedDB sync and encrypted crypto stores</dd></div>
+              <div><dt>Local storage</dt><dd>History is kept in memory; encryption keys persist in IndexedDB</dd></div>
               <div><dt>Client API</dt><dd>{snapshot.server.versions.at(-1) || 'Unknown'}</dd></div>
               <div><dt>MatrixRTC focus</dt><dd>{snapshot.server.rtcFoci.join(', ') || 'Not advertised; direct calls use Matrix VoIP/TURN'}</dd></div>
             </dl>

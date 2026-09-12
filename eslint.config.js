@@ -4,11 +4,14 @@ import reactRefresh from 'eslint-plugin-react-refresh';
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
-  { ignores: ['dist', 'coverage', 'node_modules', 'android', 'ios', 'src-tauri/target'] },
+  { ignores: ['dist', 'coverage', 'node_modules', 'android', 'ios', 'src-tauri/target', '.letta/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
     files: ['**/*.{ts,tsx}'],
+    languageOptions: {
+      parserOptions: { tsconfigRootDir: import.meta.dirname },
+    },
     plugins: {
       'react-hooks': reactHooks,
       'react-refresh': reactRefresh,

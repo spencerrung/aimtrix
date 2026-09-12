@@ -8,9 +8,9 @@ The project is web-first, statically deployable, and intended to work with ordin
 
 ## Status
 
-Aimtrix is a working pre-1.0 client. It includes password and SSO login, persistent encrypted sync, recovery and device verification, replies/edits/reactions, safe hyperlinks and homeserver-backed link previews, Slack-style Matrix threads, read-position avatars, encrypted attachments, searchable emoji, standard stickers, original lazy-loaded sticker packs, private decorated profile pages, readable room/space/DM backdrops with power-level-backed Decorator roles, nested spaces, room organization, optional GIF search, room creation/directory/moderation controls, notifications, PWA installation, and feature-gated direct Matrix voice/video calls.
+Aimtrix is a working pre-1.0 client. It includes password and SSO login, encrypted sync with persistent crypto storage, recovery and device verification, replies/edits/reactions, safe hyperlinks and homeserver-backed link previews, Slack-style Matrix threads, read-position avatars, encrypted attachments, searchable emoji, standard stickers, original lazy-loaded sticker packs, private decorated profile pages, readable room/space/DM backdrops with power-level-backed Decorator roles, nested spaces, room organization, optional GIF search, room creation/directory/moderation controls, notifications, PWA installation, and feature-gated direct Matrix voice/video calls.
 
-The remaining compatibility and scale work is tracked honestly in [TODO.md](TODO.md), particularly group MatrixRTC/LiveKit calling, full server-side message search, richer push-rule editing, and broader live-homeserver interoperability coverage.
+The [capability baseline](docs/capability-baseline.md) records what is implemented and what has actually been verified. Remaining compatibility and scale work is tracked in [TODO.md](TODO.md), particularly group MatrixRTC/LiveKit calling, full server-side message search, richer push-rule editing, and broader live-homeserver interoperability coverage.
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) organizes the next implementation program into ordered GitHub issues with dependencies and acceptance criteria, while preserving Aimtrix's Aqua/Aero character.
 
