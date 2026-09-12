@@ -12,6 +12,8 @@ Aimtrix is a working pre-1.0 client. It includes password and SSO login, persist
 
 The remaining compatibility and scale work is tracked honestly in [TODO.md](TODO.md), particularly group MatrixRTC/LiveKit calling, full server-side message search, richer push-rule editing, and broader live-homeserver interoperability coverage.
 
+The [polish and modern-comforts roadmap](docs/polish-plan.md) organizes the next implementation program into ordered GitHub issues with dependencies and acceptance criteria, while preserving Aimtrix's Aqua/Aero character.
+
 Use the login-screen demo link, or open `/?demo=1`, to explore the interface without a Matrix account.
 
 ## Development

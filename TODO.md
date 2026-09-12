@@ -2,6 +2,8 @@
 
 A checked item has a working implementation and a graceful failure/unsupported state. Protocol features are not considered complete merely because a control exists.
 
+The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the ordered GitHub issue queue for the next implementation program. It supplements this release/compatibility inventory; its baseline audit reconciles implementation and validation evidence without removing existing obligations.
+
 ## 0.1 release gate
 
 ### Repository, runtime, deployment, and supply chain
