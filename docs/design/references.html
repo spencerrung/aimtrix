@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en" data-theme="aqua">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Aimtrix · conversation design references</title>
+  <link rel="stylesheet" href="reference.css">
+</head>
+<body>
+  <header class="reference-tools">
+    <div class="reference-title"><strong>Aimtrix / design reference</strong><span>Step 02 · local interactions · synthetic content · no Matrix connection</span></div>
+    <form id="reference-controls" aria-label="Reference controls">
+      <label>Theme<select id="theme"><option value="aqua">Aqua</option><option value="graphite">Graphite</option><option value="midnight">Midnight</option></select></label>
+      <label>Scene<select id="scene"><option value="conversation">Conversation + details</option><option value="thread">Focused thread</option><option value="busy">Busy room + long content</option><option value="empty">Empty conversation</option><option value="failure">Failed send + reconnect</option><option value="loading">Loading earlier history</option><option value="dm">Direct message</option><option value="list">Mobile buddy list</option></select></label>
+      <label>Frame<select id="device"><option value="desktop">Available viewport</option><option value="tablet">Tablet · 1024</option><option value="phone">Phone · 412</option><option value="landscape">Landscape · 568 × 320</option><option value="keyboard">Keyboard · 412 × 360</option></select></label>
+      <label>Reading style<select id="reading"><option value="bubbles">Existing bubbles</option><option value="aligned">Aligned room comparison</option></select></label>
+      <button type="button" id="reset">Reset reference</button>
+      <a href="interaction-rules.md">Decisions &amp; handoff</a>
+    </form>
+  </header>
+  <main class="stage" aria-label="Interactive design reference">
+    <div class="frame" id="frame" data-device="desktop" data-route="conversation" data-context="details" data-reading="bubbles">
+      <div class="app-chrome"><span class="brand">A</span><strong>Aimtrix</strong><span class="chrome-note">a little more connected.</span><span class="connection"><i></i><span id="connection-copy">Online</span></span><button class="chrome-button" id="shortcuts" type="button" aria-label="Keyboard shortcuts">⌘ K</button></div>
+      <div class="workspace">
+        <nav class="space-rail" aria-label="Spaces">
+          <button class="space home" data-space="Home" type="button" aria-label="Home">A</button>
+          <button class="space direct" data-space="Direct messages" type="button" aria-label="Direct messages">dm</button>
+          <span class="rail-rule"></span>
+          <button class="space friends active" data-space="Friends" type="button" aria-label="Friends" aria-pressed="true">fr<span class="dot"></span></button>
+          <button class="space garden" data-space="Garden club" type="button" aria-label="Garden club">✿</button>
+          <button class="space radio" data-space="Late night radio" type="button" aria-label="Late night radio">♫</button>
+          <span class="rail-caption">your<br>orbit</span>
+        </nav>
+        <aside class="buddy-list" aria-label="Buddy list">
+          <header class="buddy-header"><div><p class="eyebrow">Buddy list</p><h1 id="space-title">Friends</h1></div><span class="tiny-orb" aria-hidden="true">✦</span></header>
+          <button class="switcher" id="switcher" type="button"><span data-icon="search"></span><span>Find a conversation</span><kbd>⌘ K</kbd></button>
+          <div class="buddy-scroll">
+            <button class="activity-link" id="activity" type="button"><span data-icon="inbox"></span>Catch up<span class="count" aria-label="3 unread activities">3</span></button>
+            <div class="list-label">Favorites <span>2</span></div>
+            <button class="room-row selected" data-room="Welcome Lounge" type="button"><span class="avatar blue" aria-hidden="true">wl</span><span class="room-copy"><strong>Welcome Lounge</strong><small>The little things, together.</small></span><span class="unread-count" aria-label="3 unread messages">3</span></button>
+            <button class="room-row" data-room="Mara Chen" type="button"><span class="avatar peach presence" aria-hidden="true">mc</span><span class="room-copy"><strong>Mara Chen</strong><small>making a mix for the walk home</small></span></button>
+            <div class="list-label">Rooms <span>3</span></div>
+            <button class="room-row" data-room="Garden club" type="button"><span class="room-hash">#</span><span class="room-copy"><strong>Garden club</strong><small>Small plants, big plans</small></span></button>
+            <button class="room-row" data-room="Dev Shack" type="button"><span class="room-hash">#</span><span class="room-copy"><strong>Dev Shack</strong><small>A place to make things</small></span></button>
+            <button class="room-row" data-room="Late night radio" type="button"><span class="room-hash">♫</span><span class="room-copy"><strong>Late night radio</strong><small>Something good is playing</small></span></button>
+            <div class="list-label">Buddies <span>2 online</span></div>
+            <button class="room-row" data-room="PixelGhost" type="button"><span class="avatar purple presence" aria-hidden="true">pg</span><span class="room-copy"><strong>PixelGhost</strong><small>one more save point</small></span></button>
+          </div>
+          <button class="self-card" id="self-card" type="button"><span class="avatar berry presence" aria-hidden="true">sp</span><span><strong>Spencer</strong><small>Making room for good company ✨</small></span><span data-icon="more"></span></button>
+        </aside>
+        <section class="conversation" aria-labelledby="room-title">
+          <header class="conversation-header"><button class="icon-button mobile-back" id="back-list" type="button" aria-label="Back to buddy list"><span data-icon="back"></span></button><span class="avatar blue room-avatar" aria-hidden="true">wl</span><div class="heading-copy"><h2 id="room-title" tabindex="-1">Welcome Lounge</h2><p id="room-subtitle">The little things, together. <span class="privacy"><span data-icon="lock"></span>Encrypted</span></p></div><div class="header-actions"><button class="icon-button" id="search-room" type="button" aria-label="Search conversation"><span data-icon="search"></span></button><button class="icon-button" id="details" type="button" aria-label="Room details" aria-pressed="true"><span data-icon="panel"></span></button></div></header>
+          <div id="connection-banner" class="connection-banner" hidden><span data-icon="cloud"></span><span>Reconnecting. Your unsent message is still here.</span><button id="reconnect" type="button">Try again</button></div>
+          <div class="timeline" id="timeline" role="region" aria-label="Messages" tabindex="0"></div>
+          <div class="typing" id="typing"><span aria-hidden="true">•••</span> Mara is typing</div>
+          <form class="composer" id="composer-form">
+            <div class="attachment-stage" id="attachment-stage" hidden><span data-icon="file"></span><span><strong>weekend-plan.txt</strong><small>2 KB · sample attachment</small></span><button class="icon-button" id="remove-attachment" type="button" aria-label="Remove sample attachment"><span data-icon="close"></span></button></div>
+            <div class="composer-input"><button class="icon-button" id="attach" type="button" aria-label="Stage sample attachment"><span data-icon="attach"></span></button><label class="sr-only" for="message">Message Welcome Lounge</label><textarea id="message" rows="1" placeholder="Message Welcome Lounge"></textarea><button class="icon-button" id="more-tools" type="button" aria-label="More message tools"><span data-icon="smile"></span></button><button class="send" id="send" type="submit" aria-label="Send preview message"><span data-icon="send"></span></button></div>
+            <div class="composer-footer"><span><strong>Enter</strong> to send · <strong>Shift + Enter</strong> for a new line</span><span>A little personality goes a long way ✦</span></div>
+          </form>
+        </section>
+        <aside class="context-panel" id="context-panel" aria-label="Room details"></aside>
+      </div>
+      <span class="reference-watermark">Design reference · synthetic data</span>
+    </div>
+  </main>
+  <div class="sr-only" id="announcer" role="status" aria-live="polite"></div>
+  <dialog id="reference-dialog" aria-labelledby="dialog-title"><form method="dialog" class="dialog-head"><h2 id="dialog-title">Message tools</h2><button class="icon-button" aria-label="Close dialog"><span data-icon="close"></span></button></form><div id="dialog-content"></div></dialog>
+  <script type="module" src="reference.js"></script>
+</body>
+</html>

@@ -4,13 +4,15 @@ Status: implementation roadmap · September 11, 2026
 
 Tracking issue: [#140 — ordered implementation program](https://github.com/spencerrung/aimtrix/issues/140)
 
+Step 02 deliverable: [Aqua/Aero visual references and interaction rules](design/interaction-rules.md), including a standalone interactive prototype, responsive/theme samples, and an issue-mapped implementation contract. Reference QA is separate from shipped-client and live Matrix acceptance.
+
 ## Product goal
 
 Aimtrix should be a dependable daily Matrix client that people enjoy spending time in. Preserve its full-viewport hosted experience, roughly 65/35 Aqua-era character versus modern behavior, original Aero artwork, playful space rail, buddy list, personality drawer, foundational E2EE, and static self-hosting.
 
 The next implementation program makes everyday journeys complete: catching up, composing across interruptions, following conversations, finding older information, and understanding whether an action worked. Glass, gloss, candy accents, backdrops, and expressive profiles remain part of the product.
 
-Audience priority is still open. Shared needs across friends, communities, and work teams determine the initial order; the expansion work can be reordered when audience feedback clarifies demand. No calendar estimates are implied.
+The initial audience decision is to prioritize shared daily needs across friends, communities, and work teams; the expansion work can be reordered when audience feedback clarifies demand. No calendar estimates are implied.
 
 ## Scope and existing commitments
 
