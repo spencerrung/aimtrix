@@ -1,6 +1,6 @@
 # Aimtrix release gate and backlog
 
-A checked item has a working implementation and a graceful failure/unsupported state. Protocol features are not considered complete merely because a control exists.
+Checked items record the implemented scope described on that line, not universal protocol or release verification. The [capability baseline](docs/capability-baseline.md) separates implementation from unit/mock, browser, live Matrix and native/provider evidence. Unresolved depth and validation remain explicit below; a control or closed issue alone does not establish interoperability.
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the ordered GitHub issue queue for the next implementation program. It supplements this release/compatibility inventory; its baseline audit reconciles implementation and validation evidence without removing existing obligations.
 
@@ -20,14 +20,14 @@ The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the order
 - [x] Homeserver discovery, custom/default homeserver policy, password login, and password non-retention.
 - [x] SSO/CAS discovery, redirect, token callback restoration, and callback URL cleanup.
 - [x] Per-account IndexedDB Rust/WASM crypto store with an in-memory sync store; crypto initializes before sync.
-- [x] Session restore/logout/forget, expired-token handling, object URL cleanup, and account database cleanup.
-- [x] Actionable offline/reconnecting/unknown-token/consent/storage failure states.
+- [x] Session restore/logout/forget, expired-token handling during restore, object URL cleanup, and account database cleanup. Active-session expiry remains a targeted reproduction/fix in [#147](https://github.com/spencerrung/aimtrix/issues/147).
+- [x] Startup/restore offline/reconnecting/unknown-token/consent/storage failure states; signed-in sync error distinctions remain under [#147](https://github.com/spencerrung/aimtrix/issues/147).
 - [x] E2EE enforcement in encrypted rooms with no plaintext fallback.
 
 ### Messaging, media, rooms, and spaces
 
 - [x] Responsive full-viewport shell, dedicated DM scope, nested Matrix space navigation, drag/keyboard room and subspace organization, top-level space ordering, presence, aggregated unread/highlight counts, and authenticated avatars.
-- [x] Initial history, Discord-like unread-boundary/latest-message resume, and continuous upward scrollback with a bounded 250-event rendered timeline.
+- [x] Initial history, unread-boundary/latest-message resume, upward scrollback requests, and a rendered tail bounded to 250 raw events. Navigation beyond that tail and old-event context remain under [#146](https://github.com/spencerrung/aimtrix/issues/146).
 - [x] Text, notices, emotes, replies, edits, redaction, reactions, pins, typing state, and read-receipt sending.
 - [x] Image/video/audio/file rendering and authenticated encrypted-attachment decryption.
 - [x] Encrypted/unencrypted uploads with limits, progress, cancellation, and retry.
@@ -122,42 +122,45 @@ The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the order
 - [x] Mocked Matrix controller tests for room state, moderation, uploads, progress, and push rules.
 - [x] Chromium visual feedback loops and a CI browser gate.
 - [x] Bundle budgets and bounded large-room rendering.
-- [x] Tauri/multi-window evaluation documented; PWA retained for 0.x.
+- [x] Tauri desktop and Capacitor mobile shells, credential/lifecycle/deep-link adapters, and packaging foundations implemented; PWA retained. Native/device release validation remains under [#175](https://github.com/spencerrung/aimtrix/issues/175).
 
 ## Post-0.1 compatibility backlog
 
-These are additive follow-ups, not hidden placeholders in the 0.1 UI.
+These retain compatibility depth and validation obligations alongside additive features. The issue links identify execution owners; later roadmap order does not waive an existing release requirement. No hidden placeholder counts as an implementation.
 
 ### Matrix messaging depth
 
 - [x] Add Matrix threads with root summaries, focused timelines, standard `m.thread` replies, and separate thread receipts.
-- [ ] Add homeserver-backed full-history search and filters beyond the loaded timeline.
-- [ ] Render sanitized `formatted_body` HTML, code blocks, spoilers, polls, locations, and extensible events.
-- [ ] Add per-event delivery and decryption diagnostics beyond the implemented read-position avatars.
-- [ ] Add aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing.
-- [ ] Add suggested-child controls, canonical-parent selection, and explicit removal from every space.
-- [ ] Add per-room mention/keyword push-rule editing and notification troubleshooting.
+- [ ] Add homeserver-backed full-history search and filters beyond the loaded timeline. — [#157](https://github.com/spencerrung/aimtrix/issues/157), [#158](https://github.com/spencerrung/aimtrix/issues/158).
+- [x] Basic emphasis, inline/fenced code, code-file previews/copy, safe text links, link previews, and authored Matrix formatting/mention metadata. General incoming rich HTML remains a separate partial capability.
+- [ ] Complete sanitized incoming `formatted_body` HTML, spoilers and extensible event rendering; add interoperable polls and locations. — [#152](https://github.com/spencerrung/aimtrix/issues/152), [#166](https://github.com/spencerrung/aimtrix/issues/166), [#167](https://github.com/spencerrung/aimtrix/issues/167).
+- [ ] Add per-event delivery and decryption diagnostics beyond the implemented read-position avatars. — [#145](https://github.com/spencerrung/aimtrix/issues/145), [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Add aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
+- [ ] Add suggested-child controls, canonical-parent selection, and explicit removal from every space. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
+- [ ] Add per-room mention/keyword push-rule editing and notification troubleshooting. — [#159](https://github.com/spencerrung/aimtrix/issues/159), [#176](https://github.com/spencerrung/aimtrix/issues/176).
 
 ### Encryption and identity depth
 
-- [ ] Handle incoming verification requests and QR scan/show flows in addition to initiated emoji SAS.
-- [ ] Add key-request diagnostics, withheld-key reasons, secret-sharing approval, and recovery reset guidance for every server variant.
-- [ ] Test delegated OIDC/MSC3861 native flows beyond standard Matrix SSO token login.
+- [ ] Handle incoming verification requests and QR scan/show flows in addition to initiated emoji SAS. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Add key-request diagnostics, withheld-key reasons, secret-sharing approval, and recovery reset guidance for every server variant. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Test delegated OIDC/MSC3861 native flows beyond standard Matrix SSO token login. — [#174](https://github.com/spencerrung/aimtrix/issues/174).
 
 ### Group calls
 
-- [ ] Implement group MatrixRTC memberships and LiveKit focus authorization.
-- [ ] Add room call activity, participant grid, active speaker, member controls, reconnect state, and group-call E2EE indicators.
-- [ ] Add automated WebRTC tests with fake media plus disposable Synapse/LiveKit/TURN interoperability coverage.
+- [ ] Implement group MatrixRTC memberships and LiveKit focus authorization. — [#169](https://github.com/spencerrung/aimtrix/issues/169).
+- [ ] Add room call activity, participant grid, active speaker, member controls, reconnect state, and group-call E2EE indicators. — [#169](https://github.com/spencerrung/aimtrix/issues/169).
+- [ ] Add automated WebRTC tests with fake media plus disposable Synapse/LiveKit/TURN interoperability coverage. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#169](https://github.com/spencerrung/aimtrix/issues/169).
 
 ### Scale, portability, and release validation
 
-- [ ] Add disposable Synapse integration CI for password/SSO, encrypted multi-device sync, backup restore, uploads, and moderation.
-- [ ] Add Firefox and WebKit browser matrices and screen-reader/manual keyboard audits.
-- [ ] Add 10k-room and long-running sync profiling beyond the current bundle/timeline bounds.
-- [ ] Virtualize the rendered timeline if profiling shows the bounded 250-event list still limits very large rooms.
-- [ ] Verify send/receive latency and backdrop application against a live homeserver (demo-mode and unit coverage only exercise the local echo and incremental publish paths locally).
-- [ ] Revisit Tauri only when native keychain, tray, global shortcuts, or independent conversation windows justify its security and release cost.
+- [ ] Add disposable Synapse integration CI for password/SSO, encrypted multi-device sync, backup restore, uploads, and moderation. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#164](https://github.com/spencerrung/aimtrix/issues/164).
+- [ ] Add Firefox and WebKit browser matrices and screen-reader/manual keyboard audits. — [#162](https://github.com/spencerrung/aimtrix/issues/162).
+- [ ] Add 10k-room and long-running sync profiling beyond the current bundle/timeline bounds. — [#163](https://github.com/spencerrung/aimtrix/issues/163).
+- [ ] Virtualize the rendered timeline if profiling shows the bounded 250-event list still limits very large rooms. — [#146](https://github.com/spencerrung/aimtrix/issues/146), [#163](https://github.com/spencerrung/aimtrix/issues/163).
+- [ ] Verify send/receive latency and backdrop application against a live homeserver (demo-mode and unit coverage only exercise the local echo and incremental publish paths locally). — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#164](https://github.com/spencerrung/aimtrix/issues/164).
+- [ ] Complete clean-machine and physical-device native install/upgrade, secure-store, media and lifecycle validation for the existing Tauri/Capacitor implementations; retain platform-specific capability limits. — [#175](https://github.com/spencerrung/aimtrix/issues/175).
+
+- [ ] Verify real closed-app Web Push/APNs/FCM delivery and token/lifecycle behavior for claimed platforms; existing adapters and privacy proofs remain implemented. — [#176](https://github.com/spencerrung/aimtrix/issues/176).
 
 ## Chosen self-hosting defaults
 

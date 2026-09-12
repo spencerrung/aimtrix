@@ -2,6 +2,8 @@
 
 Status: 0.x release-gate checklist
 
+See the dated [capability baseline](capability-baseline.md) for current command results and explicitly untested boundaries. This checklist defines required evidence; an unchecked manual scenario is not made complete by a passing browser suite.
+
 This is the repeatable acceptance plan for the hosted Aimtrix PWA and native clients. The [release operations runbook](release-operations.md) defines promotion ownership, evidence, rollback, and incident response; the [mobile-wrapper evaluation](mobile.md) records the current Capacitor-versus-Tauri recommendation and native blockers. Automated browser coverage proves browser-detectable behavior; it does not prove APNs/FCM/Web Push delivery, E2EE interoperability with a live homeserver, or OS-level install behavior. Those require the manual checks below.
 
 ## Ownership and evidence
@@ -44,7 +46,7 @@ The two push proofs have deliberately different boundaries:
 - `proof:push` checks that an `event_id_only` gateway request contains no message content or access token.
 - `proof:push-sw` runs the service worker push/click handlers in isolation and checks that notification copy is generic and click data contains only opaque route identifiers.
 
-CI runs the browser suite against the built production preview so the real service worker is registered. Local `npm run test:e2e` remains convenient for fast development and uses the Vite dev server.
+CI runs the browser suite against the built production preview so the real service worker is registered. Local `npm run test:e2e` uses the Vite dev server. Both modes use two browser workers by default to bound local/CI resource use; pass `-- --workers=N` when deliberately measuring another concurrency level. Server startup uses `--strictPort` so a conflicting listener cannot silently move the test server to a different port.
 
 ## Manual device checklist
 
