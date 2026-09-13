@@ -33,7 +33,7 @@ export function Popover({ children, label, className, onClose, trigger, surfaceR
       if (restore && opener?.isConnected) opener.focus({ preventScroll: true });
     };
   }, [menu, ref, trigger]);
-  return <div ref={ref} className={className} style={style} role={menu ? 'menu' : 'dialog'} aria-label={label}
+  return <div ref={ref} tabIndex={-1} className={className} style={style} role={menu ? 'menu' : 'dialog'} aria-label={label}
     onKeyDown={(event) => {
       if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close.current(); }
       if (!menu) return;

@@ -1963,6 +1963,7 @@ function Conversation({
   const reportedThreadRead = useRef<{ roomId: string; rootId: string; eventId: string } | undefined>(undefined);
   const [threadReadError, setThreadReadError] = useState<{ roomId: string; rootId: string; eventId: string }>();
   const readActionsTrigger = useRef<HTMLButtonElement>(null);
+  const readActionsSurface = useRef<HTMLDivElement>(null);
   const [readActionsRoom, setReadActionsRoom] = useState<string>();
   const [readPopoverTop, setReadPopoverTop] = useState(68);
   const [readPopoverRight, setReadPopoverRight] = useState(12);
@@ -2671,6 +2672,9 @@ function Conversation({
       : undefined;
     const request = {};
     readActionRequest.current = request;
+    // Disabling the active button otherwise drops browser focus onto body.
+    // Keep Escape and Tab within reach without moving focus after the request.
+    if (readActionsSurface.current?.contains(document.activeElement)) readActionsSurface.current.focus({ preventScroll: true });
     setReadAction({ roomId: activeRoomId, pending: true });
     try {
       await operation(eventId);
@@ -3016,7 +3020,7 @@ function Conversation({
           </IconButton>
         </div>
       </header>
-      {readActionsRoom === room.id && conversationVisible ? createPortal(<Popover trigger={readActionsTrigger} className="history-context" label="Conversation read status" onClose={() => setReadActionsRoom(undefined)} style={{ position: 'fixed', zIndex: 60, top: readPopoverTop, right: readPopoverRight, width: 'min(320px, calc(100vw - 24px))', maxHeight: `calc(100dvh - ${readPopoverTop + 12}px)`, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px #0003' }}>
+      {readActionsRoom === room.id && conversationVisible ? createPortal(<Popover trigger={readActionsTrigger} surfaceRef={readActionsSurface} className="history-context" label="Conversation read status" onClose={() => setReadActionsRoom(undefined)} style={{ position: 'fixed', zIndex: 60, top: readPopoverTop, right: readPopoverRight, width: 'min(320px, calc(100vw - 24px))', maxHeight: `calc(100dvh - ${readPopoverTop + 12}px)`, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px #0003' }}>
         <p>{room.markedUnread ? 'Marked unread for later.' : 'Keep a reminder or update your read position.'}</p>
         {onMarkRead ? <button type="button" className="aqua-button" disabled={readAction?.roomId === room.id && readAction.pending} onClick={() => void updateReadStatus(false)}>Mark conversation read</button> : null}
         {onMarkUnread ? <button type="button" className="aqua-button" disabled={readAction?.roomId === room.id && readAction.pending} onClick={() => void updateReadStatus(true)}>Mark unread</button> : null}

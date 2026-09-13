@@ -2062,6 +2062,7 @@ export class MatrixController {
   }
 
   private readPositionCovers(room: Room, currentId: string | undefined, eventId: string): boolean {
+    if (!validUnreadEventId(currentId)) return false;
     if (currentId === eventId) return true;
     const events = room.getLiveTimeline().getEvents();
     const currentIndex = events.findIndex((event) => event.getId() === currentId);

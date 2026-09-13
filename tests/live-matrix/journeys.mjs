@@ -220,7 +220,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const popover = page.getByRole('dialog', { name: 'Conversation read status', exact: true });
         await popover.getByRole('button', { name: unread ? 'Mark unread' : 'Mark conversation read', exact: true }).click();
         await popover.getByText(unread ? /^Marked unread\. Your reminder/ : /^Conversation marked read\./).waitFor();
-        await popover.press('Escape');
+        // Saving must retain keyboard focus: exercise Escape without refocusing.
+        await page.keyboard.press('Escape');
+        await popover.waitFor({ state: 'hidden' });
       };
       const followLatest = async (page) => {
         await page.bringToFront();
@@ -241,8 +243,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       };
       // Keep identifiers and sync payloads in memory. Neither observer is an SDK
       // client, and neither sends receipts or changes the account it observes.
+      // Select the room from each response below. Synapse's room-ID filter also
+      // filters room account-data objects, which lack their own room_id field.
       const filter = encode(JSON.stringify({ presence: { types: [] }, account_data: { types: [] }, room: {
-        rooms: [roomId], state: { types: [] }, timeline: { types: [], limit: 0 },
+        state: { types: [] }, timeline: { types: [], limit: 0 },
         ephemeral: { types: ['m.receipt'] }, account_data: { types: ['m.fully_read', 'm.marked_unread'] },
       } }));
       const observeSync = async (token) => {
@@ -342,6 +346,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant((await api(markerPath, { token: secondSession.accessToken })).unread === true, 'reminder-persists-after-return');
         await readAction(alice, false);
         await until(async () => { await own.poll(); return own.accountData.get('m.marked_unread')?.unread === false; }, 'marked-unread-explicit-clear');
+        await aliceSecond.bringToFront();
         await reminder.waitFor({ state: 'hidden' });
         await other.poll();
         invariant(!other.receipts.some((receipt) => receipt.type === 'm.read.private' || receipt.eventId === privateEvent || receipt.eventId === threadEvent), 'private-receipts-absent-to-other-user');

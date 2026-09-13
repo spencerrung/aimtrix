@@ -241,4 +241,12 @@ describe('private read bookkeeping', () => {
     expect(client.http.authedRequest).not.toHaveBeenCalled();
   });
 
+  it('does not treat an event without a server ID as proof of a missing receipt', async () => {
+    const { controller, client, events } = fixture();
+    events.push(new MatrixEvent({ room_id: roomId, type: 'm.room.message', content: { body: 'Synthetic local event' } }));
+    await controller.markRoomRead(roomId);
+    expect(client.http.authedRequest).toHaveBeenCalledExactlyOnceWith('POST', path('m.read', '$main:test'), undefined, { thread_id: 'main' });
+    expect(client.setRoomReadMarkers).toHaveBeenCalledExactlyOnceWith(roomId, '$main:test');
+  });
+
 });

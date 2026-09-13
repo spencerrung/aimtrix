@@ -2215,13 +2215,31 @@ describe('Workspace read bookkeeping', () => {
     expect(onMarkRoomUnread).toHaveBeenCalledWith('welcome', 'm2');
     expect(screen.getByRole('button', { name: 'Mark unread' })).toBeDisabled();
     expect(screen.getByRole('status')).toHaveTextContent('Saving read status');
+    expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
     await act(async () => pending.reject(new Error('Synthetic save failure')));
     expect(screen.getByRole('alert')).toHaveTextContent('Could not mark this conversation unread');
     fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
     await waitFor(() => expect(screen.getByText('Marked unread. Your reminder stays until you mark this conversation read.')).toBeVisible());
     expect(onMarkRoomUnread).toHaveBeenCalledTimes(2);
-    fireEvent.keyDown(screen.getByRole('dialog', { name: 'Conversation read status' }), { key: 'Escape' });
+    expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Read status' })).toHaveFocus();
+  });
+
+  it('keeps Escape working during a read-status save and never steals focus when it finishes', async () => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: unreadWorkspace(), onMarkRoomUnread: vi.fn().mockReturnValue(pending.promise) });
+    fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
+    expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    composer.focus();
+    await act(async () => pending.resolve());
+    expect(composer).toHaveFocus();
+    expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
   });
 
   it('shows a reminder dot for muted ordinary unreads without inventing a notification', () => {

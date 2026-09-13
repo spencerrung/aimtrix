@@ -115,7 +115,7 @@ describe('App receipt privacy', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Read main' }));
     fireEvent.click(screen.getByRole('button', { name: 'Read thread' }));
     fireEvent.click(screen.getByRole('button', { name: 'Unread reminder' }));
-    expect(harness.notificationPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ sendReadReceipts: publicReceipt }));
+    await waitFor(() => expect(harness.notificationPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ sendReadReceipts: publicReceipt })));
     expect(harness.markRead).toHaveBeenCalledWith('synthetic-room', { eventId: '$viewed', explicit: true, publicReceipt });
     expect(harness.markThreadRead).toHaveBeenCalledWith('synthetic-room', '$root', { eventId: '$reply', publicReceipt });
     expect(harness.markUnread).toHaveBeenCalledWith('synthetic-room', '$return');
