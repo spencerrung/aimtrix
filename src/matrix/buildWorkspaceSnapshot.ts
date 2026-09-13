@@ -1,3 +1,4 @@
+import { deliveryForStatus, deliveryFailureCopy } from './messageDelivery';
 import type { EncryptedMediaInfo } from './mediaContext';
 import {
   DIRECT_BACKGROUNDS_EVENT,
@@ -77,6 +78,7 @@ interface CachedMembers {
 
 export interface WorkspaceSnapshotCache {
   roomVersions: Map<string, number>;
+  localEvents: Map<string, Map<string, MatrixEvent>>;
   presenceVersion: number;
   messages: Map<string, CachedMessages>;
   members: Map<string, CachedMembers>;
@@ -85,6 +87,7 @@ export interface WorkspaceSnapshotCache {
 export function createWorkspaceSnapshotCache(): WorkspaceSnapshotCache {
   return {
     roomVersions: new Map<string, number>(),
+    localEvents: new Map(),
     presenceVersion: 0,
     messages: new Map<string, CachedMessages>(),
     members: new Map<string, CachedMembers>(),
@@ -93,7 +96,7 @@ export function createWorkspaceSnapshotCache(): WorkspaceSnapshotCache {
 
 function timelineFingerprint(events: MatrixEvent[]): string {
   const last = events.at(-1);
-  return `${events.length}:${last?.getId() ?? ''}:${last?.status ?? ''}`;
+  return `${events.length}:${last?.getId() ?? ''}:${events.filter((event) => event.status !== null).map((event) => `${event.getId()}:${event.status}`).join('|')}`;
 }
 
 function reactionsEqual(
@@ -150,6 +153,10 @@ function messagesEqual(left: MessageSummary, right: MessageSummary): boolean {
       : right.mentions !== undefined && mentionsEqual(left.mentions, right.mentions)) &&
     left.pinned === right.pinned &&
     left.pending === right.pending &&
+    left.delivery === right.delivery &&
+    left.deliveryError === right.deliveryError &&
+    left.transactionId === right.transactionId &&
+    left.pendingEdit === right.pendingEdit &&
     left.isOwn === right.isOwn &&
     left.encryptedFile === right.encryptedFile &&
     left.replyTo?.eventId === right.replyTo?.eventId &&
@@ -271,6 +278,7 @@ function eventBody(
     : undefined;
   const validReplacement = candidateReplacement &&
     !candidateReplacement.isRedacted() &&
+    (candidateReplacement.status === null || candidateReplacement.status === 'sent') &&
     candidateReplacement.getSender() === event.getSender() &&
     candidateRelation?.rel_type === 'm.replace' &&
     candidateRelation.event_id === event.getId()
@@ -391,11 +399,12 @@ function messagesForEvents(
   const threadRootByEventId = new Map<string, string>();
 
   for (const event of events) {
+    if (event.status === 'cancelled') continue;
     const content = originalEventContent(event);
     const relation = content['m.relates_to'];
     const eventId = event.getId();
     const senderId = event.getSender();
-    if (relation?.rel_type === 'm.replace' && relation.event_id) {
+    if (relation?.rel_type === 'm.replace' && relation.event_id && (event.status === null || event.status === 'sent')) {
       const original = eventById.get(relation.event_id);
       const newContent = content['m.new_content'];
       const existing = replacements.get(relation.event_id);
@@ -439,7 +448,9 @@ function messagesForEvents(
 
   const messages = events.flatMap((event): MessageSummary[] => {
     const content = originalEventContent(event);
-    if (content['m.relates_to']?.rel_type === 'm.replace') return [];
+    if (event.status === 'cancelled') return [];
+    const pendingEdit = content['m.relates_to']?.rel_type === 'm.replace';
+    if (pendingEdit && (event.status === null || event.status === 'sent')) return [];
     const eventId = event.getId();
     const senderId = event.getSender();
     const rendered = eventBody(event, eventId ? replacements.get(eventId) : undefined);
@@ -482,7 +493,7 @@ function messagesForEvents(
         rendered.mentionUserIds,
       ),
       nudge: rendered.nudge,
-      threadRootId: threadRootByEventId.get(eventId),
+      threadRootId: threadRootByEventId.get(eventId) ?? (pendingEdit ? event.threadRootId ?? threadRootByEventId.get(content['m.relates_to']?.event_id ?? '') : undefined),
       isThreadRoot: threadRootIds.has(eventId),
       replyTo: replyEventId && replyRendered
         ? {
@@ -493,7 +504,11 @@ function messagesForEvents(
         : undefined,
       reactions: eventReactions.length ? eventReactions : undefined,
       isOwn: senderId === userId,
-      pending: event.status !== null,
+      transactionId: event.getTxnId?.(),
+      delivery: senderId === userId ? deliveryForStatus(event.status) : undefined,
+      deliveryError: event.status === 'not_sent' ? deliveryFailureCopy(event.error) : undefined,
+      pendingEdit: pendingEdit || undefined,
+      pending: ['queued', 'encrypting', 'sending'].includes(event.status ?? ''),
     }];
   });
 
@@ -531,16 +546,23 @@ function messagesForEvents(
   return messages;
 }
 
+function mergeEvents(events: MatrixEvent[], localEvents: MatrixEvent[]): MatrixEvent[] {
+  const ids = new Set(events.map((event) => event.getId()));
+  const transactions = new Set(events.flatMap((event) => event.getTxnId?.() ?? []));
+  return [...events, ...localEvents.filter((event) => !ids.has(event.getId()) && !transactions.has(event.getTxnId?.() ?? ''))];
+}
+
 function messagesForRoom(
   room: Room,
   userId: string,
   pinnedIds: ReadonlySet<string>,
+  localEvents: MatrixEvent[] = [],
 ): MessageSummary[] {
   return messagesForEvents(
     room,
     userId,
     pinnedIds,
-    room.getLiveTimeline().getEvents().slice(-250),
+    mergeEvents(room.getLiveTimeline().getEvents().slice(-250), localEvents.filter((event) => !event.threadRootId && originalEventContent(event)['m.relates_to']?.rel_type !== 'm.thread')),
     true,
   );
 }
@@ -653,9 +675,10 @@ export function buildWorkspaceSnapshot(
   const threadsByRoot: Record<string, ThreadSummary> = {};
 
   const rooms: RoomSummary[] = chatRooms.map((room) => {
+    const localEvents = [...(cache?.localEvents.get(room.roomId)?.values() ?? [])].filter((event) => event.status !== 'cancelled');
     const roomVersion = cache?.roomVersions.get(room.roomId) ?? 0;
     const timelineEvents = cache ? room.getLiveTimeline().getEvents() : undefined;
-    const fingerprint = timelineEvents ? timelineFingerprint(timelineEvents) : '';
+    const fingerprint = timelineEvents ? timelineFingerprint(mergeEvents(timelineEvents, localEvents)) : '';
     const cachedMessages = cache?.messages.get(room.roomId);
     const messages =
       cachedMessages && cachedMessages.version === roomVersion && cachedMessages.fingerprint === fingerprint
@@ -667,7 +690,7 @@ export function buildWorkspaceSnapshot(
                 (eventId): eventId is string => typeof eventId === 'string',
               ) ?? [],
             );
-            const rebuilt = messagesForRoom(room, userId, pinnedIds);
+            const rebuilt = messagesForRoom(room, userId, pinnedIds, localEvents);
             const reconciled = cachedMessages
               ? reuseUnchangedMessages(cachedMessages.value, rebuilt)
               : rebuilt;
@@ -685,16 +708,34 @@ export function buildWorkspaceSnapshot(
       id: string;
       length: number;
       events: MatrixEvent[];
+      lastEvent?: MatrixEvent;
     }> }).getThreads?.() ?? [];
-    for (const thread of threads) {
+    const localThreads = new Map<string, MatrixEvent[]>();
+    for (const event of localEvents) {
+      const relation = originalEventContent(event)['m.relates_to'];
+      const rootId = event.threadRootId ?? (relation?.rel_type === 'm.thread' ? relation.event_id : undefined);
+      if (!rootId) continue;
+      localThreads.set(rootId, [...(localThreads.get(rootId) ?? []), event]);
+    }
+    const allThreads = [...threads, ...[...localThreads.keys()].filter((id) => !threads.some((thread) => thread.id === id)).map((id) => ({ id, length: 0, events: [] as MatrixEvent[], lastEvent: undefined }))];
+    for (const thread of allThreads) {
       const rootId = thread.id;
-      const replies = messagesForEvents(room, userId, pinnedIds, thread.events)
+      const replies = messagesForEvents(room, userId, pinnedIds, mergeEvents(thread.events, localThreads.get(rootId) ?? []))
         .filter((message) => message.id !== rootId && message.threadRootId === rootId);
-      if (!replies.length && thread.length === 0) continue;
+      // SDK 42 chronological threads include cancelled local replies in length.
+      // Correct the view without mutating its private counters/timeline handlers.
+      const cancelledReplies = thread.events.filter((event) =>
+        event.status === 'cancelled' && event.threadRootId === rootId &&
+        event.getId() !== thread.lastEvent?.getId() &&
+        ['m.thread', 'io.element.thread'].includes(originalEventContent(event)['m.relates_to']?.rel_type ?? ''),
+      ).length;
+      const supplementalReplies = mergeEvents(thread.events, localThreads.get(rootId) ?? []).slice(thread.events.length).filter((event) => event.status !== null && event.status !== 'sent' && originalEventContent(event)['m.relates_to']?.rel_type === 'm.thread').length;
+      const replyCount = Math.max(0, thread.length - cancelledReplies + supplementalReplies, replies.filter((message) => !message.pendingEdit).length);
+      if (!replies.length && replyCount === 0) continue;
       const latestReply = replies.at(-1);
       const summary: ThreadSummary = {
         rootId,
-        replyCount: Math.max(thread.length, replies.length),
+        replyCount,
         messages: replies,
         latestReply: latestReply
           ? {
@@ -705,14 +746,13 @@ export function buildWorkspaceSnapshot(
           : undefined,
       };
       threadsByRoot[rootId] = summary;
-      const root = messages.find((message) => message.id === rootId);
-      if (root) {
-        root.isThreadRoot = true;
-        root.thread = {
-          replyCount: summary.replyCount,
-          latestReply: summary.latestReply,
-        };
-      }
+    }
+    // Thread metadata must not mutate cached rows already consumed by React.memo.
+    if (messages.some((message) => threadsByRoot[message.id])) {
+      messagesByRoom[room.roomId] = messages.map((message) => {
+        const thread = threadsByRoot[message.id];
+        return thread ? { ...message, isThreadRoot: true, thread: { replyCount: thread.replyCount, latestReply: thread.latestReply } } : message;
+      });
     }
     const cachedMembers = cache?.members.get(room.roomId);
     membersByRoom[room.roomId] =

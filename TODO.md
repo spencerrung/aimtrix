@@ -138,7 +138,8 @@ These retain compatibility depth and validation obligations alongside additive f
 - [ ] Add homeserver-backed full-history search and filters beyond the loaded timeline. — [#157](https://github.com/spencerrung/aimtrix/issues/157), [#158](https://github.com/spencerrung/aimtrix/issues/158).
 - [x] Basic emphasis, inline/fenced code, code-file previews/copy, safe text links, link previews, and authored Matrix formatting/mention metadata. General incoming rich HTML remains a separate partial capability.
 - [ ] Complete sanitized incoming `formatted_body` HTML, spoilers and extensible event rendering; add interoperable polls and locations. — [#152](https://github.com/spencerrung/aimtrix/issues/152), [#166](https://github.com/spencerrung/aimtrix/issues/166), [#167](https://github.com/spencerrung/aimtrix/issues/167).
-- [ ] Add per-event delivery and decryption diagnostics beyond the implemented read-position avatars. — [#145](https://github.com/spencerrung/aimtrix/issues/145), [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [x] Explicit per-event delivery, original-transaction retry/cancel and room/thread text draft protection. — [#145](https://github.com/spencerrung/aimtrix/issues/145); [behavior and evidence](docs/message-delivery.md).
+- [ ] Complete deeper per-event decryption diagnostics beyond delivery state and read-position avatars. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Add aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
 - [ ] Add suggested-child controls, canonical-parent selection, and explicit removal from every space. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
 - [ ] Add per-room mention/keyword push-rule editing and notification troubleshooting. — [#159](https://github.com/spencerrung/aimtrix/issues/159), [#176](https://github.com/spencerrung/aimtrix/issues/176).

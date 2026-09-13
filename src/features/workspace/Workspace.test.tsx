@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultRuntimeConfig } from '../../config/runtimeConfig';
 import { demoWorkspace } from '../../demo/demoWorkspace';
@@ -11,6 +11,7 @@ import {
   type ProfilePersonalization,
 } from '../../settings/profilePersonalization';
 import { Workspace } from './Workspace';
+import { MessageSendError } from '../../matrix/messageDelivery';
 function installResizeObserver() {
   const observers = new Set<ResizeObserverCallback>();
   class ResizeObserverMock {
@@ -56,6 +57,13 @@ function setComposerText(composer: HTMLElement, text: string) {
   window.getSelection()?.removeAllRanges();
   window.getSelection()?.addRange(range);
   fireEvent.input(composer);
+}
+
+function pendingSend() {
+  let resolve!: () => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<void>((accept, decline) => { resolve = accept; reject = decline; });
+  return { promise, resolve, reject };
 }
 
 
@@ -936,10 +944,158 @@ describe('Workspace demo', () => {
     setComposerText(composer, 'This should remain a draft');
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
-    await waitFor(() => expect(screen.getByText('That message did not send. Your draft has been restored.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('That message did not send. Your draft is still here.')).toBeInTheDocument());
     expect(composer).toHaveTextContent('This should remain a draft');
     expect(timeline.scrollTop).toBe(400);
     expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+  });
+
+  it.each(['accepted', 'retained', 'preparation'] as const)('preserves a newer main draft after an older send is %s', async (outcome) => {
+    const pending = pendingSend();
+    const onSendMessage = vi.fn().mockReturnValue(pending.promise);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Submitted text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    expect(composer).toHaveTextContent('Submitted text');
+    expect(composer).toHaveAttribute('contenteditable', 'true');
+    setComposerText(composer, 'A newer draft');
+    await act(async () => { if (outcome === 'accepted') pending.resolve(); else pending.reject(new MessageSendError(outcome === 'retained')); });
+    expect(composer).toHaveTextContent('A newer draft');
+    expect(onSendMessage).toHaveBeenCalledExactlyOnceWith('welcome', 'Submitted text');
+  });
+
+  it.each(['', 'Submitted text'])('recognizes user revision even when the newer draft is %j', async (newer) => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage: () => pending.promise });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Submitted text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    setComposerText(composer, 'An intermediate revision');
+    setComposerText(composer, newer);
+    await act(async () => pending.reject(new MessageSendError(true)));
+    expect(composer.textContent).toBe(newer);
+  });
+
+  it.each(['accepted', 'retained', 'preparation'] as const)('cleans up only the unchanged main draft when a send is %s', async (outcome) => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage: () => pending.promise });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Submitted text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await act(async () => { if (outcome === 'accepted') pending.resolve(); else pending.reject(new MessageSendError(outcome === 'retained')); });
+    expect(composer.textContent).toBe(outcome === 'preparation' ? 'Submitted text' : '');
+  });
+
+  it.each(['accepted', 'retained'] as const)('does not move focus or clear another room after an older send is %s', async (outcome) => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage: () => pending.promise });
+    setComposerText(screen.getByLabelText('Message Welcome Lounge'), 'First room text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
+    const otherComposer = screen.getByLabelText('Message Mara Chen');
+    setComposerText(otherComposer, 'Second room text');
+    const focusedControl = screen.getByRole('button', { name: 'Add emoji' });
+    focusedControl.focus();
+    await act(async () => { if (outcome === 'accepted') pending.resolve(); else pending.reject(new MessageSendError(true)); });
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+    expect(otherComposer).toHaveTextContent('Second room text');
+    expect(focusedControl).toHaveFocus();
+    expect(screen.queryByText(/Use Retry on the failed message/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    expect(screen.getByLabelText('Message Welcome Lounge').textContent).toBe('');
+  });
+
+  it('keeps a newly selected reply target when an earlier reply succeeds', async () => {
+    const pending = pendingSend();
+    const onSendReply = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendReply });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Reply' })[0]);
+    setComposerText(composer, 'The first reply');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Reply' })[1]);
+    setComposerText(composer, 'The next reply');
+    await act(async () => pending.resolve());
+    expect(screen.getByText('Replying to Spencer')).toBeInTheDocument();
+    expect(composer).toHaveTextContent('The next reply');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(onSendReply).toHaveBeenNthCalledWith(2, 'welcome', 'The next reply', expect.objectContaining({ id: 'm2' }), []));
+  });
+
+  it.each(['accepted', 'retained'] as const)('preserves the pre-edit draft after cancelling an in-flight edit that is %s', async (outcome) => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onEditMessage: () => pending.promise });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'My original draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
+    setComposerText(composer, 'Submitted edit');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel reply or edit' }));
+    await act(async () => { if (outcome === 'accepted') pending.resolve(); else pending.reject(new MessageSendError(true)); });
+    expect(composer).toHaveTextContent('My original draft');
+    expect(screen.queryByText('Editing message')).not.toBeInTheDocument();
+  });
+
+  it('preserves newer code composition when a previous text send finishes', async () => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage: () => pending.promise });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Submitted text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Insert code block' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Code language' }), { target: { value: 'typescript' } });
+    await act(async () => pending.resolve());
+    expect(composer).toHaveTextContent('Submitted text');
+    expect(screen.getByLabelText('Code block mode')).toHaveTextContent('typescript code');
+  });
+
+  it.each(['accepted', 'retained', 'preparation'] as const)('preserves a newer thread draft after an older reply is %s', async (outcome) => {
+    const pending = pendingSend();
+    const onSendReply = vi.fn().mockReturnValue(pending.promise);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendReply });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const composer = screen.getByLabelText('Message thread');
+    fireEvent.change(composer, { target: { value: 'Submitted thread text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
+    expect(composer).toHaveValue('Submitted thread text');
+    fireEvent.change(composer, { target: { value: 'A newer thread draft' } });
+    await act(async () => { if (outcome === 'accepted') pending.resolve(); else pending.reject(new MessageSendError(outcome === 'retained')); });
+    expect(composer).toHaveValue('A newer thread draft');
+    expect(onSendReply).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a new thread edit context when an earlier thread reply succeeds', async () => {
+    const pending = pendingSend();
+    const onEditMessage = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendReply: () => pending.promise, onEditMessage });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    const composer = within(thread).getByLabelText('Message thread');
+    fireEvent.change(composer, { target: { value: 'Submitted thread text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
+    fireEvent.click(within(thread).getByRole('button', { name: 'Edit message' }));
+    await act(async () => pending.resolve());
+    expect(within(thread).getByText('Editing message')).toBeInTheDocument();
+    expect(composer).toHaveValue('Keep the Aqua, lose the bad UX.');
+    fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
+    await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2-thread-2', 'Keep the Aqua, lose the bad UX.', []));
+  });
+
+  it('does not refocus a reopened thread when its older request finishes', async () => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendReply: () => pending.promise });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Submitted thread text' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Close thread' }));
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const focusedControl = screen.getByRole('button', { name: 'Close thread' });
+    focusedControl.focus();
+    await act(async () => pending.resolve());
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+    expect(focusedControl).toHaveFocus();
+    expect(screen.getByLabelText('Message thread')).toHaveValue('');
   });
 
   it('marks newer messages read only after a detached viewport returns to the bottom', async () => {
@@ -1034,7 +1190,7 @@ describe('Workspace demo', () => {
       fireEvent.keyDown(composer, { key: 'Enter' });
       expect(onSendMessage).toHaveBeenCalledTimes(1);
       expect(onSendSticker).not.toHaveBeenCalled();
-      expect(composer).toBeEmptyDOMElement();
+      expect(within(composer).getByRole('img', { name: 'Bufo wave' })).toBeInTheDocument();
       finishMessageSend();
       await waitFor(() => expect(composer).toBeEmptyDOMElement());
     } finally {

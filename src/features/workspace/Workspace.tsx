@@ -1,7 +1,9 @@
+import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
 import { useDialogBusy } from '../../components/dialogContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Popover } from '../../components/Popover';
 import { Dialog, DialogClose } from '../../components/Dialog';
+import { MessageSendError } from '../../matrix/messageDelivery';
 import {
   ArrowDown,
   ArrowLeft,
@@ -378,7 +380,7 @@ function MessageText({ body, emojiCatalog, mentions }: { body: string; emojiCata
   })}</>;
 }
 
-interface WorkspaceProps {
+interface WorkspaceProps extends MessageDeliveryActions {
   workspace: WorkspaceSnapshot;
   config: RuntimeConfig;
   theme: ThemeName;
@@ -1513,6 +1515,8 @@ const TimelineMessage = memo(function TimelineMessage({
   onStartThread,
   onEdit,
   onDelete,
+  onRetryMessage,
+  onCancelMessage,
   onPin,
   canPin,
   onReact,
@@ -1531,6 +1535,8 @@ const TimelineMessage = memo(function TimelineMessage({
   onStartThread: (message: MessageSummary) => void;
   onEdit: (message: MessageSummary) => void;
   onDelete: (message: MessageSummary) => void;
+  onRetryMessage?: MessageDeliveryActions['onRetryMessage'];
+  onCancelMessage?: MessageDeliveryActions['onCancelMessage'];
   onPin: (message: MessageSummary) => void;
   canPin: boolean;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
@@ -1630,7 +1636,7 @@ const TimelineMessage = memo(function TimelineMessage({
           <time dateTime={new Date(message.timestamp).toISOString()}>{formatTime(message.timestamp)}</time>
           {message.edited ? <span className="sending-label edited-label" aria-label="Edited message">edited</span> : null}
           {message.pinned ? <span className="sending-label pinned-label"><Pin size={10} /> pinned</span> : null}
-          {message.pending ? <span className="sending-label">sending…</span> : null}
+
         </header>
         {message.replyTo ? (
           <blockquote className="message-reply-context">
@@ -1653,6 +1659,7 @@ const TimelineMessage = memo(function TimelineMessage({
             {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} emojiCatalog={emojiCatalog} mentions={message.mentions} />
           </div>
         )}
+        <MessageDeliveryStatus message={message} onRetryMessage={onRetryMessage} onCancelMessage={onCancelMessage} />
         <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
         {message.reactions?.length ? (
           <div className="reaction-row" aria-label="Message reactions">
@@ -1707,7 +1714,7 @@ const TimelineMessage = memo(function TimelineMessage({
           <header><strong>{message.body}</strong><span><button type="button" aria-pressed={actualSize} onClick={() => setActualSize((value) => !value)}>{actualSize ? 'Fit image' : 'Actual size'}</button><DialogClose aria-label="Close image viewer"><X size={18} /></DialogClose></span></header>
           {viewerSource ? <img className={actualSize ? 'is-actual-size' : undefined} src={viewerSource} alt={message.body} /> : <p role="status">Loading image…</p>}
       </Dialog> : null}
-      <div className="message-actions" ref={reactionActions}>
+      {(!message.delivery || message.delivery === 'accepted') && !message.pendingEdit ? <div className="message-actions" ref={reactionActions}>
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
         <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
         {message.isThreadRoot ? <button type="button" aria-label="Open thread" title="Open thread" onClick={() => onOpenThread(message)}><MessageCircle size={14} /></button> : null}
@@ -1733,7 +1740,7 @@ const TimelineMessage = memo(function TimelineMessage({
         {message.isOwn && message.kind === 'text' ? (
           <><button type="button" aria-label="Edit message" title="Edit" onClick={() => onEdit(message)}><Pencil size={14} /></button><button type="button" aria-label="Delete message" title="Delete" onClick={() => onDelete(message)}><Trash2 size={14} /></button></>
         ) : null}
-      </div>
+      </div> : null}
     </article>
   );
 });
@@ -1785,6 +1792,8 @@ type TimelineViewportMode = 'unread' | 'bottom' | 'detached';
 
 type WorkspacePanelId = 'buddies' | 'conversation' | 'thread';
 
+type ComposerSubmitResult = 'sent' | 'edited' | 'retained' | false;
+
 function Conversation({
   room,
   members,
@@ -1794,6 +1803,8 @@ function Conversation({
   threadCollapsed,
   draft,
   threadDraft,
+  draftRevision,
+  threadDraftRevision,
   sending,
   threadSending,
   notice,
@@ -1818,6 +1829,8 @@ function Conversation({
   onStartEdit,
   onStartThreadEdit,
   onDeleteMessage,
+  onRetryMessage,
+  onCancelMessage,
   onTogglePin,
   onCancelContext,
   onCancelThreadEdit,
@@ -1849,6 +1862,8 @@ function Conversation({
   threadCollapsed: boolean;
   draft: string;
   threadDraft: string;
+  draftRevision: number;
+  threadDraftRevision: number;
   sending: boolean;
   threadSending: boolean;
   notice?: string;
@@ -1860,8 +1875,8 @@ function Conversation({
   onBack: () => void;
   onDraftChange: (draft: string) => void;
   onThreadDraftChange: (draft: string) => void;
-  onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<boolean>;
-  onThreadSubmit: (mentions?: ComposerMention[]) => Promise<boolean>;
+  onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
+  onThreadSubmit: (mentions?: ComposerMention[]) => Promise<ComposerSubmitResult>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
   onOpenBackground: () => void;
@@ -1873,6 +1888,8 @@ function Conversation({
   onStartEdit: (message: MessageSummary) => void;
   onStartThreadEdit: (message: MessageSummary) => void;
   onDeleteMessage: (message: MessageSummary) => void;
+  onRetryMessage?: MessageDeliveryActions['onRetryMessage'];
+  onCancelMessage?: MessageDeliveryActions['onCancelMessage'];
   onTogglePin: (message: MessageSummary) => void;
   onCancelContext: () => void;
   onCancelThreadEdit: () => void;
@@ -1931,6 +1948,10 @@ function Conversation({
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('text');
   const [codeDraftMode, setCodeDraftMode] = useState(false);
+  const composerNavigation = useRef(0);
+  useLayoutEffect(() => { composerNavigation.current += 1; }, [room?.id, threadRoot?.id]);
+  const currentComposition = useRef({ draftRevision, threadDraftRevision, codeLanguage, codeDraftMode });
+  useLayoutEffect(() => { currentComposition.current = { draftRevision, threadDraftRevision, codeLanguage, codeDraftMode }; });
   const [mentionsByRoom, setMentionsByRoom] = useState<Record<string, ComposerMention[]>>({});
   const selectedMentions = room?.id ? mentionsByRoom[room.id] ?? [] : [];
   const mentionsBeforeEdit = useRef<ComposerMention[]>([]);
@@ -2100,6 +2121,14 @@ function Conversation({
   const submit = (event: FormEvent) => {
     event.preventDefault();
     if (inlineEmojiSendInFlight.current) return;
+    const navigation = composerNavigation.current;
+    const revision = draftRevision;
+    const submittedCodeLanguage = codeLanguage;
+    const submittedCodeMode = codeDraftMode;
+    const isCurrent = () => composerNavigation.current === navigation
+      && currentComposition.current.draftRevision === revision
+      && currentComposition.current.codeLanguage === submittedCodeLanguage
+      && currentComposition.current.codeDraftMode === submittedCodeMode;
     const sendingEmoji = inlineEmojis.length > 0;
     if (sendingEmoji) {
       inlineEmojiSendInFlight.current = true;
@@ -2120,18 +2149,23 @@ function Conversation({
           hasVisibleComposerMention(messageDraft, mention.label) &&
           values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
         );
-      const sentMessage = await onSubmit(body, activeMentions, inlineEmojis);
-      if (!sentMessage) return;
+      const result = await onSubmit(body, activeMentions, inlineEmojis);
+      if (!result) return;
+      // These setters capture the submitted room; navigation must not leave its
+      // old mention/token metadata behind after the matching text was cleared.
       setInlineEmojis([]);
       setSelectedMentions([]);
-      returnToLatest();
+      if (!isCurrent()) return;
+      setCodeDraftMode(false);
+      if (result === 'sent') returnToLatest();
     })().finally(() => {
       if (sendingEmoji) {
         inlineEmojiSendInFlight.current = false;
         setSendingInlineEmojis(false);
       }
-      setCodeDraftMode(false);
-      requestAnimationFrame(() => mainComposer.current?.focus());
+      if (isCurrent()) requestAnimationFrame(() => {
+        if (composerNavigation.current === navigation && currentComposition.current.draftRevision === revision) mainComposer.current?.focus();
+      });
     });
   };
   const stageInlineSticker = (
@@ -2201,6 +2235,10 @@ function Conversation({
   };
   const submitThread = (event: FormEvent) => {
     event.preventDefault();
+    const navigation = composerNavigation.current;
+    const revision = threadDraftRevision;
+    const isCurrent = () => composerNavigation.current === navigation
+      && currentComposition.current.threadDraftRevision === revision;
     const editMentions = (editingThreadMessage?.mentions ?? []).map((mention) => ({
       userId: mention.userId,
       label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
@@ -2210,9 +2248,11 @@ function Conversation({
         hasVisibleComposerMention(threadDraft, mention.label) &&
         values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
       );
-    void onThreadSubmit(activeMentions).then((sent) => {
-      if (sent) setSelectedThreadMentions([]);
-    }).finally(() => requestAnimationFrame(() => threadComposer.current?.focus()));
+    void onThreadSubmit(activeMentions).then((result) => {
+      if (result) setSelectedThreadMentions([]);
+    }).finally(() => {
+      if (isCurrent()) requestAnimationFrame(() => { if (isCurrent()) threadComposer.current?.focus(); });
+    });
   };
   const codeDraft = codeDraftMode || draft.startsWith('```');
   const uploadPastedImageFile = (image: File, threadRootId?: string) => {
@@ -2317,7 +2357,7 @@ function Conversation({
       && selection?.start === 0
       && selection.end === 0
     ) {
-      const latestOwnText = [...messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
+      const latestOwnText = [...messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending && (!message.delivery || message.delivery === 'accepted') && !message.pendingEdit);
       if (latestOwnText) {
         event.preventDefault();
         startEdit(latestOwnText);
@@ -2658,7 +2698,7 @@ function Conversation({
       && event.currentTarget.selectionStart === 0
       && event.currentTarget.selectionEnd === 0
     ) {
-      const latestOwnText = activeThread && [...activeThread.messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending);
+      const latestOwnText = activeThread && [...activeThread.messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending && (!message.delivery || message.delivery === 'accepted') && !message.pendingEdit);
       if (latestOwnText) {
         event.preventDefault();
         startThreadEdit(latestOwnText);
@@ -2752,7 +2792,7 @@ function Conversation({
           </div>
           {visibleMessages.length ? (
             visibleMessages.map((message) => (
-              <Fragment key={message.id}>
+              <Fragment key={message.transactionId ?? message.id}>
                 {daySeparators.get(message.id) ? (
                   <div
                     className="unread-divider day-separator"
@@ -2780,6 +2820,8 @@ function Conversation({
                   onStartThread={onStartThread}
                   onEdit={startEdit}
                   onDelete={onDeleteMessage}
+                  onRetryMessage={onRetryMessage}
+                  onCancelMessage={onCancelMessage}
                   onPin={onTogglePin}
                   canPin={Boolean(room.canManage)}
                   onReact={onReact}
@@ -2832,7 +2874,7 @@ function Conversation({
             </div>
             {activeThread.messages.map((message) => (
               <TimelineMessage
-                key={message.id}
+                key={message.transactionId ?? message.id}
                 message={message}
                 dataSaver={dataSaver}
                 autoplayMedia={autoplayMedia}
@@ -2841,6 +2883,8 @@ function Conversation({
                 onStartThread={onStartThread}
                 onEdit={startThreadEdit}
                 onDelete={onDeleteMessage}
+                  onRetryMessage={onRetryMessage}
+                  onCancelMessage={onCancelMessage}
                 onPin={onTogglePin}
                 canPin={Boolean(room?.canManage)}
                 onReact={onReact}
@@ -3045,7 +3089,6 @@ function Conversation({
             }}
             onFocus={() => setComposerFocused(true)}
             onBlur={() => setComposerFocused(false)}
-            disabled={sending || sendingInlineEmojis}
           />
         </label>
         <div className="composer__actions">
@@ -3077,7 +3120,7 @@ function Conversation({
             <Smile size={19} />
           </IconButton>
           <IconButton label="Send a nudge" onClick={() => onSendNudge?.()}><BellRing size={18} /></IconButton>
-          <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => setCodeLanguage(event.target.value)}>
+          <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => { setCodeLanguage(event.target.value); onDraftChange(draft); }}>
             <option value="text">Text</option><option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="yaml">YAML</option>
           </select>
           <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
@@ -3538,7 +3581,7 @@ function DetailsPanel({
             <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-moments" className="drawer-tab-panel drawer-moments">
               <span className="eyebrow">Recent shared media</span>
               {mediaMessages.length ? mediaMessages.map((message) => (
-                <div className="drawer-moment" key={message.id}>
+                <div className="drawer-moment" key={message.transactionId ?? message.id}>
                   <MomentPreview message={message} />
                   <span><strong>{message.body}</strong><small>shared by {message.senderName}</small></span>
                 </div>
@@ -3639,6 +3682,8 @@ export function Workspace({
   onSendReply,
   onEditMessage,
   onRedactMessage,
+  onRetryMessage,
+  onCancelMessage,
   onTogglePinnedMessage,
   onToggleReaction,
   onSendTyping,
@@ -3727,6 +3772,33 @@ export function Workspace({
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
+  const draftRevisions = useRef<Record<string, number>>({});
+  const threadDraftRevisions = useRef<Record<string, number>>({});
+  const [draftRevision, setDraftRevision] = useState(0);
+  const [threadDraftRevision, setThreadDraftRevision] = useState(0);
+  const mainSendInFlight = useRef(false);
+  const threadSendInFlight = useRef(false);
+  const composerNavigation = useRef(0);
+  const bumpDraft = useCallback((roomId?: string) => {
+    if (roomId) {
+      draftRevisions.current[roomId] = (draftRevisions.current[roomId] ?? 0) + 1;
+      setDraftRevision((current) => current + 1);
+    }
+  }, []);
+  const bumpThreadDraft = useCallback((rootId?: string) => {
+    if (rootId) {
+      threadDraftRevisions.current[rootId] = (threadDraftRevisions.current[rootId] ?? 0) + 1;
+      setThreadDraftRevision((current) => current + 1);
+    }
+  }, []);
+  const changeDraft = useCallback((roomId: string, value: string) => {
+    bumpDraft(roomId);
+    setDrafts((current) => ({ ...current, [roomId]: value }));
+  }, [bumpDraft]);
+  const changeThreadDraft = useCallback((rootId: string, value: string) => {
+    bumpThreadDraft(rootId);
+    setThreadDrafts((current) => ({ ...current, [rootId]: value }));
+  }, [bumpThreadDraft]);
   const [demoMessages, setDemoMessages] = useState(workspace.messagesByRoom);
   const [demoThreadMessages, setDemoThreadMessages] = useState<Record<string, MessageSummary[]>>({});
   const [sending, setSending] = useState(false);
@@ -3856,6 +3928,7 @@ export function Workspace({
     : undefined;
   const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
   const threadDraft = activeThreadRootId ? threadDrafts[activeThreadRootId] ?? '' : '';
+  useLayoutEffect(() => { composerNavigation.current += 1; }, [effectiveRoomId, activeThreadRootId]);
 
   const loadEarlier = useCallback((roomId: string): Promise<void> => {
     const existing = historyRequests.current.get(roomId);
@@ -4136,36 +4209,42 @@ export function Workspace({
   };
 
   const handleStartReply = useCallback((message: MessageSummary) => {
+    bumpDraft(effectiveRoomId);
+    bumpThreadDraft(activeThreadRootId);
     setReplyTarget(message);
     setReplyThreadRootId(message.threadRootId ?? (message.isThreadRoot ? message.id : undefined));
     setEditingMessage(undefined);
     setEditingThreadMessage(undefined);
-  }, []);
+  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, effectiveRoomId]);
 
   const handleStartThread = useCallback((message: MessageSummary) => {
+    bumpDraft(effectiveRoomId);
+    bumpThreadDraft(activeThreadRootId);
     setReplyTarget(message);
     setReplyThreadRootId(message.threadRootId ?? message.id);
     setEditingMessage(undefined);
     setEditingThreadMessage(undefined);
-  }, []);
+  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, effectiveRoomId]);
 
   const handleStartEdit = useCallback((message: MessageSummary) => {
     if (!effectiveRoomId) return;
+    bumpThreadDraft(activeThreadRootId);
     setEditingMessage({ message, originalDraft: drafts[effectiveRoomId] ?? '' });
     setEditingThreadMessage(undefined);
     setReplyTarget(undefined);
     setReplyThreadRootId(undefined);
-    setDrafts((current) => ({ ...current, [effectiveRoomId]: message.body }));
-  }, [drafts, effectiveRoomId]);
+    changeDraft(effectiveRoomId, message.body);
+  }, [activeThreadRootId, bumpThreadDraft, changeDraft, drafts, effectiveRoomId]);
 
   const handleStartThreadEdit = useCallback((message: MessageSummary) => {
     if (!activeThreadRootId) return;
+    bumpDraft(effectiveRoomId);
     setEditingThreadMessage({ message, originalDraft: threadDrafts[activeThreadRootId] ?? '' });
     setEditingMessage(undefined);
     setReplyTarget(undefined);
     setReplyThreadRootId(undefined);
-    setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: message.body }));
-  }, [activeThreadRootId, threadDrafts]);
+    changeThreadDraft(activeThreadRootId, message.body);
+  }, [activeThreadRootId, bumpDraft, changeThreadDraft, effectiveRoomId, threadDrafts]);
 
   const handleTogglePin = useCallback((message: MessageSummary) => {
     if (workspace.mode === 'matrix') {
@@ -4196,15 +4275,30 @@ export function Workspace({
     draftOverride?: string,
     mentions: ComposerMention[] = [],
     inlineEmojis: ComposerInlineEmoji[] = [],
-  ): Promise<boolean> => {
-    if (!effectiveRoomId || !draft.trim() || sending) return false;
+  ): Promise<ComposerSubmitResult> => {
+    if (!effectiveRoomId || !draft.trim() || mainSendInFlight.current) return false;
+    mainSendInFlight.current = true;
+    const roomId = effectiveRoomId;
+    const revision = draftRevisions.current[roomId] ?? 0;
+    const navigation = composerNavigation.current;
+    const unchanged = () => (draftRevisions.current[roomId] ?? 0) === revision;
+    const current = () => unchanged() && composerNavigation.current === navigation;
+    const clearSubmittedDraft = () => setDrafts((draftValues) => unchanged() ? { ...draftValues, [roomId]: '' } : draftValues);
+    const clearSubmittedContext = () => {
+      if (!current()) return;
+      setReplyTarget(undefined);
+      setReplyThreadRootId(undefined);
+      setEditingMessage(undefined);
+    };
     const body = (draftOverride ?? draft).trim();
-    setDrafts((current) => ({ ...current, [effectiveRoomId]: '' }));
     setSending(true);
     setNotice(undefined);
 
     let sentMessage = false;
     try {
+      if (workspace.mode === 'matrix' && (editingMessage ? !onEditMessage : replyTarget ? !onSendReply : !onSendMessage)) {
+        throw new Error('This message action is unavailable.');
+      }
       if (editingMessage) {
         if (workspace.mode === 'demo') {
           setDemoMessages((current) => ({
@@ -4253,26 +4347,44 @@ export function Workspace({
         else await onSendMessage(effectiveRoomId, body);
         sentMessage = true;
       }
-      setReplyTarget(undefined);
-      setReplyThreadRootId(undefined);
-      setEditingMessage(undefined);
-      if (preferences.sendTypingNotifications) void onSendTyping?.(effectiveRoomId, false);
-      return sentMessage;
-    } catch {
-      setDrafts((current) => ({ ...current, [effectiveRoomId]: body }));
-      setNotice('That message did not send. Your draft has been restored.');
+      clearSubmittedDraft();
+      clearSubmittedContext();
+      if (unchanged() && preferences.sendTypingNotifications) void onSendTyping?.(roomId, false);
+      return unchanged() ? sentMessage ? 'sent' : 'edited' : false;
+    } catch (error) {
+      const retained = error instanceof MessageSendError && error.localEchoRetained;
+      if (retained) {
+        clearSubmittedDraft();
+        clearSubmittedContext();
+      }
+      if (composerNavigation.current === navigation) {
+        setNotice(retained
+          ? 'That message did not send. Use Retry on the failed message. Any newer draft stays here.'
+          : 'That message did not send. Your draft is still here.');
+      }
+      if (retained && unchanged()) return 'retained';
       return false;
     } finally {
+      mainSendInFlight.current = false;
       setSending(false);
     }
   };
 
-  const submitThreadMessage = async (mentions: ComposerMention[] = []): Promise<boolean> => {
-    if (!effectiveRoomId || !activeThreadRoot || !threadDraft.trim() || threadSending) return false;
+  const submitThreadMessage = async (mentions: ComposerMention[] = []): Promise<ComposerSubmitResult> => {
+    if (!effectiveRoomId || !activeThreadRoot || !threadDraft.trim() || threadSendInFlight.current) return false;
+    threadSendInFlight.current = true;
+    const rootId = activeThreadRoot.id;
+    const revision = threadDraftRevisions.current[rootId] ?? 0;
+    const navigation = composerNavigation.current;
+    const unchanged = () => (threadDraftRevisions.current[rootId] ?? 0) === revision;
+    const current = () => unchanged() && composerNavigation.current === navigation;
+    const clearSubmittedDraft = () => setThreadDrafts((draftValues) => unchanged() ? { ...draftValues, [rootId]: '' } : draftValues);
     const body = threadDraft.trim();
-    setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: '' }));
     setThreadSending(true);
     try {
+      if (workspace.mode === 'matrix' && (editingThreadMessage ? !onEditMessage : !onSendReply)) {
+        throw new Error('This thread action is unavailable.');
+      }
       if (editingThreadMessage) {
         if (workspace.mode === 'demo') {
           setDemoThreadMessages((current) => ({
@@ -4311,13 +4423,24 @@ export function Workspace({
           threadRootId: activeThreadRoot.id,
         }, mentions);
       }
-      setEditingThreadMessage(undefined);
-      return true;
-    } catch {
-      setThreadDrafts((current) => ({ ...current, [activeThreadRoot.id]: body }));
-      setNotice('That thread reply did not send. Your draft has been restored.');
+      clearSubmittedDraft();
+      if (current()) setEditingThreadMessage(undefined);
+      return unchanged() ? editingThreadMessage ? 'edited' : 'sent' : false;
+    } catch (error) {
+      const retained = error instanceof MessageSendError && error.localEchoRetained;
+      if (retained) {
+        clearSubmittedDraft();
+        if (current()) setEditingThreadMessage(undefined);
+      }
+      if (composerNavigation.current === navigation) {
+        setNotice(retained
+          ? 'That thread reply did not send. Use Retry on the failed message. Any newer draft stays here.'
+          : 'That thread reply did not send. Your draft is still here.');
+      }
+      if (retained && unchanged()) return 'retained';
       return false;
     } finally {
+      threadSendInFlight.current = false;
       setThreadSending(false);
     }
   };
@@ -4458,6 +4581,8 @@ export function Workspace({
             threadCollapsed={threadCollapsed}
             draft={draft}
             threadDraft={threadDraft}
+            draftRevision={draftRevision}
+            threadDraftRevision={threadDraftRevision}
             sending={sending}
             threadSending={threadSending}
             notice={notice}
@@ -4469,7 +4594,7 @@ export function Workspace({
             editingThreadMessage={editingThreadMessage?.message}
             onDraftChange={(nextDraft) => {
               if (!effectiveRoomId) return;
-              setDrafts((current) => ({ ...current, [effectiveRoomId]: nextDraft }));
+              changeDraft(effectiveRoomId, nextDraft);
               if (workspace.mode === 'matrix' && preferences.sendTypingNotifications) {
                 const now = Date.now();
                 if (nextDraft && now - lastTypingSentAt.current > 4000) {
@@ -4488,7 +4613,7 @@ export function Workspace({
             }}
             onThreadDraftChange={(nextDraft) => {
               if (!activeThreadRootId) return;
-              setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: nextDraft }));
+              changeThreadDraft(activeThreadRootId, nextDraft);
             }}
             onSubmit={submitMessage}
             onThreadSubmit={submitThreadMessage}
@@ -4512,17 +4637,21 @@ export function Workspace({
             onStartThreadEdit={handleStartThreadEdit}
             onTogglePin={handleTogglePin}
             onDeleteMessage={handleDeleteMessage}
+            onRetryMessage={onRetryMessage}
+            onCancelMessage={onCancelMessage}
             onCancelContext={() => {
+              bumpDraft(effectiveRoomId);
               if (editingMessage && effectiveRoomId) {
-                setDrafts((current) => ({ ...current, [effectiveRoomId]: editingMessage.originalDraft }));
+                changeDraft(effectiveRoomId, editingMessage.originalDraft);
               }
               setReplyTarget(undefined);
               setReplyThreadRootId(undefined);
               setEditingMessage(undefined);
             }}
             onCancelThreadEdit={() => {
+              bumpThreadDraft(activeThreadRootId);
               if (editingThreadMessage && activeThreadRootId) {
-                setThreadDrafts((current) => ({ ...current, [activeThreadRootId]: editingThreadMessage.originalDraft }));
+                changeThreadDraft(activeThreadRootId, editingThreadMessage.originalDraft);
               }
               setEditingThreadMessage(undefined);
             }}

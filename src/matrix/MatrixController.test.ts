@@ -1,19 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { MatrixClient } from 'matrix-js-sdk';
+import type { MatrixClient, Room } from 'matrix-js-sdk';
+import { MatrixEvent } from 'matrix-js-sdk/lib/models/event.js';
+import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
 import { defaultProfilePersonalization } from '../settings/profilePersonalization';
 import { MatrixController } from './MatrixController';
+import { MessageSendError } from './messageDelivery';
 import type { AimtrixPlatform } from '../platform/platform';
 
 type ControllerInternals = {
   client?: MatrixClient;
   sdk?: typeof import('matrix-js-sdk');
-  snapshotCache: { roomVersions: Map<string, number> };
+  snapshotCache: { roomVersions: Map<string, number>; localEvents: Map<string, Map<string, MatrixEvent>> };
   connection: 'connecting' | 'online' | 'catching-up' | 'offline';
   attachThreadListeners: (room: unknown) => void;
   notifyForMessage: (event: unknown, room: unknown) => void;
   playMessageTone: () => void;
   handleDecrypted: (event: unknown) => void;
+  handleTimeline: (event: MatrixEvent, room: Room, toStart: boolean, removed: boolean) => void;
   migrateLegacyRootSpaceOrder: () => void;
   scheduleWorkspacePublish: () => void;
 };
@@ -24,6 +28,7 @@ function inject(
   sdk: unknown = {},
 ) {
   const internals = controller as unknown as ControllerInternals;
+  client.makeTxnId ??= () => 'synthetic-transaction';
   internals.client = client as MatrixClient;
   internals.sdk = sdk as typeof import('matrix-js-sdk');
 }
@@ -66,11 +71,230 @@ function pushPlatform(subscription?: {
 }
 
 describe('MatrixController protocol integration', () => {
+  const deliverySdk = {
+    EventType: { RoomMessage: 'm.room.message' },
+    MsgType: { Text: 'm.text' },
+    RelationType: { Replace: 'm.replace' },
+  };
+  function deliveryFixture(encrypted = false) {
+    const events = new Map<string, MatrixEvent>();
+    const transactions = new Map<string, MatrixEvent>();
+    const room = {
+      roomId: '!room:test',
+      hasEncryptionStateEvent: () => encrypted,
+      getEventForTxnId: (txn: string) => transactions.get(txn),
+      findEventById: (id: string) => events.get(id),
+      getPendingEvents: () => { throw new Error('Chronological rooms do not have a detached pending list.'); },
+    } as unknown as Room;
+    const client = {
+      getRoom: vi.fn().mockReturnValue(room),
+      getSafeUserId: () => '@self:test',
+      getCrypto: vi.fn().mockReturnValue({}),
+      makeTxnId: vi.fn().mockReturnValue('delivery-transaction'),
+      sendMessage: vi.fn().mockResolvedValue({ event_id: '$accepted:test' }),
+      sendEvent: vi.fn().mockResolvedValue({ event_id: '$accepted:test' }),
+      resendEvent: vi.fn().mockResolvedValue({ event_id: '$accepted:test' }),
+      cancelPendingEvent: vi.fn(),
+      stopClient: vi.fn(),
+    };
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, client as unknown as Partial<MatrixClient>, deliverySdk);
+    const publish = vi.spyOn(controller as unknown as ControllerInternals, 'scheduleWorkspacePublish').mockImplementation(() => undefined);
+    const add = (status: EventStatus | null = EventStatus.NOT_SENT, sender = '@self:test', txn = 'delivery-transaction') => {
+      const event = new MatrixEvent({ event_id: '~local:test', room_id: room.roomId, sender, type: encrypted ? 'm.room.encrypted' : 'm.room.message', content: encrypted
+        ? { algorithm: 'm.megolm.v1.aes-sha2', ciphertext: 'synthetic-ciphertext' }
+        : { msgtype: 'm.text', body: 'Synthetic message' } });
+      event.setTxnId(txn); event.setStatus(status);
+      events.set(event.getId()!, event); transactions.set(txn, event);
+      return event;
+    };
+    return { controller, room, client, events, transactions, add, publish };
+  }
+
+  it.each(['message', 'reply', 'edit'] as const)('tracks a retained %s local echo when a non-Matrix error rejects the initial send', async (kind) => {
+    const fixture = deliveryFixture();
+    const reject = () => { fixture.add(); return Promise.reject(new Error('Synthetic error without an event property')); };
+    fixture.client.sendMessage.mockImplementation(reject);
+    fixture.client.sendEvent.mockImplementation(reject);
+    const pending = kind === 'message' ? fixture.controller.sendMessage('!room:test', 'Synthetic draft')
+      : kind === 'reply' ? fixture.controller.sendReply('!room:test', 'Synthetic draft', { id: '$root:test', senderId: '@peer:test', body: 'Synthetic root' })
+        : fixture.controller.editMessage('!room:test', '$original:test', 'Synthetic draft');
+    await expect(pending).rejects.toMatchObject({ name: 'MessageSendError', localEchoRetained: true });
+    expect((kind === 'message' ? fixture.client.sendMessage : fixture.client.sendEvent).mock.calls[0].at(-1)).toBe('delivery-transaction');
+  });
+
+  it('preserves the original draft if preparation fails without a local echo', async () => {
+    const fixture = deliveryFixture();
+    fixture.client.sendMessage.mockRejectedValue(new Error('Synthetic preparation failure'));
+    await expect(fixture.controller.sendMessage('!room:test', 'Synthetic draft')).rejects.toEqual(new MessageSendError(false));
+  });
+
+  it.each(['message', 'reply', 'edit'] as const)('refuses an encrypted %s without crypto even when no inline emoji is used', async (kind) => {
+    const fixture = deliveryFixture(true);
+    fixture.client.getCrypto.mockReturnValue(undefined);
+    const pending = kind === 'message' ? fixture.controller.sendMessage('!room:test', 'Synthetic draft')
+      : kind === 'reply' ? fixture.controller.sendReply('!room:test', 'Synthetic draft', { id: '$root:test', senderId: '@peer:test', body: 'Synthetic root' })
+        : fixture.controller.editMessage('!room:test', '$original:test', 'Synthetic draft');
+    await expect(pending).rejects.toMatchObject({ localEchoRetained: false });
+    expect(fixture.client.sendMessage).not.toHaveBeenCalled(); expect(fixture.client.sendEvent).not.toHaveBeenCalled();
+  });
+
+  it('recognizes remote acceptance before an initial request rejection after the transaction index is removed', async () => {
+    const fixture = deliveryFixture();
+    let reject!: (error: Error) => void;
+    fixture.client.sendMessage.mockImplementation(() => { fixture.add(EventStatus.SENDING); return new Promise((_, fail) => { reject = fail; }); });
+    const sending = fixture.controller.sendMessage('!room:test', 'Synthetic draft');
+    await vi.waitFor(() => expect(fixture.client.sendMessage).toHaveBeenCalled());
+    const event = fixture.transactions.get('delivery-transaction')!;
+    event.handleRemoteEcho({ ...event.event, event_id: '$accepted:test' });
+    fixture.transactions.clear();
+    reject(new Error('Synthetic lost response'));
+    await expect(sending).resolves.toBeUndefined();
+    expect(event.status).toBeNull();
+  });
+
+  it('preserves the original thread context of a replacement event', async () => {
+    const fixture = deliveryFixture();
+    const original = fixture.add(null);
+    original.setThreadId('$thread-root:test');
+    await fixture.controller.editMessage('!room:test', original.getId()!, 'Synthetic correction');
+    expect(fixture.client.sendEvent).toHaveBeenCalledWith('!room:test', '$thread-root:test', 'm.room.message', expect.objectContaining({
+      'm.relates_to': { rel_type: 'm.replace', event_id: original.getId() },
+    }), 'delivery-transaction');
+  });
+
+  it('retries the same encrypted SDK event and transaction while rejecting duplicate retries', async () => {
+    const fixture = deliveryFixture(true);
+    const event = fixture.add();
+    const content = event.getWireContent();
+    let finish!: () => void;
+    fixture.client.resendEvent.mockImplementation(() => new Promise((resolve) => { finish = () => resolve({ event_id: '$accepted:test' }); }));
+    const pending = fixture.controller.retryMessage('!room:test', event.getId()!);
+    await expect(fixture.controller.retryMessage('!room:test', event.getId()!)).rejects.toThrow('already being retried');
+    await expect(fixture.controller.cancelMessage('!room:test', event.getId()!)).rejects.toThrow('being retried');
+    expect(fixture.client.resendEvent).toHaveBeenCalledExactlyOnceWith(event, fixture.room);
+    finish(); await pending;
+    expect(event.getTxnId()).toBe('delivery-transaction'); expect(event.getWireContent()).toBe(content);
+    expect(fixture.client.sendEvent).not.toHaveBeenCalled(); expect(fixture.client.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('does not report a failed retry when the remote echo arrived before a lost response', async () => {
+    const fixture = deliveryFixture(true); const event = fixture.add();
+    fixture.client.resendEvent.mockImplementation(async () => { event.handleRemoteEcho({ ...event.event, event_id: '$accepted:test' }); throw new Error('Synthetic lost response'); });
+    await expect(fixture.controller.retryMessage('!room:test', event.getId()!)).resolves.toBeUndefined();
+  });
+
+  it('keeps a thread local echo recoverable when the SDK omits it from every timeline', async () => {
+    const fixture = deliveryFixture();
+    let event!: MatrixEvent;
+    fixture.client.sendEvent.mockImplementation(() => {
+      event = fixture.add();
+      event.setThreadId('$thread-root:test');
+      fixture.events.clear();
+      return Promise.reject(new Error('Synthetic thread rejection'));
+    });
+    await expect(fixture.controller.sendReply('!room:test', 'Synthetic reply', {
+      id: '$thread-root:test', threadRootId: '$thread-root:test', senderId: '@peer:test', body: 'Synthetic root',
+    })).rejects.toMatchObject({ localEchoRetained: true });
+    const cache = (fixture.controller as unknown as ControllerInternals).snapshotCache.localEvents;
+    expect(cache.get('!room:test')?.get('delivery-transaction')).toBe(event);
+    expect(fixture.room.findEventById(event.getId()!)).toBeUndefined();
+    fixture.client.resendEvent.mockRejectedValue(new Error('Synthetic retry rejection'));
+    await expect(fixture.controller.retryMessage('!room:test', event.getId()!)).rejects.toThrow('Retry could not be confirmed');
+    expect(fixture.client.resendEvent).toHaveBeenCalledExactlyOnceWith(event, fixture.room);
+    fixture.client.cancelPendingEvent.mockImplementation(() => { event.setStatus(EventStatus.CANCELLED); });
+    await fixture.controller.cancelMessage('!room:test', event.getId()!);
+    expect(cache.size).toBe(0);
+    expect(event.status).toBe(EventStatus.CANCELLED);
+  });
+
+  it('removes supplemental echoes on remote acceptance and clears them on shutdown', async () => {
+    const fixture = deliveryFixture();
+    let event!: MatrixEvent;
+    fixture.client.sendMessage.mockImplementation(() => {
+      event = fixture.add();
+      fixture.events.clear();
+      return Promise.reject(new Error('Synthetic rejection'));
+    });
+    await expect(fixture.controller.sendMessage('!room:test', 'Synthetic draft')).rejects.toMatchObject({ localEchoRetained: true });
+    const cache = (fixture.controller as unknown as ControllerInternals).snapshotCache.localEvents;
+    fixture.client.resendEvent.mockImplementation(async () => {
+      event.handleRemoteEcho({ ...event.event, event_id: '$accepted:test' });
+      fixture.events.set(event.getId()!, event);
+      return { event_id: '$accepted:test' };
+    });
+    await fixture.controller.retryMessage('!room:test', event.getId()!);
+    expect(cache.size).toBe(0);
+    await expect(fixture.controller.sendMessage('!room:test', 'Another synthetic draft')).rejects.toMatchObject({ localEchoRetained: true });
+    expect(cache.size).toBe(1);
+    (fixture.controller as unknown as ControllerInternals).sdk = undefined;
+    fixture.controller.shutdown();
+    expect(cache.size).toBe(0);
+  });
+
+  it('keeps an accepted first thread reply until an SDK timeline takes ownership', async () => {
+    const fixture = deliveryFixture();
+    let event!: MatrixEvent;
+    fixture.client.sendEvent.mockImplementation(() => {
+      event = fixture.add();
+      event.setThreadId('$thread-root:test');
+      fixture.events.clear();
+      return Promise.reject(new Error('Synthetic first thread rejection'));
+    });
+    await expect(fixture.controller.sendReply('!room:test', 'Synthetic first reply', {
+      id: '$thread-root:test', threadRootId: '$thread-root:test', senderId: '@peer:test', body: 'Synthetic root',
+    })).rejects.toMatchObject({ localEchoRetained: true });
+    fixture.client.resendEvent.mockImplementation(async () => {
+      event.handleRemoteEcho({ ...event.event, event_id: '$accepted-thread:test' });
+      fixture.transactions.clear();
+      return { event_id: '$accepted-thread:test' };
+    });
+    await fixture.controller.retryMessage('!room:test', event.getId()!);
+    const internals = fixture.controller as unknown as ControllerInternals;
+    const cache = internals.snapshotCache.localEvents;
+    expect(event.status).toBeNull();
+    expect(fixture.room.findEventById(event.getId()!)).toBeUndefined();
+    expect(cache.get('!room:test')?.get('delivery-transaction')).toBe(event);
+    fixture.events.set(event.getId()!, event);
+    internals.handleTimeline(event, fixture.room, false, false);
+    expect(cache.size).toBe(0);
+  });
+
+  it.each([EventStatus.QUEUED, EventStatus.ENCRYPTING, EventStatus.SENDING, EventStatus.SENT, EventStatus.CANCELLED, null])('does not retry or cancel event status %s', async (status) => {
+    const fixture = deliveryFixture(); const event = fixture.add(status);
+    await expect(fixture.controller.retryMessage('!room:test', event.getId()!)).rejects.toThrow('no longer available');
+    await expect(fixture.controller.cancelMessage('!room:test', event.getId()!)).rejects.toThrow('no longer available');
+    expect(fixture.client.resendEvent).not.toHaveBeenCalled(); expect(fixture.client.cancelPendingEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects another sender or a missing transaction, and cancels only the original failed SDK event', async () => {
+    const fixture = deliveryFixture(true); const peerEvent = fixture.add(EventStatus.NOT_SENT, '@peer:test');
+    await expect(fixture.controller.retryMessage('!room:test', peerEvent.getId()!)).rejects.toThrow('no longer available');
+    const noTransaction = fixture.add(EventStatus.NOT_SENT, '@self:test', '');
+    await expect(fixture.controller.cancelMessage('!room:test', noTransaction.getId()!)).rejects.toThrow('no longer available');
+    const own = fixture.add(); fixture.client.getCrypto.mockReturnValue(undefined);
+    await expect(fixture.controller.retryMessage('!room:test', own.getId()!)).rejects.toMatchObject({ localEchoRetained: false });
+    await fixture.controller.cancelMessage('!room:test', own.getId()!);
+    expect(fixture.client.cancelPendingEvent).toHaveBeenCalledExactlyOnceWith(own);
+  });
+
+  it('does not publish an old retry completion into a replacement session', async () => {
+    const fixture = deliveryFixture(); const event = fixture.add();
+    let finish!: () => void;
+    fixture.client.resendEvent.mockImplementation(() => new Promise((resolve) => { finish = () => resolve({ event_id: '$accepted:test' }); }));
+    const pending = fixture.controller.retryMessage('!room:test', event.getId()!);
+    (fixture.controller as unknown as ControllerInternals).sdk = undefined;
+    fixture.controller.shutdown();
+    inject(fixture.controller, { getRoom: vi.fn().mockReturnValue(fixture.room) }, deliverySdk);
+    finish(); await expect(pending).rejects.toThrow('Retry could not be confirmed');
+    expect(fixture.publish).not.toHaveBeenCalled();
+  });
+
   it('sends intentional mentions with portable Matrix HTML and Unicode emoji', async () => {
     const sendMessage = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, {
-      getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+      getRoom: () => ({ roomId: '!room:test', hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined }),
       sendMessage,
     } as unknown as Partial<MatrixClient>, {
       MsgType: { Text: 'm.text' },
@@ -87,7 +311,7 @@ describe('MatrixController protocol integration', () => {
       format: 'org.matrix.custom.html',
       formatted_body: '<p><a href="https://matrix.to/#/%40mara%3Atest">@Mara</a> 👩🏽‍💻 ship it</p>',
       'm.mentions': { user_ids: ['@mara:test'] },
-    });
+    }, 'synthetic-transaction');
   });
 
   it('uploads selected custom emoji and sends one rich text event', async () => {
@@ -101,7 +325,7 @@ describe('MatrixController protocol integration', () => {
     try {
       const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
       inject(controller, {
-        getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+        getRoom: () => ({ roomId: '!room:test', hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined }),
         uploadContent,
         sendMessage,
       } as unknown as Partial<MatrixClient>, {
@@ -126,7 +350,7 @@ describe('MatrixController protocol integration', () => {
         body: 'ugh :bufo-wave:',
         format: 'org.matrix.custom.html',
         formatted_body: '<p>ugh <img data-mx-emoticon src="mxc://test/bufo" alt=":bufo-wave:" title=":bufo-wave:" height="32"></p>',
-      });
+      }, 'synthetic-transaction');
     } finally {
       vi.unstubAllGlobals();
     }
@@ -135,7 +359,7 @@ describe('MatrixController protocol integration', () => {
   it('keeps mention metadata inside standard Matrix replacement content', async () => {
     const sendEvent = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
-    inject(controller, { sendEvent }, {
+    inject(controller, { sendEvent, getRoom: () => ({ roomId: '!room:test', hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined, findEventById: () => undefined }) } as unknown as Partial<MatrixClient>, {
       EventType: { RoomMessage: 'm.room.message' },
       MsgType: { Text: 'm.text' },
       RelationType: { Replace: 'm.replace' },
@@ -155,7 +379,7 @@ describe('MatrixController protocol integration', () => {
         'm.mentions': { user_ids: ['@mara:test'] },
         formatted_body: expect.stringContaining('https://matrix.to/#/%40mara%3Atest'),
       }),
-    }));
+    }), 'synthetic-transaction');
   });
   it('ignores crypto-store decryptions that are not in a loaded room timeline', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
@@ -519,7 +743,7 @@ describe('MatrixController protocol integration', () => {
   it('sends thread replies through the Matrix SDK thread overload', async () => {
     const sendEvent = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
-    inject(controller, { sendEvent }, {
+    inject(controller, { sendEvent, getRoom: () => ({ roomId: '!room:test', hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined }) } as unknown as Partial<MatrixClient>, {
       EventType: { RoomMessage: 'm.room.message' },
       MsgType: { Text: 'm.text' },
     });
@@ -541,6 +765,7 @@ describe('MatrixController protocol integration', () => {
         formatted_body: expect.stringMatching(/^<mx-reply>.*<\/mx-reply><p>Absolutely, <a href="https:\/\/matrix\.to\/#\/%40mara%3Atest">@Mara<\/a>\.<\/p>$/),
         'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
       }),
+      'synthetic-transaction',
     );
   });
 

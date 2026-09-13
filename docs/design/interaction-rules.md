@@ -134,7 +134,7 @@ The composer labels its destination: “Message [room]” or “Reply in thread.
 
 Use Enter to send and Shift+Enter for a newline in the desktop shared composer, subject to existing supported user settings. Never send while an IME composition is active. Touch keyboards must retain an intentional newline path and a visible Send action; verify their actual event behavior on devices before claiming support. Temporary menu interaction preserves the draft and selection; closing a picker returns focus sensibly without unintentionally dismissing an already-open keyboard.
 
-Sending clears only the submitted draft version after its corresponding success. An older failed request must not overwrite text typed later. Draft storage, account isolation, reload restoration, logout cleanup, and storage failures are implementation requirements under #153; a reference field retaining text during local tab changes is not durable-draft evidence. Failed attachment items retain their individual retry/remove actions without blocking unrelated valid text where the chosen send contract allows it.
+Sending clears only the submitted draft version after its corresponding success, or transfers that version to a recoverable failed local event with Retry/Cancel. An older failed request must not overwrite text typed later. Draft storage, account isolation, reload restoration, logout cleanup, and storage failures are implementation requirements under #153; a reference field retaining text during local tab changes is not durable-draft evidence. Failed attachment items retain their individual retry/remove actions without blocking unrelated valid text where the chosen send contract allows it.
 
 ## Focus, menus, and feedback
 

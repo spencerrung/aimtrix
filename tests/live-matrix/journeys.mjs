@@ -1,4 +1,4 @@
-/* global localStorage, indexedDB, fetch, AbortSignal */
+/* global localStorage, indexedDB, fetch, AbortSignal, window, Event */
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -100,6 +100,105 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       // does not isolate persisted keys from possible peer key sharing.
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
+    });
+    await check('encrypted-retry-reconnect-and-cancel', async () => {
+      const marker = `Retry round trip ${randomBytes(12).toString('hex')}`;
+      const newer = 'Newer synthetic draft';
+      const composer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
+      const sendPattern = '**/rooms/*/send/m.room.encrypted/*';
+      let release;
+      const gate = new Promise((resolve) => { release = resolve; });
+      let intercepted = false;
+      const reject = async (route) => {
+        intercepted = true;
+        await gate;
+        await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic rejection' }) });
+      };
+      await alice.route(sendPattern, reject);
+      const wireStart = wire.length;
+      await composer.fill(marker);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      await until(() => intercepted, 'send-intercepted');
+      await composer.fill(newer);
+      release();
+      const failed = alice.locator('.timeline-message').filter({ hasText: marker });
+      await failed.getByRole('button', { name: 'Retry message', exact: true }).waitFor();
+      invariant(await composer.innerText() === newer, 'new-draft-preserved');
+      invariant(await failed.getByText('Sending…', { exact: true }).count() === 0, 'failed-not-sending');
+      await alice.unroute(sendPattern, reject);
+      await alice.context().setOffline(true);
+      await alice.evaluate(() => window.dispatchEvent(new Event('offline')));
+      await alice.context().setOffline(false);
+      await alice.evaluate(() => window.dispatchEvent(new Event('online')));
+      // Accept on Synapse, then lose the HTTP acknowledgement after the sync echo.
+      // The original transaction must still reconcile as one accepted message.
+      let acknowledgementLost = false;
+      const loseAcknowledgement = async (route) => {
+        const response = await route.fetch();
+        invariant(response.ok(), 'retry-server-acceptance');
+        await failed.getByText('Accepted by server', { exact: true }).waitFor();
+        await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic lost acknowledgement' }) });
+        acknowledgementLost = true;
+      };
+      await alice.route(sendPattern, loseAcknowledgement);
+      await failed.getByRole('button', { name: 'Retry message', exact: true }).click();
+      await bob.locator('.timeline-message').filter({ hasText: marker }).waitFor({ timeout: 45000 });
+      await until(() => acknowledgementLost, 'acknowledgement-lost');
+      await failed.getByText('Accepted by server', { exact: true }).waitFor();
+      invariant(await failed.count() === 1 && await bob.locator('.timeline-message').filter({ hasText: marker }).count() === 1, 'retry-single-echo');
+      const attempts = wire.slice(wireStart);
+      invariant(attempts.length === 2 && attempts[0].path === attempts[1].path && JSON.stringify(attempts[0].content) === JSON.stringify(attempts[1].content), 'retry-original-encrypted-transaction');
+      const serverEvents = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/messages?dir=b&limit=30`, { token: aliceSession.accessToken });
+      invariant(serverEvents.chunk.filter((event) => event.content?.ciphertext === attempts[0].content.ciphertext).length === 1, 'retry-single-server-event');
+      invariant(await composer.innerText() === newer, 'retry-preserves-new-draft');
+      await alice.unroute(sendPattern, loseAcknowledgement);
+      const cancelled = `Cancelled synthetic message ${randomBytes(8).toString('hex')}`;
+      await alice.route(sendPattern, reject);
+      await composer.fill(cancelled);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      const cancelledRow = alice.locator('.timeline-message').filter({ hasText: cancelled });
+      await cancelledRow.getByRole('button', { name: 'Cancel message', exact: true }).click();
+      await cancelledRow.waitFor({ state: 'hidden' });
+      await alice.unroute(sendPattern, reject);
+      invariant(await bob.locator('.timeline-message').filter({ hasText: cancelled }).count() === 0, 'cancel-stays-local');
+    });
+    await check('encrypted-thread-retry', async () => {
+      const root = alice.locator('.timeline-message').filter({ hasText: 'Retry round trip' }).first();
+      await root.getByRole('button', { name: 'Reply in thread', exact: true }).click();
+      const marker = `Synthetic thread retry ${randomBytes(10).toString('hex')}`;
+      const pattern = '**/rooms/*/send/m.room.encrypted/*';
+      const reject = (route) => route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic thread rejection' }) });
+      await alice.route(pattern, reject);
+      const start = wire.length;
+      await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      await root.locator('.thread-summary').click();
+      const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+      const failed = thread.locator('.timeline-message').filter({ hasText: marker });
+      await failed.getByRole('button', { name: 'Retry message', exact: true }).waitFor();
+      await alice.unroute(pattern, reject);
+      await failed.getByRole('button', { name: 'Retry message', exact: true }).click();
+      await failed.getByText('Accepted by server', { exact: true }).waitFor();
+      const bobRoot = bob.locator('.timeline-message').filter({ hasText: 'Retry round trip' }).first();
+      await bobRoot.locator('.thread-summary').click();
+      const received = bob.getByRole('complementary', { name: 'Thread', exact: true }).locator('.timeline-message').filter({ hasText: marker });
+      await received.waitFor({ timeout: 45000 });
+      invariant(await received.count() === 1 && await failed.count() === 1, 'single-thread-reply');
+      const attempts = wire.slice(start);
+      invariant(attempts.length === 2 && attempts[0].path === attempts[1].path && JSON.stringify(attempts[0].content) === JSON.stringify(attempts[1].content), 'thread-retry-same-ciphertext-transaction');
+      invariant(attempts[0].content['m.relates_to']?.rel_type === 'm.thread', 'standard-thread-relation');
+      const cancelled = 'Synthetic cancelled thread reply';
+      await alice.route(pattern, reject);
+      await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(cancelled);
+      await thread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
+      const cancelledRow = thread.locator('.timeline-message').filter({ hasText: cancelled });
+      await cancelledRow.getByRole('button', { name: 'Cancel message', exact: true }).click();
+      await cancelledRow.waitFor({ state: 'hidden' });
+      await root.locator('.thread-summary').getByText('1 reply', { exact: true }).waitFor();
+      await alice.unroute(pattern, reject);
+
+      await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
+      await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
     await check('authenticated-encrypted-media', async () => {
       metrics.attachmentInputCount = await alice.getByLabel('Choose attachment', { exact: true }).count();
