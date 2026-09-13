@@ -89,6 +89,9 @@ export async function createStack() {
       server_name: 'aimtrix.test', public_baseurl: `${origins.synapse}/`, report_stats: false,
       pid_file: '/data/homeserver.pid', signing_key_path: '/data/signing.key', media_store_path: '/data/media',
       database: { name: 'sqlite3', args: { database: '/data/homeserver.db' } },
+      // Reload journeys need a fresh initial snapshot, not replay of cached
+      // incremental sync responses from this same disposable device.
+      caches: { sync_response_cache_duration: '0s' },
       log_config: '/config/logging.json', enable_registration: false, registration_shared_secret: credentials.registration,
       macaroon_secret_key: secret(), form_secret: secret(), trusted_key_servers: [], federation_domain_whitelist: [],
       listeners: [{ port: 8008, type: 'http', tls: false, bind_addresses: ['0.0.0.0'], resources: [{ names: ['client'], compress: false }] }],

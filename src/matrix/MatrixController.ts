@@ -2517,6 +2517,7 @@ export class MatrixController {
   private readonly handleSync = (syncState: SyncState): void => {
     switch (syncState) {
       case 'PREPARED':
+        this.roomHistory.syncCompleted();
         this.migrateLegacyRootSpaceOrder();
         this.connection = 'online';
         if (!this.signOnTonePlayed) {
@@ -2526,6 +2527,7 @@ export class MatrixController {
         this.scheduleWorkspacePublish();
         break;
       case 'SYNCING':
+        this.roomHistory.syncCompleted();
         this.connection = 'online';
         if (!this.signOnTonePlayed) {
           this.signOnTonePlayed = true;

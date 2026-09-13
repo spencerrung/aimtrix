@@ -33,6 +33,7 @@ const cloneCursor = (cursor: Cursor): Cursor => ({ ...cursor });
 /** Controller-owned selections over SDK timelines. No independent clients or SDK listeners. */
 export class RoomHistory {
   private readonly navigation = new Map<string, Navigation>();
+  private preparedClients = new WeakSet<MatrixClient>();
   private activeRoomId?: string;
 
   public constructor(
@@ -45,6 +46,7 @@ export class RoomHistory {
     for (const entry of this.navigation.values()) entry.generation += 1;
     this.navigation.clear();
     this.views.clear();
+    this.preparedClients = new WeakSet();
     this.activeRoomId = undefined;
   }
 
@@ -272,8 +274,22 @@ export class RoomHistory {
     const entry = this.navigation.get(roomId);
     const view = this.views.get(roomId);
     if (!entry || !view || !this.current(entry) || view.state.loading) return;
+    // Unread positioning can run while the SDK is still assembling its first
+    // room timeline. Freeze only after that initial batch is complete.
+    if (!this.preparedClients.has(entry.client)) {
+      if (!entry.client.isInitialSyncComplete()) return;
+      this.preparedClients.add(entry.client);
+    }
     if (detached && view.state.mode === 'live') this.update(entry, { mode: 'history' });
     else if (!detached && view.state.mode === 'history' && !this.canRead(entry, entry.newer, 'forward')) this.liveSelection(entry);
+  }
+
+  /** PREPARED/SYNCING follows processing of a complete SDK sync response. */
+  public syncCompleted(): void {
+    const client = this.getClient();
+    if (!client || this.preparedClients.has(client)) return;
+    this.preparedClients.add(client);
+    for (const entry of this.navigation.values()) if (entry.client === client) this.refresh(entry.room);
   }
 
   /** Only the live selection follows sync. History keeps references to its own SDK events. */

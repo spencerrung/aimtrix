@@ -37,6 +37,7 @@ function fixture(events: MatrixEvent[] = Array.from({ length: 350 }, (_, index) 
     getUnfilteredTimelineSet: () => ({ getTimelineForEvent: (id: string) => timelines.find((timeline) => timeline.events.some((event) => event.getId() === id))?.sdk }),
   } as unknown as Room;
   const client = {
+    isInitialSyncComplete: vi.fn().mockReturnValue(true),
     getRoom: vi.fn((id: string) => id === room.roomId ? room : null),
     getEventTimeline: vi.fn(async () => live.sdk as EventTimeline | null),
     paginateEventTimeline: vi.fn(async () => false),
@@ -322,5 +323,23 @@ describe('RoomHistory', () => {
     await test.history.latest(test.room.roomId);
     reset.events.push(message(4)); test.history.refresh(test.room);
     expect(test.ids()).toEqual(['$message-3', '$message-4']);
+  });
+
+  it('does not freeze a partial initial sync during unread positioning, then permits detachment offline', async () => {
+    const test = fixture([message(1)]);
+    test.client.isInitialSyncComplete.mockReturnValue(false);
+    await test.history.open(test.room.roomId);
+    test.history.detach(test.room.roomId, true);
+    expect(test.state().mode).toBe('live');
+    test.live.events.push(...Array.from({ length: 29 }, (_, index) => message(index + 2)));
+    test.history.syncCompleted();
+    expect(test.ids()).toHaveLength(30);
+    expect(test.ids().at(-1)).toBe('$message-30');
+    // The SDK getter is false in RECONNECTING/ERROR even after its first sync.
+    test.history.detach(test.room.roomId, true);
+    expect(test.state().mode).toBe('history');
+    test.live.events.push(message(31)); test.history.refresh(test.room);
+    expect(test.ids()).toHaveLength(30);
+    expect(test.state().canLoadNewer).toBe(true);
   });
 });

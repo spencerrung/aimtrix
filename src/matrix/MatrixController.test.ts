@@ -302,7 +302,7 @@ describe('MatrixController protocol integration', () => {
       getMyMembership: () => 'join', getLiveTimeline: () => timeline,
       getUnfilteredTimelineSet: () => ({ getTimelineForEvent: () => timeline }),
     });
-    Object.assign(fixture.client, { decryptEventIfNeeded: vi.fn().mockResolvedValue(undefined) });
+    Object.assign(fixture.client, { decryptEventIfNeeded: vi.fn().mockResolvedValue(undefined), isInitialSyncComplete: () => true });
     const history = (fixture.controller as unknown as ControllerInternals).snapshotCache.history;
     await fixture.controller.openRoomHistory(fixture.room.roomId);
     expect(history.get(fixture.room.roomId)?.events[0].getId()).toBe('$history-50');
