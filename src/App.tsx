@@ -345,7 +345,8 @@ export default function App() {
       const url = new URL(window.location.href);
       if (route.roomId) url.searchParams.set('room', route.roomId);
       if (route.eventId) url.searchParams.set('event', route.eventId);
-      window.history.replaceState({}, '', `${url.pathname}${url.search}`);
+      else url.searchParams.delete('event');
+      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`);
     };
     const handlePushRoute = (event: MessageEvent) => {
       if (event.data?.type === 'AIMTRIX_PUSH_ROUTE') applyRoute(event.data);

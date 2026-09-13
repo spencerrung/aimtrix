@@ -29,6 +29,7 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 ### Messaging, media, rooms, and spaces
 
 - [x] Responsive full-viewport shell, dedicated DM scope, nested Matrix space navigation, drag/keyboard room and subspace organization, top-level space ordering, presence, aggregated unread/highlight counts, and authenticated avatars.
+- [x] One contextual thread/details/search surface, bounded desktop widths, shared mobile/browser Back, retained reading anchors and drafts, accessible More/member menus, and reduced-height composition. See [conversation shell](docs/conversation-shell.md); physical keyboard/native Back acceptance remains separate.
 - [x] Movable history bounded to 250 visible messages, older/newer navigation, old-event/reply context, stable reading anchors, truthful loading/retry/end states, and return to live. See [history navigation](docs/history-navigation.md); full search, old threads and receipt reconciliation retain their separate gates.
 - [x] Text, notices, emotes, replies, edits, redaction, reactions, pins, typing state, and read-receipt sending.
 - [x] Image/video/audio/file rendering and authenticated encrypted-attachment decryption.

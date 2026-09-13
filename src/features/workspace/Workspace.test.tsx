@@ -72,6 +72,7 @@ function renderWorkspace(
   overrides: {
     onInviteToRoom?: (roomId: string, userId: string) => Promise<void>;
     onPreferencesChange?: (preferences: UserPreferences) => void;
+    preferences?: UserPreferences;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     profilePersonalization?: ProfilePersonalization;
     pushRoute?: PushRoute;
@@ -104,6 +105,7 @@ function renderWorkspace(
     ) => Promise<void>;
     onSendSticker?: (roomId: string, sticker: { id: string; name: string; src: string }) => Promise<void>;
     onReorderRootSpaces?: (spaceIds: string[]) => Promise<void>;
+    onCancelUpload?: () => void;
     onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
     onLoadLinkPreview?: (url: string) => Promise<{ title?: string; description?: string; imageUrl?: string; siteName?: string } | undefined>;
     workspace?: typeof demoWorkspace;
@@ -116,7 +118,7 @@ function renderWorkspace(
       workspace={workspace}
       config={defaultRuntimeConfig}
       theme="aqua"
-      preferences={defaultUserPreferences}
+      preferences={overrides.preferences ?? defaultUserPreferences}
       profilePersonalization={overrides.profilePersonalization}
       onThemeChange={vi.fn()}
       onPreferencesChange={onPreferencesChange}
@@ -136,6 +138,7 @@ function renderWorkspace(
       onSendSticker={overrides.onSendSticker}
       onReorderRootSpaces={overrides.onReorderRootSpaces}
       onUploadAttachment={overrides.onUploadAttachment}
+      onCancelUpload={overrides.onCancelUpload}
       onLoadLinkPreview={overrides.onLoadLinkPreview}
       onSignOut={vi.fn()}
     />
@@ -151,6 +154,7 @@ function renderWorkspace(
 describe('Workspace demo', () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.stubGlobal('innerWidth', 1280);
   });
 
   afterEach(() => {
@@ -167,6 +171,45 @@ describe('Workspace demo', () => {
 
     expect(screen.getByText('A shiny new demo message')).toBeInTheDocument();
     expect(composer).toBeEmptyDOMElement();
+  });
+
+  it('keeps one contextual surface while preserving room and thread drafts, search, and details tabs', async () => {
+    const { container } = renderWorkspace();
+    const assertSinglePanel = () => expect(container.querySelectorAll('.context-panel > :not([hidden])')).toHaveLength(1);
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Synthetic room draft');
+    fireEvent.click(screen.getByRole('tab', { name: 'About' }));
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    assertSinglePanel();
+    expect(screen.queryByRole('complementary', { name: 'Buddy and room drawer' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Synthetic thread draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    assertSinglePanel();
+    expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), { target: { value: 'Encryption' } });
+    expect(screen.getByRole('region', { name: 'Messages' })).toHaveTextContent('carefully polishes');
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle room details' }));
+    assertSinglePanel();
+    expect(screen.getByRole('tab', { name: 'About' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    expect(screen.getByLabelText('Message thread')).toHaveValue('Synthetic thread draft');
+    expect(composer).toHaveTextContent('Synthetic room draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    expect(screen.getByPlaceholderText('Search loaded messages')).toHaveValue('Encryption');
+    fireEvent.click(screen.getByRole('button', { name: 'Close message search' }));
+    await waitFor(() => expect(container.querySelector('.context-panel')).not.toBeVisible());
+    expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
+    expect(composer).toHaveTextContent('Synthetic room draft');
+  });
+
+  it('respects a saved closed drawer and keeps the conversation visible when a desktop panel closes', async () => {
+    const { container } = renderWorkspace({ preferences: { ...defaultUserPreferences, detailsOpenByDefault: false } });
+    expect(container.querySelector('.context-panel')).not.toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle room details' }));
+    expect(screen.getByRole('complementary', { name: 'Buddy and room drawer' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Close room details' }));
+    await waitFor(() => expect(container.querySelector('.context-panel')).not.toBeVisible());
+    expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
   });
 
   it('selects a room member mention with arrows and Tab and sends standard mention metadata', () => {
@@ -684,6 +727,75 @@ describe('Workspace demo', () => {
     await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), expect.any(String)));
   });
 
+  it.each(['reply', 'edit'] as const)('clears another room’s %s context on browser Back while retaining this room’s draft', async (action) => {
+    const onSendMessage = vi.fn().mockResolvedValue(undefined);
+    const onSendReply = vi.fn().mockResolvedValue(undefined);
+    const onEditMessage = vi.fn().mockResolvedValue(undefined);
+    const { container } = renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage, onSendReply, onEditMessage });
+    setComposerText(screen.getByLabelText('Message Welcome Lounge'), 'Synthetic welcome draft');
+    fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
+    fireEvent.click(action === 'reply' ? screen.getAllByRole('button', { name: 'Reply' })[0] : screen.getByRole('button', { name: 'Edit message' }));
+    expect(container.querySelector('.composer-context')).not.toBeNull();
+    act(() => window.history.back());
+    await waitFor(() => expect(screen.getByLabelText('Message Welcome Lounge')).toBeInTheDocument());
+    expect(container.querySelector('.composer-context')).toBeNull();
+    expect(screen.getByLabelText('Message Welcome Lounge')).toHaveTextContent('Synthetic welcome draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledWith('welcome', 'Synthetic welcome draft'));
+    expect(onSendReply).not.toHaveBeenCalled();
+    expect(onEditMessage).not.toHaveBeenCalled();
+  });
+
+  it('reveals the main reply composer when Reply is selected from a tablet thread', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const { container } = renderWorkspace();
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    fireEvent.click(within(thread).getAllByRole('button', { name: 'Reply' })[0]);
+    await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
+    expect(container.querySelector('.composer-context')).toHaveTextContent('Replying to');
+    expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument();
+  });
+
+  it('keeps thread attachment feedback visible and retries the original room and root after navigation', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const pending = pendingSend();
+    const onUploadAttachment = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    const { container } = renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onUploadAttachment });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    const file = new File(['synthetic upload'], 'synthetic-thread.txt', { type: 'text/plain' });
+    fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [file] } });
+    expect(onUploadAttachment).toHaveBeenCalledWith('welcome', file, expect.any(Function), 'm2');
+    expect(container.querySelector('.conversation')).not.toBeVisible();
+    expect(within(thread).getByText('Encrypting synthetic-thread.txt…')).toBeVisible();
+    expect(within(thread).getByRole('button', { name: 'Cancel upload' })).toBeVisible();
+    act(() => onUploadAttachment.mock.calls[0][2](5, 10));
+    expect(within(thread).getByText('Uploading synthetic-thread.txt — 50%')).toBeVisible();
+    await act(async () => pending.reject(new Error('Synthetic upload failure')));
+    expect(within(thread).getByRole('button', { name: 'Retry synthetic-thread.txt' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
+    expect(screen.queryByRole('button', { name: 'Retry synthetic-thread.txt' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    fireEvent.click(within(screen.getByRole('complementary', { name: 'Thread' })).getByRole('button', { name: 'Retry synthetic-thread.txt' }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
+    expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', file, expect.any(Function), 'm2');
+  });
+
+  it('offers working upload cancellation from the visible tablet thread', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const pending = pendingSend();
+    const onUploadAttachment = vi.fn().mockReturnValue(pending.promise);
+    const onCancelUpload = vi.fn(() => pending.reject(new DOMException('Synthetic cancellation', 'AbortError')));
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onUploadAttachment, onCancelUpload });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const thread = screen.getByRole('complementary', { name: 'Thread' });
+    fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [new File(['synthetic'], 'synthetic-cancel.txt')] } });
+    fireEvent.click(within(thread).getByRole('button', { name: 'Cancel upload' }));
+    await waitFor(() => expect(onCancelUpload).toHaveBeenCalledOnce());
+  });
+
   it('shows compact read-position avatars on the last message each buddy read', () => {
     const { container } = renderWorkspace();
 
@@ -771,7 +883,7 @@ describe('Workspace demo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
 
-    expect(screen.queryByPlaceholderText('Search loaded messages')).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search loaded messages')).not.toBeVisible();
     expect(screen.getByRole('separator', { name: '2 unread messages below' })).toBeInTheDocument();
   });
 
@@ -1104,7 +1216,10 @@ describe('Workspace demo', () => {
     fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Submitted thread text' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close thread' }));
+    await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument());
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    // Let the route's own heading focus settle before testing an older request.
+    await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
     const focusedControl = screen.getByRole('button', { name: 'Close thread' });
     focusedControl.focus();
     await act(async () => pending.resolve());
@@ -1381,7 +1496,9 @@ describe('Workspace demo', () => {
     fireEvent.change(within(dialog).getByLabelText('Who can change the room background'), {
       target: { value: 'members' },
     });
-    expect(screen.getByLabelText('Role for PixelGhost')).toHaveValue('25');
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Close background decorator' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Actions for PixelGhost' }));
+    expect(screen.getByRole('menuitemradio', { name: 'Decorator' })).toHaveAttribute('aria-checked', 'true');
   });
 
   it('lets a space admin set an inherited backdrop and assign Decorators', async () => {
@@ -1554,7 +1671,7 @@ describe('Workspace demo', () => {
 });
 
 describe('Workspace history navigation', () => {
-  beforeEach(() => { localStorage.clear(); });
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal('innerWidth', 1280); });
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
   function historyWorkspace(mode: 'live' | 'history' | 'context' = 'history') {
@@ -1563,6 +1680,74 @@ describe('Workspace history navigation', () => {
     workspace.historyByRoom = { welcome: { mode, revision: 1, canLoadOlder: true, canLoadNewer: mode !== 'live' } };
     return workspace;
   }
+
+  it('does not mark incoming room messages read behind a tablet thread route', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const workspace = historyWorkspace('live');
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 0; room.timelineUnreadCount = 0; room.readUpToMessageId = 'm5';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    expect(screen.queryByRole('main', { name: /Welcome Lounge/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Thread' })).toBeVisible();
+    const updated = structuredClone(workspace);
+    updated.messagesByRoom.welcome.push({ ...updated.messagesByRoom.welcome[0], id: 'synthetic-hidden-arrival', body: 'Synthetic hidden arrival' });
+    updated.historyByRoom!.welcome.revision += 1;
+    rerenderWorkspace(updated);
+    fireEvent.scroll(container.querySelector('.timeline')!);
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Close thread' }));
+    await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(2));
+  });
+
+  it('does not mark the unseen live tail read while revealing an older tablet search result', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const workspace = historyWorkspace('live');
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 0; room.timelineUnreadCount = 0; room.readUpToMessageId = 'm5';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const pending = pendingSend();
+    const onOpenEventContext = vi.fn().mockReturnValue(pending.promise);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead, onOpenEventContext });
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    const search = screen.getByRole('complementary', { name: 'Search loaded messages' });
+    fireEvent.change(within(search).getByPlaceholderText('Search loaded messages'), { target: { value: 'The goal' } });
+    const updated = structuredClone(workspace);
+    updated.messagesByRoom.welcome.push({ ...updated.messagesByRoom.welcome[0], id: 'synthetic-search-hidden-arrival', body: 'Synthetic unseen search arrival' });
+    updated.historyByRoom!.welcome.revision++;
+    rerenderWorkspace(updated);
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(search).getByRole('button', { name: /The goal/ }));
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'm2'));
+    expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+    await act(async () => pending.resolve());
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a usable Back action and thread draft when a routed thread root leaves the loaded window', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const workspace = historyWorkspace('live');
+    const { rerenderWorkspace } = renderWorkspace({ workspace });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Synthetic retained thread draft' } });
+    const removed = structuredClone(workspace);
+    removed.messagesByRoom.welcome = removed.messagesByRoom.welcome.filter((message) => message.id !== 'm2');
+    removed.historyByRoom!.welcome.revision++;
+    rerenderWorkspace(removed);
+    const fallback = screen.getByRole('complementary', { name: 'Thread' });
+    expect(within(fallback).getByRole('status')).toHaveTextContent('This thread is no longer in the loaded conversation');
+    expect(within(fallback).getByRole('button', { name: 'Close thread' })).toBeVisible();
+    fireEvent.click(within(fallback).getByRole('button', { name: 'Close thread' }));
+    await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
+    rerenderWorkspace(workspace);
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    expect(screen.getByLabelText('Message thread')).toHaveValue('Synthetic retained thread draft');
+  });
 
   it('pages in both directions explicitly, preserves a retry after failure, and reports the oldest boundary', async () => {
     const pending = pendingSend();
