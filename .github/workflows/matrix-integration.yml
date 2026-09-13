@@ -1,0 +1,51 @@
+name: Live Matrix integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  live-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AIMTRIX_LIVE_OWNER: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Test diagnostic privacy
+        run: npm run test:matrix:privacy
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build the static client
+        run: npm run build
+      - name: Two independent clean Matrix runs
+        run: npm run test:matrix -- --repeat=2
+      - name: Deliberately fail and verify private diagnostics
+        run: npm run test:matrix -- --probe-failure
+      - name: Remove any remaining job-owned test services
+        if: always()
+        run: node tests/live-matrix/cleanup.mjs
+      - name: Preserve only allowlisted Matrix summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-summary-${{ github.run_id }}
+          path: |
+            matrix-test-results/run-1.json
+            matrix-test-results/run-2.json
+            matrix-test-results/failure-probe-1.json
+          if-no-files-found: ignore
+          retention-days: 14

@@ -1,0 +1,95 @@
+# Disposable live Matrix tests
+
+This is the validation foundation for [Polish 03 / #143](https://github.com/spencerrung/aimtrix/issues/143). It runs the built Aimtrix client against fresh Synapse and Dex services. It does not connect to a configured production homeserver, use an existing Matrix account, or deploy the application.
+
+## Run locally
+
+Requirements: Node.js 22+, npm dependencies, Docker Engine with Compose v2 or newer, and Playwright Chromium. Linux is the exercised host; Docker Desktop/native-shell behavior remains separate evidence.
+
+```sh
+npm ci
+npx playwright install --with-deps chromium
+npm run build
+npm run test:matrix:privacy
+npm run test:matrix -- --repeat=2
+npm run test:matrix -- --probe-failure
+```
+
+Build immediately before running so the harness exercises the intended application revision. The harness serves `dist/` through Vite preview and provides a temporary `/config.json` pointing only at its local Synapse. The normal `public/config.json` is unchanged. There are no Matrix response mocks, production controller hooks, or injected login tokens.
+
+Each run creates a unique Compose project, generated credentials, two fresh service databases, and three separate Chromium contexts: Alice, Bob, and another Alice device. The repeat option destroys everything before starting the second run. The failure probe intentionally throws after real UI login, with disposable credentials and a synthetic private-content canary in the in-memory exception. It succeeds only when the expected failure is contained and cleanup completes. It does not retry a failed live journey until it passes.
+
+Ports are allocated on `127.0.0.1`; startup fails if another process claims an allocated port. Tests do not reuse an existing server. Browser requests are restricted to the run's app, Synapse, and Dex origins. Docker images must be pulled from GHCR, but no Matrix federation listener is enabled and the federation domain allowlist is empty. The two services share a unique bridge network; the bridge is not an outbound firewall. Compose's internal-network mode is not used because Docker 29 suppressed its published host ports in local testing.
+
+`AIMTRIX_LIVE_UID=1001 npm run test:matrix` exercises a different non-root service UID. Configuration lives in a readable child directory under a host-private `0700` temporary parent. Only that child is mounted read-only into the containers, so service readability does not depend on the host UID. Service data is held in UID-owned tmpfs. Read-only root filesystems, dropped capabilities, `no-new-privileges`, and discarded Docker logs are checked at runtime. The short-lived password-hashing helper is also unprivileged, has no network, and receives its password on stdin.
+
+## What each journey proves
+
+| Check | Real boundary exercised |
+| --- | --- |
+| Disposable services | Pinned Synapse and Dex start as non-root services; loopback binding, read-only roots, disabled Docker logs, and health endpoints are checked |
+| Password login | Three application UI logins establish independent device IDs and IndexedDB crypto stores |
+| Room setup | Aimtrix creates an encrypted room; helpers invite/join synthetic peers through actual Matrix APIs; server state advertises Megolm |
+| Encrypted send/receive | Alice sends through the composer; Bob and the second Alice device render the exact generated plaintext; outgoing/server events are encrypted and lack that plaintext; Bob sends a reply |
+| Session reload | The second Alice browser reloads and decrypts the earlier message; peers stay online, so this does not isolate stored-key restoration from possible key re-sharing |
+| Media | Aimtrix uploads encrypted bytes and sends an encrypted message; unauthenticated download fails, authenticated bytes differ from the source, and Bob's decrypted browser blob matches the original bytes exactly |
+| Shared backdrop | Alice's UI save updates real room state and Bob's rendered backdrop; Bob's unauthorized state write is rejected; changing the UI policy changes Matrix power levels |
+| Moderation | UI Decorator assignment, kick, ban, and unban are checked against actual power-level/member state; setup/re-invite uses API helpers |
+| Private DM backdrop | Aimtrix creates the DM and saves its private backdrop through account data; Bob cannot read Alice's account data, has no private backdrop entry, and receives no shared backdrop state |
+| Standard SSO | Aimtrix follows Synapse's SSO redirect, signs into a real disposable Dex provider, exchanges the resulting Matrix login token, removes it from the URL, and obtains a valid Synapse session |
+
+Send-to-recipient and backdrop-application timings are recorded as observations from this local topology. They are bounded correctness checks, not production performance targets or a substitute for [#163](https://github.com/spencerrung/aimtrix/issues/163).
+
+The harness uses Synapse 1.160.0 and Dex 2.45.1, pinned by multi-platform manifest digest in [stack.mjs](../tests/live-matrix/stack.mjs). Both manifests advertise `linux/amd64` and `linux/arm64`. Runtime execution on another architecture must be recorded separately; inspecting a manifest does not establish an ARM runtime pass. No Aimtrix container image is built or published by this harness.
+
+Dex provides an actual OIDC identity service to Synapse; Aimtrix still uses standard Matrix SSO and `m.login.token`. This does **not** establish delegated OIDC/MSC3861 client authentication. The split browser/internal token endpoints and `skip_verification` are intentionally local HTTP test configuration, following Synapse's [Dex example](https://element-hq.github.io/synapse/latest/openid.html#dex) and Dex's [local connector documentation](https://dexidp.io/docs/connectors/local/). Never reuse these settings as production authentication guidance.
+
+## Privacy and diagnostics
+
+Only the named `matrix-test-results/run-1.json`, `run-2.json`, and `failure-probe-1.json` summaries are eligible for the CI artifact. [report.mjs](../tests/live-matrix/report.mjs) constructs that schema from an allowlist of check names, failure categories, numeric timings, image versions, platform, and Git revision. It discards arbitrary exception fields, URLs, responses, account identifiers, and extra metrics. Unit tests attempt to inject private canaries into those fields.
+
+The live runner deliberately does not enable a Playwright reporter, trace, HAR, video, screenshot, download export, console forwarding, storage snapshot, or raw container log collection. Access tokens, OIDC secrets, generated passwords, plaintext, ciphertext metadata, and attachment bytes remain in process/browser memory or disposable service storage. Synapse logging uses a null handler; both Docker log drivers discard output. Do not add broad artifact directories or print caught SDK/Playwright errors when adding cases: those errors can contain credentials, callback URLs, or message text.
+
+A failed summary identifies the named boundary and a coarse allowlisted category. Reproduce locally and add a safe boolean/count or narrower named check when more precision is needed. Do not disable the privacy boundary to obtain a generic browser trace. The probe intentionally demonstrates this failure path with real disposable credentials in an exception.
+
+## Cleanup and CI
+
+The runner attempts browser, preview-server, and Compose cleanup independently in `finally`, checks for remaining project containers/networks, and removes its private temporary directory even if teardown reports a failure. SIGINT/SIGTERM closes the active browser and allows bounded operations to unwind. Force-killing a process or stopping Docker can prevent normal teardown; a failed cleanup is a failed run.
+
+The [Live Matrix integration workflow](../.github/workflows/matrix-integration.yml) performs privacy unit tests, builds the application, runs two clean live iterations, deliberately probes a failure, and uploads only the summaries. A final `always()` step removes any remaining containers/networks with that job's exact owner label, including the password-hashing helper. The hosted runner then discards its filesystem.
+
+For a locally supervised run, an explicit owner permits the same fallback without touching other Docker resources:
+
+```sh
+AIMTRIX_LIVE_OWNER=local-matrix-check npm run test:matrix
+AIMTRIX_LIVE_OWNER=local-matrix-check node tests/live-matrix/cleanup.mjs
+```
+
+Use a distinct owner for concurrent runs. Cleanup never invokes Docker prune, references production containers, or changes other Compose projects. A hard-killed local process can leave its `aimtrix-matrix-*` private temporary directory; remove only the directory associated with that terminated run after its services are removed.
+
+## Extending the foundation
+
+[stack.mjs](../tests/live-matrix/stack.mjs) owns image pins, generated settings, lifecycle, bounded HTTP calls and registration. [journeys.mjs](../tests/live-matrix/journeys.mjs) owns real browser actions and protocol assertions. Add a named check to the report allowlist with an explicit evidence claim; keep synthetic data generated at runtime. For history, receipts and recovery, reuse separate contexts and real Matrix helpers, and verify the recipient or restored device rather than only HTTP success.
+
+SAS/incoming verification, key-backup restore, withheld keys, old-thread/context retrieval, federation, delegated OIDC, Firefox/WebKit, physical/mobile/native shells, and large-account performance remain separate work. This baseline does not close their TODO items. Optional TURN/LiveKit and push/APNs/FCM infrastructure should use separate services, credentials, and jobs under #169/#176, so unavailable provider infrastructure cannot silently skip the baseline Matrix gate.
+
+## Validation record
+
+September 13, 2026 · Linux amd64 host · Node 22.23.2 · Chromium 149.0.7827.55 · Synapse 1.160.0 / Dex 2.45.1. Local tests exercised the built application and this branch's working-tree harness; CI summaries record their checkout revision.
+
+| Gate | Result |
+| --- | --- |
+| Two clean live runs, `AIMTRIX_LIVE_UID=1001 npm run test:matrix -- --repeat=2` under `umask 077` | **12/12 checks passed in each run**; independent services/accounts/browser contexts; all cleanup checks passed |
+| Standard service UID 1000 | Separate full **12/12** live run passed |
+| `npm run test:matrix -- --probe-failure` under `umask 077` | Expected sensitive exception contained after successful real login; **5/5 setup/cleanup checks passed**; no exception content written |
+| `npm run test:matrix:privacy` | **3/3 tests passed** for report allowlisting and private-canary rejection |
+| `npm run check` | ESLint, **26 files / 209 unit tests**, TypeScript, production build and bundle budgets passed; build 1m 20s with the expected large crypto-chunk warning |
+| `npm run test:e2e` | **32 passed, 6 intentional skips**, 2.7m; existing desktop/mobile application suite |
+| Cleanup fallback rehearsal | Started a disposable labeled container/network, ran the exact-owner cleanup tool, verified both removed; other Docker resources were untouched |
+| Independent review | Fixed cross-UID/config readability, independent cleanup attempts, secret-directory cleanup on failure, and owner labeling/cleanup for the hashing helper; reviewed privacy and evidence boundaries |
+
+Observed send-to-recipient times in the two clean runs were **244ms / 246ms**; shared-backdrop application took **417ms / 407ms**. These are single local synthetic samples, not a performance SLA.
+
+An initial parallel lint/browser run exposed ESLint scanning Playwright's disappearing generated output directory. Generated browser and Matrix report directories are now explicitly ignored; the complete gate passed afterward. During harness development, image setup and selector/timing errors were corrected before the clean runs; none are reported as passing live evidence.
+
+Local allowlisted summaries are in `matrix-test-results/`; command logs are `/tmp/aimtrix-live-final.log`, `/tmp/aimtrix-live-probe.log`, `/tmp/aimtrix-live-check.log`, and `/tmp/aimtrix-live-e2e.log`. No source application behavior, production configuration, homeserver, Kubernetes resource, or published image was changed. CI results are tracked on the delivery PR and issue #143; this local record does not pre-claim a hosted CI run.
