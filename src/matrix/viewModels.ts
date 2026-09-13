@@ -150,6 +150,20 @@ export interface CallSummary {
   error?: string;
 }
 
+export type HistoryDirection = 'backward' | 'forward';
+export type HistoryOperation = HistoryDirection | 'context' | 'latest';
+export interface HistorySummary {
+  mode: 'live' | 'history' | 'context';
+  revision: number;
+  canLoadOlder: boolean;
+  canLoadNewer: boolean;
+  loading?: HistoryOperation;
+  error?: string;
+  errorDirection?: HistoryOperation;
+  targetEventId?: string;
+  targetStatus?: 'found' | 'removed' | 'unavailable';
+}
+
 export interface WorkspaceSnapshot {
   mode: 'demo' | 'matrix';
   connection: ConnectionState;
@@ -158,6 +172,7 @@ export interface WorkspaceSnapshot {
   spaceRoomPreviews: Record<string, SpaceRoomPreview>;
   rooms: RoomSummary[];
   messagesByRoom: Record<string, MessageSummary[]>;
+  historyByRoom?: Record<string, HistorySummary>;
   membersByRoom: Record<string, MemberSummary[]>;
   threadsByRoot: Record<string, ThreadSummary>;
   call?: CallSummary;

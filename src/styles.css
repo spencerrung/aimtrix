@@ -1339,3 +1339,22 @@
 .message-delivery__actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .message-delivery__actions:empty { display: none; }
 .message-delivery button { min-height: 36px; padding: 5px 12px; }
+
+/* Bounded history navigation preserves a readable viewport and reachable recovery. */
+.history-progress, .history-feedback, .history-context { margin: 0; padding: 8px 10px; border-bottom: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.8125rem; }
+.history-feedback, .history-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.history-feedback p, .history-context p { flex: 1 1 260px; margin: 0; }
+.history-edge { display: flex; justify-content: center; padding: 10px 0; color: var(--text-soft); font-size: 0.75rem; }
+.history-edge p { margin: 0; }
+.history-edge button, .history-feedback button, .history-context button { min-height: 40px; padding: 6px 12px; }
+.timeline-message--target { border-radius: 12px; outline: 2px solid var(--focus); outline-offset: 4px; background: var(--surface-soft); }
+.timeline-message:focus-visible, .history-context:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
+button.message-reply-context { display: block; max-width: 100%; text-align: start; font: inherit; cursor: pointer; }
+button.message-reply-context:hover { background: var(--surface-soft); }
+/* Optional search and history feedback share an automatic row, never the reading track. */
+.conversation:not(.conversation--empty) { grid-template-rows: 64px auto minmax(0, 1fr) 24px auto; }
+.conversation > .conversation-header { grid-row: 1; }
+.conversation > .conversation-history-controls { grid-row: 2; min-width: 0; }
+.conversation > .timeline { grid-row: 3; }
+.conversation > .typing-strip { grid-row: 4; }
+.conversation > .composer { grid-row: 5; }

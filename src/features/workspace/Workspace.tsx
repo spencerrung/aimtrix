@@ -66,6 +66,8 @@ import {
 } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar } from '../../components/Avatar';
+import { captureTimelineAnchor, historyRows, restoreTimelineAnchor, type TimelineAnchor } from './timelineAnchors';
+import type { HistorySummary } from '../../matrix/viewModels';
 import { CallShelf } from '../calls/CallShelf';
 import {
   emojiReactionKey,
@@ -398,6 +400,10 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onSendNudge?: (roomId: string) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
+  onLoadRoomHistory?: (roomId: string, direction: 'backward' | 'forward') => Promise<void>;
+  onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
+  onReturnToLive?: (roomId: string) => Promise<void>;
+  onHistoryDetached?: (roomId: string, detached: boolean) => void;
   onSpaceSelected?: (spaceId: string) => Promise<void>;
   onReorganizeSpaceChildren?: (update: {
     childId: string;
@@ -1525,6 +1531,8 @@ const TimelineMessage = memo(function TimelineMessage({
   onLoadEmojiCatalog,
   onEmojiUsed,
   onMediaLoad,
+  onJumpToEvent,
+  highlighted = false,
 }: {
   message: MessageSummary;
   dataSaver: boolean;
@@ -1545,6 +1553,8 @@ const TimelineMessage = memo(function TimelineMessage({
   onLoadEmojiCatalog: () => void;
   onEmojiUsed: (emoji: string) => void;
   onMediaLoad: () => void;
+  onJumpToEvent?: (eventId: string) => void;
+  highlighted?: boolean;
 }) {
   const gatedMedia =
     Boolean(message.mediaUrl) &&
@@ -1621,7 +1631,7 @@ const TimelineMessage = memo(function TimelineMessage({
     setReactionQuery('');
   };
   return (
-    <article className={`timeline-message${message.isOwn ? ' timeline-message--own' : ''}`}>
+    <article className={`timeline-message${message.isOwn ? ' timeline-message--own' : ''}${highlighted ? ' timeline-message--target' : ''}`} data-event-id={message.id} data-message-key={message.transactionId ?? message.id} tabIndex={-1}>
       <Avatar
         name={message.senderName}
         src={message.senderAvatarUrl}
@@ -1639,10 +1649,10 @@ const TimelineMessage = memo(function TimelineMessage({
 
         </header>
         {message.replyTo ? (
-          <blockquote className="message-reply-context">
+          <button type="button" className="message-reply-context" aria-label={`Jump to replied message from ${message.replyTo.senderName}`} onClick={() => onJumpToEvent?.(message.replyTo!.eventId)}>
             <strong>{message.replyTo.senderName}</strong>
             <span>{message.replyTo.body}</span>
-          </blockquote>
+          </button>
         ) : null}
         {!mediaRevealed && message.mediaUrl ? (
           <button className="message-media-gate" type="button" onClick={() => setMediaRevealed(true)}><Images size={16} /> Load {message.mimeType === 'image/gif' ? 'animated media' : 'media'}</button>
@@ -1796,6 +1806,7 @@ type ComposerSubmitResult = 'sent' | 'edited' | 'retained' | false;
 
 function Conversation({
   room,
+  history,
   members,
   messages,
   activeThread,
@@ -1842,6 +1853,9 @@ function Conversation({
   onCancelUpload,
   onRetryUpload,
   onLoadMore,
+  onOpenContext,
+  onReturnToLive,
+  onDetachedChange,
   onReadLatest,
   gifEndpoint,
   stickerPacks,
@@ -1855,6 +1869,7 @@ function Conversation({
   onSendNudge,
 }: {
   room?: RoomSummary;
+  history?: HistorySummary;
   members: MemberSummary[];
   messages: MessageSummary[];
   activeThread?: ThreadSummary;
@@ -1900,7 +1915,10 @@ function Conversation({
   onUploadAttachment: (file: File, threadRootId?: string, codeLanguage?: string) => Promise<boolean>;
   onCancelUpload: () => void;
   onRetryUpload: () => void;
-  onLoadMore: () => Promise<void>;
+  onLoadMore?: (direction: 'backward' | 'forward') => Promise<void>;
+  onOpenContext?: (eventId: string) => Promise<void>;
+  onReturnToLive?: () => Promise<void>;
+  onDetachedChange?: (detached: boolean) => void;
   onReadLatest?: () => Promise<void>;
   gifEndpoint?: string;
   stickerPacks: Array<{ name: string; manifestUrl: string }>;
@@ -1915,8 +1933,18 @@ function Conversation({
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
-  const loadingHistory = useRef(false);
   const historyRequestToken = useRef(0);
+  const activeHistoryRequest = useRef<number | undefined>(undefined);
+  const historyActionRevision = useRef<number | undefined>(undefined);
+  const readingAnchor = useRef<TimelineAnchor | undefined>(undefined);
+  const readingPositions = useRef(new Map<string, { anchor?: TimelineAnchor; scrollTop: number }>());
+  const lastKnownScrollTop = useRef(0);
+  const positionedContext = useRef<string | undefined>(undefined);
+  const pendingLatest = useRef<{ roomId?: string; afterRevision: number; token: number } | undefined>(undefined);
+  const [historyAction, setHistoryAction] = useState<HistorySummary['loading']>();
+  const [localHistoryError, setLocalHistoryError] = useState<{ direction: NonNullable<HistorySummary['loading']>; message: string; eventId?: string }>();
+  const [localTarget, setLocalTarget] = useState<string>();
+  const contextBanner = useRef<HTMLDivElement>(null);
   const viewportMode = useRef<TimelineViewportMode>('bottom');
   const positionedUnreadMarker = useRef<string | undefined>(undefined);
   const unreadAnchorTop = useRef<number | undefined>(undefined);
@@ -2369,10 +2397,13 @@ function Conversation({
   };
 
   const runProgrammaticScroll = useCallback((scroll: () => void) => {
+    const before = timeline.current?.scrollTop;
+    scroll();
+    lastKnownScrollTop.current = timeline.current?.scrollTop ?? 0;
+    if (timeline.current?.scrollTop === before) return;
     const generation = programmaticScrollGeneration.current + 1;
     programmaticScrollGeneration.current = generation;
     programmaticTimelineScroll.current = true;
-    scroll();
     requestAnimationFrame(() => {
       if (programmaticScrollGeneration.current === generation) {
         programmaticTimelineScroll.current = false;
@@ -2380,24 +2411,30 @@ function Conversation({
     });
   }, []);
 
+  const historicalWindow = Boolean(history && history.mode !== 'live');
+  const historyLoading = historyAction ?? history?.loading;
+  const historyError = localHistoryError?.message ?? history?.error;
+  const historyErrorDirection = localHistoryError?.direction ?? history?.errorDirection;
+  const targetEventId = history?.targetEventId ?? localTarget;
+
   const restoreTimelineViewport = useCallback(() => {
     const element = timeline.current;
     if (!element) return;
     if (viewportMode.current === 'bottom') {
-      runProgrammaticScroll(() => {
-        element.scrollTop = element.scrollHeight;
-      });
+      runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
       return;
     }
-    if (viewportMode.current !== 'unread' || unreadAnchorTop.current === undefined) return;
-    const marker = element.querySelector<HTMLElement>('.unread-divider');
-    if (!marker) return;
-    const currentTop = marker.getBoundingClientRect().top - element.getBoundingClientRect().top;
-    const delta = currentTop - unreadAnchorTop.current;
-    if (Math.abs(delta) < 0.5) return;
-    runProgrammaticScroll(() => {
-      element.scrollTop += delta;
-    });
+    if (viewportMode.current === 'unread' && unreadAnchorTop.current !== undefined) {
+      const marker = element.querySelector<HTMLElement>('[data-unread-boundary]');
+      if (marker) {
+        const delta = marker.getBoundingClientRect().top - element.getBoundingClientRect().top - unreadAnchorTop.current;
+        if (Math.abs(delta) >= 0.5) runProgrammaticScroll(() => { element.scrollTop += delta; });
+        readingAnchor.current = captureTimelineAnchor(element);
+        return;
+      }
+    }
+    runProgrammaticScroll(() => { restoreTimelineAnchor(element, readingAnchor.current); });
+    readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
   }, [runProgrammaticScroll]);
 
   useLayoutEffect(() => {
@@ -2405,58 +2442,121 @@ function Conversation({
     if (!element) return;
     const roomChanged = previousRoomId.current !== room?.id;
     if (roomChanged) {
+      if (previousRoomId.current) {
+        if (viewportMode.current !== 'bottom') readingPositions.current.set(previousRoomId.current, { anchor: readingAnchor.current, scrollTop: lastKnownScrollTop.current });
+        else readingPositions.current.delete(previousRoomId.current);
+      }
       previousRoomId.current = room?.id;
       positionedUnreadMarker.current = undefined;
       unreadAnchorTop.current = undefined;
-      viewportMode.current = activeEntryUnreadMarker ? 'unread' : 'bottom';
-      setTimelineDetached(false);
+      readingAnchor.current = undefined;
+      positionedContext.current = undefined;
+      viewportMode.current = historicalWindow ? 'detached' : activeEntryUnreadMarker ? 'unread' : 'bottom';
+      setTimelineDetached(historicalWindow || Boolean(activeEntryUnreadMarker));
       previousTimelineMessages.current = undefined;
       historyRequestToken.current += 1;
-      loadingHistory.current = false;
+      activeHistoryRequest.current = undefined;
+      pendingLatest.current = undefined;
+      setHistoryAction(undefined);
+      setLocalHistoryError(undefined);
+      setLocalTarget(undefined);
+      const saved = room?.id ? readingPositions.current.get(room.id) : undefined;
+      if (saved && historicalWindow && history?.mode !== 'context') {
+        viewportMode.current = 'detached';
+        readingAnchor.current = saved.anchor;
+        runProgrammaticScroll(() => {
+          if (!restoreTimelineAnchor(element, saved.anchor)) element.scrollTop = saved.scrollTop;
+        });
+        readingAnchor.current = captureTimelineAnchor(element) ?? saved.anchor;
+        previousTimelineMessages.current = messages;
+        return;
+      }
     }
-    const marker = element.querySelector<HTMLElement>('.unread-divider');
+    // An external route may supersede pagination without settling its network
+    // Promise. The controller's newer context owns feedback from this point on.
+    if (!roomChanged && historyAction && historyAction !== 'context' && history
+      && history.revision > (historyActionRevision.current ?? -1)
+      && (history.loading === 'context' || (history.mode === 'context' && !history.loading && history.targetStatus))) {
+      historyRequestToken.current += 1;
+      activeHistoryRequest.current = undefined;
+      pendingLatest.current = undefined;
+      setHistoryAction(undefined);
+      setLocalHistoryError(undefined);
+    }
+    if (history?.loading === 'context') positionedContext.current = undefined;
+    const returning = pendingLatest.current;
+    if (returning && returning.roomId === room?.id && returning.token === historyRequestToken.current
+      && history?.mode === 'live' && history.revision > returning.afterRevision && !history.loading) {
+      pendingLatest.current = undefined;
+      activeHistoryRequest.current = undefined;
+      viewportMode.current = 'bottom';
+      readingAnchor.current = undefined;
+      unreadAnchorTop.current = undefined;
+      setHistoryAction(undefined);
+      setTimelineDetached(false);
+      setLocalTarget(undefined);
+      onDetachedChange?.(false);
+      runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
+      previousTimelineMessages.current = messages;
+      return;
+    }
+    if (historicalWindow && viewportMode.current === 'bottom') {
+      viewportMode.current = 'detached';
+      setTimelineDetached(true);
+    }
+    if (history?.mode === 'context' && history.targetEventId && !history.loading && history.targetStatus
+      && positionedContext.current !== `${history.targetEventId}:${history.targetStatus}`) {
+      const target = historyRows(element).find((row) => row.dataset.eventId === history.targetEventId);
+      viewportMode.current = 'detached';
+      setTimelineDetached(true);
+      if (target) {
+        runProgrammaticScroll(() => {
+          if (typeof target.scrollIntoView === 'function') target.scrollIntoView({ block: 'center' });
+          else element.scrollTop = target.offsetTop;
+          target.focus({ preventScroll: true });
+        });
+        readingAnchor.current = captureTimelineAnchor(element);
+        positionedContext.current = `${history.targetEventId}:${history.targetStatus}`;
+      } else if (history.targetStatus === 'unavailable' || history.targetStatus === 'removed') {
+        contextBanner.current?.focus({ preventScroll: true });
+        positionedContext.current = `${history.targetEventId}:${history.targetStatus}`;
+      }
+      previousTimelineMessages.current = messages;
+      return;
+    }
+    const marker = element.querySelector<HTMLElement>('[data-unread-boundary]');
     const messagesChanged = previousTimelineMessages.current !== messages;
     const needsFallbackReposition = typeof ResizeObserver === 'undefined' && messagesChanged;
-    if (
-      marker &&
-      activeEntryUnreadMarker?.firstUnreadMessageId &&
-      viewportMode.current === 'unread' &&
-      (
-        positionedUnreadMarker.current !== activeEntryUnreadMarker.firstUnreadMessageId ||
-        needsFallbackReposition
-      )
-    ) {
+    if (!historicalWindow && marker && activeEntryUnreadMarker?.firstUnreadMessageId && viewportMode.current === 'unread'
+      && (positionedUnreadMarker.current !== activeEntryUnreadMarker.firstUnreadMessageId || needsFallbackReposition)) {
       runProgrammaticScroll(() => {
-        if (typeof marker.scrollIntoView === 'function') {
-          marker.scrollIntoView({ block: 'center' });
-        } else {
-          element.scrollTop = marker.offsetTop;
-        }
+        if (typeof marker.scrollIntoView === 'function') marker.scrollIntoView({ block: 'center' });
+        else element.scrollTop = marker.offsetTop;
       });
       positionedUnreadMarker.current = activeEntryUnreadMarker.firstUnreadMessageId;
-      unreadAnchorTop.current =
-        marker.getBoundingClientRect().top - element.getBoundingClientRect().top;
-    } else if (!activeEntryUnreadMarker && (roomChanged || viewportMode.current === 'bottom')) {
+      unreadAnchorTop.current = marker.getBoundingClientRect().top - element.getBoundingClientRect().top;
+      readingAnchor.current = captureTimelineAnchor(element);
+      onDetachedChange?.(true);
+    } else if (!historicalWindow && !activeEntryUnreadMarker && (roomChanged || viewportMode.current === 'bottom')) {
       viewportMode.current = 'bottom';
-      runProgrammaticScroll(() => {
-        element.scrollTop = element.scrollHeight;
-      });
+      runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
+    } else if (!roomChanged && (messagesChanged || historicalWindow)) {
+      restoreTimelineViewport();
     }
+    if (history?.mode === 'live' && viewportMode.current !== 'bottom') onDetachedChange?.(true);
     previousTimelineMessages.current = messages;
-  }, [
-    activeEntryUnreadMarker,
-    messages,
-    room?.id,
-    runProgrammaticScroll,
-  ]);
+  }, [activeEntryUnreadMarker, history, historyAction, historicalWindow, messages, onDetachedChange, restoreTimelineViewport, room?.id, runProgrammaticScroll]);
 
   useLayoutEffect(() => {
     const content = timelineContent.current;
     if (!content || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(restoreTimelineViewport);
     observer.observe(content);
+    if (timeline.current) observer.observe(timeline.current);
+    // Row observations also cover net-zero content growth above/below the reader.
+    for (const row of historyRows(content)) observer.observe(row);
     return () => observer.disconnect();
-  }, [restoreTimelineViewport, room?.id]);
+  }, [messages, restoreTimelineViewport, room?.id]);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -2473,77 +2573,128 @@ function Conversation({
   const latestMessageId = messages.at(-1)?.id;
   const activeRoomId = room?.id;
   const reportLatestRead = useCallback(() => {
-    if (!activeRoomId || !latestMessageId || !onReadLatest) return;
-    if (
-      reportedRead.current?.roomId === activeRoomId &&
-      reportedRead.current.eventId === latestMessageId
-    ) {
-      return;
-    }
+    if (!activeRoomId || !latestMessageId || !onReadLatest || historicalWindow || history?.loading || historyAction
+      || messageQuery.trim() || viewportMode.current !== 'bottom' || (onReturnToLive && !history)) return;
+    const element = timeline.current;
+    if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 48) return;
+    if (reportedRead.current?.roomId === activeRoomId && reportedRead.current.eventId === latestMessageId) return;
     const requested = { roomId: activeRoomId, eventId: latestMessageId };
     reportedRead.current = requested;
     void onReadLatest().catch(() => {
-      if (
-        reportedRead.current?.roomId === requested.roomId &&
-        reportedRead.current.eventId === requested.eventId
-      ) {
-        reportedRead.current = undefined;
-      }
+      if (reportedRead.current?.roomId === requested.roomId && reportedRead.current.eventId === requested.eventId) reportedRead.current = undefined;
     });
-  }, [activeRoomId, latestMessageId, onReadLatest]);
+  }, [activeRoomId, historicalWindow, history, historyAction, latestMessageId, messageQuery, onReadLatest, onReturnToLive]);
+
+  const requestHistory = useCallback(async (direction: 'backward' | 'forward', retry = false) => {
+    if (!onLoadMore || activeHistoryRequest.current !== undefined || historyLoading || (!retry && (direction === 'backward' ? !history?.canLoadOlder : !history?.canLoadNewer))) return;
+    const element = timeline.current;
+    if (element) readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
+    viewportMode.current = 'detached';
+    setTimelineDetached(true);
+    onDetachedChange?.(true);
+    const token = ++historyRequestToken.current;
+    activeHistoryRequest.current = token;
+    const roomAtStart = room?.id;
+    historyActionRevision.current = history?.revision;
+    setHistoryAction(direction);
+    setLocalHistoryError(undefined);
+    try { await onLoadMore(direction); }
+    catch {
+      if (token === historyRequestToken.current && previousRoomId.current === roomAtStart) {
+        setLocalHistoryError({ direction, message: `Could not load ${direction === 'backward' ? 'older' : 'newer'} messages. Your reading position has been kept.` });
+      }
+    } finally {
+      if (token === historyRequestToken.current && previousRoomId.current === roomAtStart) { activeHistoryRequest.current = undefined; setHistoryAction(undefined); }
+    }
+  }, [history?.canLoadNewer, history?.canLoadOlder, history?.revision, historyLoading, onDetachedChange, onLoadMore, room?.id]);
+
+  const openContext = useCallback(async (eventId: string) => {
+    const element = timeline.current;
+    if (element) readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
+    viewportMode.current = 'detached';
+    setTimelineDetached(true);
+    setMessageQuery('');
+    setSearchOpen(false);
+    setLocalHistoryError(undefined);
+    positionedContext.current = undefined;
+    pendingLatest.current = undefined;
+    onDetachedChange?.(true);
+    if (!onOpenContext) {
+      const target = element && historyRows(element).find((row) => row.dataset.eventId === eventId);
+      if (target) {
+        setLocalTarget(eventId);
+        runProgrammaticScroll(() => { target.scrollIntoView?.({ block: 'center' }); target.focus({ preventScroll: true }); });
+        if (element) readingAnchor.current = captureTimelineAnchor(element);
+      } else setLocalHistoryError({ direction: 'context', eventId, message: 'This message is not available in the loaded conversation.' });
+      return;
+    }
+    const token = ++historyRequestToken.current;
+    const roomAtStart = room?.id;
+    activeHistoryRequest.current = token;
+    setHistoryAction('context');
+    try { await onOpenContext(eventId); }
+    catch {
+      if (token === historyRequestToken.current && previousRoomId.current === roomAtStart) setLocalHistoryError({ direction: 'context', eventId, message: 'Could not open this message. Try again or return to latest.' });
+    } finally {
+      if (token === historyRequestToken.current && previousRoomId.current === roomAtStart) { activeHistoryRequest.current = undefined; setHistoryAction(undefined); }
+    }
+  }, [onDetachedChange, onOpenContext, room?.id, runProgrammaticScroll]);
 
   const returnToLatest = useCallback(() => {
+    setMessageQuery('');
+    setSearchOpen(false);
+    setLocalHistoryError(undefined);
+    setLocalTarget(undefined);
+    positionedContext.current = undefined;
+    const token = ++historyRequestToken.current;
+    if (onReturnToLive && history) {
+      pendingLatest.current = { roomId: room?.id, afterRevision: history.revision, token };
+      activeHistoryRequest.current = token;
+      historyActionRevision.current = history.revision;
+      setHistoryAction('latest');
+      void onReturnToLive().catch(() => {
+        if (historyRequestToken.current !== token || previousRoomId.current !== room?.id) return;
+        pendingLatest.current = undefined;
+        activeHistoryRequest.current = undefined;
+        setHistoryAction(undefined);
+        setLocalHistoryError({ direction: 'latest', message: 'Could not return to latest messages. Your reading position has been kept.' });
+      });
+      return;
+    }
     viewportMode.current = 'bottom';
+    readingAnchor.current = undefined;
     unreadAnchorTop.current = undefined;
     setTimelineDetached(false);
+    onDetachedChange?.(false);
+    const roomAtStart = room?.id;
     requestAnimationFrame(() => {
       const element = timeline.current;
-      if (!element) return;
-      runProgrammaticScroll(() => {
-        element.scrollTop = element.scrollHeight;
-      });
+      if (!element || previousRoomId.current !== roomAtStart || historyRequestToken.current !== token) return;
+      runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
       reportLatestRead();
     });
-  }, [reportLatestRead, runProgrammaticScroll]);
+  }, [history, onDetachedChange, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll]);
 
-  useEffect(() => {
-    const roomChanged = reportedRead.current?.roomId !== activeRoomId;
-    if (roomChanged || viewportMode.current === 'bottom') reportLatestRead();
-  }, [activeRoomId, latestMessageId, reportLatestRead]);
+  useEffect(() => { if (viewportMode.current === 'bottom') reportLatestRead(); }, [history?.revision, latestMessageId, reportLatestRead, timelineDetached]);
 
-  const handleMediaLoad = useCallback(() => {
-    restoreTimelineViewport();
-  }, [restoreTimelineViewport]);
+  const handleMediaLoad = useCallback(() => { restoreTimelineViewport(); }, [restoreTimelineViewport]);
 
   const handleTimelineScroll = useCallback(() => {
     const element = timeline.current;
     if (!element || programmaticTimelineScroll.current) return;
-    const atBottom =
-      element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
-    viewportMode.current = atBottom ? 'bottom' : 'detached';
-    setTimelineDetached(!atBottom);
+    const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
+    lastKnownScrollTop.current = element.scrollTop;
+    const detached = historicalWindow || !atBottom;
+    viewportMode.current = detached ? 'detached' : 'bottom';
+    setTimelineDetached(detached);
     unreadAnchorTop.current = undefined;
-    if (atBottom) reportLatestRead();
-    if (element.scrollTop > 80 || loadingHistory.current) return;
-    loadingHistory.current = true;
-    const previousHeight = element.scrollHeight;
-    const roomAtStart = room?.id;
-    const requestToken = historyRequestToken.current + 1;
-    historyRequestToken.current = requestToken;
-    void onLoadMore().finally(() => {
-      requestAnimationFrame(() => {
-        if (
-          timeline.current &&
-          previousRoomId.current === roomAtStart &&
-          historyRequestToken.current === requestToken &&
-          viewportMode.current === 'detached'
-        ) {
-          timeline.current.scrollTop += timeline.current.scrollHeight - previousHeight;
-        }
-        if (historyRequestToken.current === requestToken) loadingHistory.current = false;
-      });
-    });
-  }, [onLoadMore, reportLatestRead, room?.id]);
+    readingAnchor.current = captureTimelineAnchor(element);
+    onDetachedChange?.(detached);
+    if (!detached) reportLatestRead();
+    if (messageQuery.trim() || historyLoading || historyError) return;
+    if (element.scrollTop <= 80 && history?.canLoadOlder) void requestHistory('backward');
+    else if (atBottom && history?.canLoadNewer) void requestHistory('forward');
+  }, [historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, messageQuery, onDetachedChange, reportLatestRead, requestHistory]);
 
   const loadEmojiCatalog = useCallback(() => {
     if (catalogRequested.current) return;
@@ -2758,6 +2909,7 @@ function Conversation({
           </IconButton>
         </div>
       </header>
+      <div className="conversation-history-controls">
       {searchOpen ? (
         <label className="message-search">
           <Search size={15} />
@@ -2768,6 +2920,19 @@ function Conversation({
         </label>
       ) : null}
 
+      {historyLoading ? <p className="history-progress" role="status">{historyLoading === 'backward' ? 'Loading older messages…' : historyLoading === 'forward' ? 'Loading newer messages…' : historyLoading === 'context' ? 'Opening message context…' : 'Returning to latest messages…'}</p> : null}
+      {historyError ? <div className="history-feedback"><p role="alert">{historyError}</p>{historyErrorDirection && (historyErrorDirection !== 'context' || (onOpenContext && (localHistoryError?.eventId ?? history?.targetEventId))) ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => {
+        if (historyErrorDirection === 'backward' || historyErrorDirection === 'forward') void requestHistory(historyErrorDirection, true);
+        else if (historyErrorDirection === 'latest') returnToLatest();
+        else if (localHistoryError?.eventId ?? history?.targetEventId) void openContext((localHistoryError?.eventId ?? history?.targetEventId)!);
+      }}>{historyErrorDirection === 'backward' ? 'Retry older messages' : historyErrorDirection === 'forward' ? 'Retry newer messages' : historyErrorDirection === 'latest' ? 'Retry latest messages' : 'Retry message context'}</button> : null}</div> : null}
+      {history?.mode === 'context' && history.targetStatus ? <div ref={contextBanner} className="history-context" tabIndex={-1} aria-label="Message context">
+        <p role="status">{history.targetStatus === 'removed' ? 'This message was removed. The available conversation is shown below.' : history.targetStatus === 'unavailable' ? 'This message is unavailable. It may be inaccessible on this server or device.' : 'Showing the selected message and its surrounding conversation.'}</p>
+        {history.targetStatus === 'unavailable' && history.targetEventId && onOpenContext ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void openContext(history.targetEventId!)}>Try opening message again</button> : null}
+      </div> : null}
+
+      </div>
+
       <section
         ref={timeline}
         className="timeline"
@@ -2776,6 +2941,9 @@ function Conversation({
         onScroll={handleTimelineScroll}
       >
         <div ref={timelineContent} className="timeline-content">
+          {history && onLoadMore ? <div className="history-edge">{history.canLoadOlder
+            ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void requestHistory('backward')}>Load older messages</button>
+            : !history.loading ? <p>Beginning of available history.</p> : null}</div> : null}
           <div className="conversation-intro">
             <Avatar
               name={room.name}
@@ -2785,7 +2953,7 @@ function Conversation({
               size="large"
             />
             <h1>{room.name}</h1>
-            <p>{room.statusMessage || `This is the beginning of ${room.name}. Say hello.`}</p>
+            <p>{room.statusMessage || (history?.canLoadOlder ? `Conversation in ${room.name}. Earlier messages are available.` : `This is the beginning of ${room.name}. Say hello.`)}</p>
             {room.encrypted ? (
               <span className="intro-encryption"><Lock size={12} /> Messages in this room are encrypted.</span>
             ) : null}
@@ -2802,9 +2970,10 @@ function Conversation({
                     <span>{daySeparators.get(message.id)!.label}</span>
                   </div>
                 ) : null}
-                {activeEntryUnreadMarker?.firstUnreadMessageId === message.id ? (
+                {!historicalWindow && activeEntryUnreadMarker?.firstUnreadMessageId === message.id ? (
                   <div
                     className="unread-divider"
+                    data-unread-boundary
                     role="separator"
                     aria-label={`${activeEntryUnreadMarker.count} unread ${activeEntryUnreadMarker.count === 1 ? 'message' : 'messages'} below`}
                   >
@@ -2830,6 +2999,8 @@ function Conversation({
                   onLoadEmojiCatalog={loadEmojiCatalog}
                   onEmojiUsed={rememberEmoji}
                   onMediaLoad={handleMediaLoad}
+                  onJumpToEvent={(eventId) => void openContext(eventId)}
+                  highlighted={message.id === targetEventId && (historicalWindow || Boolean(localTarget))}
                   onLoadLinkPreview={onLoadLinkPreview}
                 />
               </Fragment>
@@ -2837,9 +3008,10 @@ function Conversation({
           ) : (
             <div className="timeline-empty"><Sparkles size={20} /> {messageQuery ? 'No loaded messages match.' : 'No messages here yet.'}</div>
           )}
+          {history && onLoadMore && (history.canLoadNewer || historicalWindow) ? <div className="history-edge">{history.canLoadNewer ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void requestHistory('forward')}>Load newer messages</button> : !historyLoading ? <p>End of available history. Jump to latest to follow new messages.</p> : null}</div> : null}
         </div>
       </section>
-      {timelineDetached ? <button className="jump-to-latest" type="button" onClick={returnToLatest}>Jump to latest messages</button> : null}
+      {timelineDetached || historicalWindow ? <button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button> : null}
 
       {activeThread && threadRoot && !threadCollapsed ? (
         <aside className="thread-panel" aria-label="Thread" style={{ width: threadPanelWidth }}>
@@ -2893,6 +3065,7 @@ function Conversation({
                 onLoadEmojiCatalog={loadEmojiCatalog}
                 onEmojiUsed={rememberEmoji}
                 onMediaLoad={handleMediaLoad}
+                onJumpToEvent={(eventId) => void openContext(eventId)}
                 onLoadLinkPreview={onLoadLinkPreview}
               />
             ))}
@@ -3676,6 +3849,10 @@ export function Workspace({
   onSendNudge,
   onLoadLinkPreview,
   onRoomSelected,
+  onLoadRoomHistory,
+  onOpenEventContext,
+  onReturnToLive,
+  onHistoryDetached,
   onSpaceSelected,
   onReorganizeSpaceChildren,
   onReorderRootSpaces,
@@ -3851,8 +4028,12 @@ export function Workspace({
   const [editingThreadMessage, setEditingThreadMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
   const typingTimer = useRef<number | undefined>(undefined);
   const lastTypingSentAt = useRef(0);
-  const requestedRoomHistory = useRef(new Set<string>());
-  const historyRequests = useRef(new Map<string, Promise<void>>());
+  const handledPushRoute = useRef<PushRoute | undefined>(undefined);
+  const [settledContextRoute, setSettledContextRoute] = useState<PushRoute>();
+  const missingPushRoom = useRef<PushRoute | undefined>(undefined);
+  const currentHistoryRoom = useRef<string | undefined>(undefined);
+  const historyHandlers = useRef({ onRoomSelected, onLoadRoomHistory, onOpenEventContext, onReturnToLive, onHistoryDetached });
+  useLayoutEffect(() => { historyHandlers.current = { onRoomSelected, onLoadRoomHistory, onOpenEventContext, onReturnToLive, onHistoryDetached }; });
 
   const activeSpaceSummary = useMemo(() => {
     const base = workspace.spaces.find((space) => space.id === activeSpace) ?? workspace.spaces[0];
@@ -3906,15 +4087,17 @@ export function Workspace({
     : undefined;
   const messagesByRoom = workspace.mode === 'demo' ? demoMessages : workspace.messagesByRoom;
   const messages = useMemo(() => effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [], [effectiveRoomId, messagesByRoom]);
+  const canReceiveLiveNudges = workspace.mode === 'demo' || Boolean(effectiveRoomId && workspace.historyByRoom?.[effectiveRoomId]?.mode === 'live');
   useEffect(() => {
+    if (!canReceiveLiveNudges) return;
     const latest = messages.filter((message) => message.nudge && !message.isOwn).at(-1);
     if (!latest || latestNudgeId.current === latest.id) return;
     latestNudgeId.current = latest.id;
     if (!preferences.nudgeEffects || preferences.motion === 'reduced' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
     const start = window.setTimeout(() => setNudgeActive(true), 0);
     const stop = window.setTimeout(() => setNudgeActive(false), 520);
-    return () => { window.clearTimeout(start); window.clearTimeout(stop); };
-  }, [messages, preferences.motion, preferences.nudgeEffects]);
+    return () => { window.clearTimeout(start); window.clearTimeout(stop); setNudgeActive(false); };
+  }, [canReceiveLiveNudges, messages, preferences.motion, preferences.nudgeEffects]);
   const activeThreadBase = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] : undefined;
   const activeThread = activeThreadBase && activeThreadRootId
     ? {
@@ -3929,44 +4112,56 @@ export function Workspace({
   const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
   const threadDraft = activeThreadRootId ? threadDrafts[activeThreadRootId] ?? '' : '';
   useLayoutEffect(() => { composerNavigation.current += 1; }, [effectiveRoomId, activeThreadRootId]);
-
-  const loadEarlier = useCallback((roomId: string): Promise<void> => {
-    const existing = historyRequests.current.get(roomId);
-    if (existing) return existing;
-    const request = Promise.resolve(onRoomSelected?.(roomId)).finally(() => {
-      historyRequests.current.delete(roomId);
-    });
-    historyRequests.current.set(roomId, request);
-    return request;
-  }, [onRoomSelected]);
+  useLayoutEffect(() => { currentHistoryRoom.current = effectiveRoomId; }, [effectiveRoomId]);
+  const selectedHistory = effectiveRoomId ? workspace.historyByRoom?.[effectiveRoomId] : undefined;
+  const pendingRouteRoom = pushRoute?.roomId ?? (pushRoute?.eventId
+    ? Object.entries(workspace.messagesByRoom).find(([, roomMessages]) => roomMessages.some((message) => message.id === pushRoute.eventId))?.[0]
+      ?? Object.values(workspace.threadsByRoot).flatMap((thread) => thread.messages).find((message) => message.id === pushRoute.eventId)?.roomId
+    : undefined);
+  // Block the cached live view before effects dispatch an incoming context route.
+  const pendingRouteContext = Boolean(pushRoute?.eventId && settledContextRoute !== pushRoute && pendingRouteRoom === effectiveRoomId);
+  useEffect(() => {
+    if (pushRoute?.eventId && pendingRouteRoom === effectiveRoomId && selectedHistory?.mode === 'context'
+      && selectedHistory.targetEventId === pushRoute.eventId) {
+      queueMicrotask(() => setSettledContextRoute(pushRoute));
+    }
+  }, [effectiveRoomId, pendingRouteRoom, pushRoute, selectedHistory?.mode, selectedHistory?.targetEventId]);
+  const paginateCurrentRoom = useCallback(async (direction: 'backward' | 'forward') => {
+    if (effectiveRoomId) await historyHandlers.current.onLoadRoomHistory?.(effectiveRoomId, direction);
+  }, [effectiveRoomId]);
+  const openCurrentEventContext = useCallback(async (eventId: string) => {
+    if (effectiveRoomId) await historyHandlers.current.onOpenEventContext?.(effectiveRoomId, eventId);
+  }, [effectiveRoomId]);
+  const returnCurrentRoomToLive = useCallback(async () => {
+    if (effectiveRoomId) await historyHandlers.current.onReturnToLive?.(effectiveRoomId);
+  }, [effectiveRoomId]);
+  const changeHistoryDetached = useCallback((detached: boolean) => {
+    if (effectiveRoomId) historyHandlers.current.onHistoryDetached?.(effectiveRoomId, detached);
+  }, [effectiveRoomId]);
 
   useEffect(() => {
-    if (
-      workspace.mode !== 'matrix' ||
-      !effectiveRoomId ||
-      !onRoomSelected ||
-      requestedRoomHistory.current.has(effectiveRoomId)
-    ) {
-      return;
-    }
-    requestedRoomHistory.current.add(effectiveRoomId);
-    void loadEarlier(effectiveRoomId).catch(() => {
-      requestedRoomHistory.current.delete(effectiveRoomId);
-      setNotice('Aimtrix could not load earlier messages for this room.');
+    if (workspace.mode !== 'matrix' || !effectiveRoomId || !historyHandlers.current.onRoomSelected) return;
+    let active = true;
+    void historyHandlers.current.onRoomSelected(effectiveRoomId).catch(() => {
+      if (active && currentHistoryRoom.current === effectiveRoomId) setNotice('Aimtrix could not open this room’s history. Try selecting the room again.');
     });
-  }, [effectiveRoomId, loadEarlier, onRoomSelected, workspace.mode]);
+    return () => { active = false; };
+  }, [effectiveRoomId, workspace.mode]);
 
   const markEffectiveRoomRead = useCallback((): Promise<void> => {
     if (
       workspace.mode !== 'matrix' ||
       !effectiveRoomId ||
+      pendingRouteContext ||
+      (selectedHistory && selectedHistory.mode !== 'live') ||
+      selectedHistory?.loading ||
       !preferences.sendReadReceipts ||
       !onMarkRoomRead
     ) {
       return Promise.resolve();
     }
     return onMarkRoomRead(effectiveRoomId);
-  }, [effectiveRoomId, onMarkRoomRead, preferences.sendReadReceipts, workspace.mode]);
+  }, [effectiveRoomId, onMarkRoomRead, pendingRouteContext, preferences.sendReadReceipts, selectedHistory, workspace.mode]);
 
   const unreadTotal = useMemo(
     () => workspace.rooms.reduce((total, room) => total + room.unreadCount, 0),
@@ -3993,16 +4188,42 @@ export function Workspace({
   }, []);
 
   useEffect(() => {
-    if (!pushRoute?.roomId || !workspace.rooms.some((room) => room.id === pushRoute.roomId)) return;
-    const targetSpace = workspace.spaces.find((space) => space.roomIds.includes(pushRoute.roomId!));
+    if (!pushRoute || handledPushRoute.current === pushRoute) return;
+    const eventRoomId = pushRoute.eventId && !pushRoute.roomId
+      ? Object.entries(workspace.messagesByRoom).find(([, roomMessages]) => roomMessages.some((message) => message.id === pushRoute.eventId))?.[0]
+        ?? Object.values(workspace.threadsByRoot).flatMap((thread) => thread.messages).find((message) => message.id === pushRoute.eventId)?.roomId
+      : undefined;
+    const roomId = pushRoute.roomId ?? eventRoomId;
+    if (!roomId) {
+      handledPushRoute.current = pushRoute;
+      queueMicrotask(() => setNotice('This notification does not include a room, and its message is not loaded. Open the conversation to find it.'));
+      return;
+    }
+    if (!workspace.rooms.some((room) => room.id === roomId)) {
+      if (missingPushRoom.current !== pushRoute) {
+        missingPushRoom.current = pushRoute;
+        queueMicrotask(() => setNotice('The notification’s room is not available in this account yet.'));
+      }
+      return;
+    }
+    handledPushRoute.current = pushRoute;
+    const targetSpace = workspace.spaces.find((space) => space.roomIds.includes(roomId));
     queueMicrotask(() => {
+      if (handledPushRoute.current !== pushRoute) return;
       if (targetSpace && targetSpace.id !== activeSpace) {
         setActiveSpace(targetSpace.id);
         void onSpaceSelected?.(targetSpace.id).catch(() => undefined);
       }
-      selectRoom(pushRoute.roomId!);
+      selectRoom(roomId);
+      if (pushRoute.eventId) {
+        const open = historyHandlers.current.onOpenEventContext;
+        if (!open) { setNotice('Message context is not available in this session.'); return; }
+        void open(roomId, pushRoute.eventId).catch(() => {
+          if (handledPushRoute.current === pushRoute && currentHistoryRoom.current === roomId) setNotice('The notification’s message could not be opened. Retry from the conversation history.');
+        });
+      }
     });
-  }, [activeSpace, onSpaceSelected, pushRoute?.roomId, selectRoom, workspace.rooms, workspace.spaces]);
+  }, [activeSpace, onSpaceSelected, pushRoute, selectRoom, workspace.messagesByRoom, workspace.rooms, workspace.spaces, workspace.threadsByRoot]);
 
   useEffect(() => {
     try {
@@ -4574,6 +4795,7 @@ export function Workspace({
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           <Conversation
             room={selectedRoom}
+            history={selectedHistory}
             members={effectiveMembersByRoom[effectiveRoomId ?? ''] ?? []}
             messages={messages}
             activeThread={activeThread}
@@ -4662,12 +4884,11 @@ export function Workspace({
             onUploadAttachment={(file, threadRootId, codeLanguage) => uploadAttachment(file, threadRootId, codeLanguage)}
             onCancelUpload={() => onCancelUpload?.()}
             onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload); }}
-            onLoadMore={async () => {
-              if (workspace.mode === 'matrix' && effectiveRoomId && onRoomSelected) {
-                await loadEarlier(effectiveRoomId);
-              }
-            }}
-            onReadLatest={markEffectiveRoomRead}
+            onLoadMore={onLoadRoomHistory ? paginateCurrentRoom : undefined}
+            onOpenContext={onOpenEventContext ? openCurrentEventContext : undefined}
+            onReturnToLive={onReturnToLive ? returnCurrentRoomToLive : undefined}
+            onDetachedChange={onHistoryDetached ? changeHistoryDetached : undefined}
+            onReadLatest={pendingRouteContext ? undefined : markEffectiveRoomRead}
             onSendNudge={() => {
               if (!effectiveRoomId || !onSendNudge) return;
               if (Date.now() - lastNudgeSentAt.current < 5_000) {

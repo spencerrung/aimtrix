@@ -28,6 +28,7 @@ import {
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { resolveHomeserver } from './discovery';
 import { MessageSendError } from './messageDelivery';
+import { RoomHistory } from './RoomHistory';
 import {
   matrixFormattedMessage,
   matrixReplyFormattedBody,
@@ -162,6 +163,10 @@ export class MatrixController {
   /** Server-side thread feature support level (0 = None, 1 = Stable, etc.) */
   private threadSupport = 0;
   private readonly snapshotCache = createWorkspaceSnapshotCache();
+  private readonly roomHistory = new RoomHistory(() => this.client, this.snapshotCache.history, (roomId) => {
+    this.bumpRoomVersion(roomId);
+    this.scheduleWorkspacePublish();
+  });
   private readonly mediaRequests = new Map<string, Promise<string | undefined>>();
   private readonly mediaObjectUrls = new Set<string>();
   private readonly pendingDeviceAuth = new Map<string, string>();
@@ -355,6 +360,7 @@ export class MatrixController {
   }
 
   public shutdown(): void {
+    this.roomHistory.clear();
     this.retryingMessages = new WeakSet();
     this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
@@ -1327,13 +1333,17 @@ export class MatrixController {
     }
   }
 
-  public async loadRoomHistory(roomId: string): Promise<void> {
-    const client = this.client;
-    const room = client?.getRoom(roomId);
-    if (!client || !room) return;
-    await client.scrollback(room, 50);
-    this.scheduleWorkspacePublish();
+  public openRoomHistory(roomId: string): Promise<void> { return this.roomHistory.open(roomId); }
+
+  public loadRoomHistory(roomId: string, direction: 'backward' | 'forward' = 'backward'): Promise<void> {
+    return this.roomHistory.load(roomId, direction);
   }
+
+  public openEventContext(roomId: string, eventId: string): Promise<void> { return this.roomHistory.context(roomId, eventId); }
+
+  public returnToLive(roomId: string): Promise<void> { return this.roomHistory.latest(roomId); }
+
+  public setHistoryDetached(roomId: string, detached: boolean): void { this.roomHistory.detach(roomId, detached); }
 
   public loadPersonalization(): UserPreferences | undefined {
     const event = (
@@ -2409,6 +2419,7 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    this.roomHistory.clear();
     this.retryingMessages = new WeakSet();
     this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
@@ -2535,6 +2546,13 @@ export class MatrixController {
     }
   };
 
+  private readonly handleTimelineReset = (room: Room | undefined): void => {
+    if (!room) return;
+    this.roomHistory.refresh(room);
+    this.bumpRoomVersion(room.roomId);
+    this.scheduleWorkspacePublish();
+  };
+
   private readonly handleTimeline = (
     event: MatrixEvent,
     room: Room | undefined,
@@ -2542,6 +2560,7 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
+    if (room) this.roomHistory.refresh(room);
     if (room && this.client?.getRoom(room.roomId) === room) {
       const events = this.snapshotCache.localEvents.get(room.roomId);
       for (const [txnId, localEvent] of events ?? []) {
@@ -2703,6 +2722,7 @@ export class MatrixController {
     const eventId = event.getId();
     const room = roomId && eventId ? this.client?.getRoom(roomId) : undefined;
     if (!eventId || !room?.findEventById(eventId)) return;
+    this.roomHistory.refresh(room);
     this.bumpRoomVersion(roomId);
     this.scheduleWorkspacePublish();
     if (eventId && roomId && this.liveEncryptedMessages.delete(eventId)) {
@@ -2740,6 +2760,9 @@ export class MatrixController {
   };
 
   private readonly handleRoomState = (event: MatrixEvent): void => {
+    const roomId = event.getRoomId();
+    const room = roomId ? this.client?.getRoom(roomId) : undefined;
+    if (room) this.roomHistory.refresh(room);
     this.bumpRoomVersion(event.getRoomId());
     this.scheduleWorkspacePublish();
   };
@@ -2791,6 +2814,7 @@ export class MatrixController {
     this.client.on(this.sdk.ClientEvent.Sync, this.handleSync);
     this.client.on(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.on(this.sdk.RoomEvent.Timeline, this.handleTimeline);
+    this.client.on(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
     this.client.on(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.on(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
     this.client.on(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);
@@ -2806,6 +2830,7 @@ export class MatrixController {
     this.client.removeListener(this.sdk.ClientEvent.Sync, this.handleSync);
     this.client.removeListener(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.removeListener(this.sdk.RoomEvent.Timeline, this.handleTimeline);
+    this.client.removeListener(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
     this.client.removeListener(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.removeListener(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
     this.client.removeListener(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);

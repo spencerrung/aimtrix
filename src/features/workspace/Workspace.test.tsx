@@ -11,6 +11,7 @@ import {
   type ProfilePersonalization,
 } from '../../settings/profilePersonalization';
 import { Workspace } from './Workspace';
+import type { PushRoute } from '../../pwa/pushRouting';
 import { MessageSendError } from '../../matrix/messageDelivery';
 function installResizeObserver() {
   const observers = new Set<ResizeObserverCallback>();
@@ -73,6 +74,12 @@ function renderWorkspace(
     onPreferencesChange?: (preferences: UserPreferences) => void;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     profilePersonalization?: ProfilePersonalization;
+    pushRoute?: PushRoute;
+    onRoomSelected?: (roomId: string) => Promise<void>;
+    onLoadRoomHistory?: (roomId: string, direction: 'backward' | 'forward') => Promise<void>;
+    onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
+    onReturnToLive?: (roomId: string) => Promise<void>;
+    onHistoryDetached?: (roomId: string, detached: boolean) => void;
     onMarkRoomRead?: (roomId: string) => Promise<void>;
     onSendMessage?: (
       roomId: string,
@@ -115,6 +122,12 @@ function renderWorkspace(
       onPreferencesChange={onPreferencesChange}
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onInviteToRoom={overrides.onInviteToRoom}
+      pushRoute={overrides.pushRoute}
+      onRoomSelected={overrides.onRoomSelected}
+      onLoadRoomHistory={overrides.onLoadRoomHistory}
+      onOpenEventContext={overrides.onOpenEventContext}
+      onReturnToLive={overrides.onReturnToLive}
+      onHistoryDetached={overrides.onHistoryDetached}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onSendMessage={overrides.onSendMessage}
       onSendReply={overrides.onSendReply}
@@ -787,6 +800,8 @@ describe('Workspace demo', () => {
     const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
 
     expect(screen.getByRole('separator', { name: '3 unread messages below' })).toBeInTheDocument();
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
     await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome'));
 
     const readWorkspace = structuredClone(workspace);
@@ -1535,5 +1550,276 @@ describe('Workspace demo', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe('Workspace history navigation', () => {
+  beforeEach(() => { localStorage.clear(); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  function historyWorkspace(mode: 'live' | 'history' | 'context' = 'history') {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.mode = 'matrix';
+    workspace.historyByRoom = { welcome: { mode, revision: 1, canLoadOlder: true, canLoadNewer: mode !== 'live' } };
+    return workspace;
+  }
+
+  it('pages in both directions explicitly, preserves a retry after failure, and reports the oldest boundary', async () => {
+    const pending = pendingSend();
+    const onLoadRoomHistory = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    const workspace = historyWorkspace();
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onLoadRoomHistory });
+    fireEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+    expect(onLoadRoomHistory).toHaveBeenCalledWith('welcome', 'backward');
+    expect(screen.getByText('Loading older messages…')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Load newer messages' })).toBeDisabled();
+    await act(async () => pending.reject(new Error('offline')));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not load older messages');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry older messages' }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    fireEvent.click(screen.getByRole('button', { name: 'Load newer messages' }));
+    await waitFor(() => expect(onLoadRoomHistory).toHaveBeenLastCalledWith('welcome', 'forward'));
+    const exhausted = structuredClone(workspace);
+    exhausted.historyByRoom!.welcome = { mode: 'history', revision: 2, canLoadOlder: false, canLoadNewer: false };
+    rerenderWorkspace(exhausted);
+    expect(screen.getByText('Beginning of available history.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Load older messages' })).not.toBeInTheDocument();
+  });
+
+  it('never marks a historical window read and waits for a new live snapshot before returning to the tail', async () => {
+    const pending = pendingSend();
+    const onReturnToLive = vi.fn().mockReturnValue(pending.promise);
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const workspace = historyWorkspace();
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive, onMarkRoomRead });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 300;
+    fireEvent.scroll(timeline);
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    expect(onReturnToLive).toHaveBeenCalledWith('welcome');
+    await act(async () => pending.resolve());
+    expect(timeline.scrollTop).toBe(300);
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeDisabled();
+    const unchanged = structuredClone(workspace);
+    unchanged.historyByRoom!.welcome.mode = 'live';
+    rerenderWorkspace(unchanged);
+    expect(timeline.scrollTop).toBe(300);
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    const live = structuredClone(unchanged);
+    live.historyByRoom!.welcome.revision = 2;
+    rerenderWorkspace(live);
+    expect(timeline.scrollTop).toBe(1000);
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: 'Jump to latest messages' })).not.toBeInTheDocument();
+  });
+
+  it('focuses the exact context target and exposes removed and unavailable states without sending receipts', () => {
+    const workspace = historyWorkspace('context');
+    workspace.historyByRoom!.welcome.targetEventId = 'm3';
+    workspace.historyByRoom!.welcome.targetStatus = 'found';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead, onOpenEventContext });
+    const target = container.querySelector('[data-event-id="m3"]');
+    expect(target).toHaveFocus();
+    expect(target).toHaveClass('timeline-message--target');
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    const removed = structuredClone(workspace);
+    removed.messagesByRoom.welcome = removed.messagesByRoom.welcome.filter((message) => message.id !== 'm3');
+    removed.historyByRoom!.welcome = { ...removed.historyByRoom!.welcome, revision: 2, targetEventId: 'missing', targetStatus: 'removed' };
+    rerenderWorkspace(removed);
+    expect(screen.getByLabelText('Message context')).toHaveFocus();
+    expect(screen.getByText(/This message was removed/)).toBeInTheDocument();
+    const unavailable = structuredClone(removed);
+    unavailable.historyByRoom!.welcome.targetStatus = 'unavailable';
+    rerenderWorkspace(unavailable);
+    fireEvent.click(screen.getByRole('button', { name: 'Try opening message again' }));
+    expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'missing');
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+  });
+
+  it('opens replied-to context even when the original event is not loaded', () => {
+    const workspace = historyWorkspace();
+    workspace.messagesByRoom.welcome[0].replyTo = { eventId: '$not-loaded', senderName: 'A friend', body: 'Earlier message' };
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace, onOpenEventContext });
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to replied message from A friend' }));
+    expect(onOpenEventContext).toHaveBeenCalledWith('welcome', '$not-loaded');
+  });
+
+  it('discards a pending old room failure and reactivates history on every room visit', async () => {
+    const pending = pendingSend();
+    const onRoomSelected = vi.fn().mockResolvedValue(undefined);
+    const onLoadRoomHistory = vi.fn().mockReturnValue(pending.promise);
+    renderWorkspace({ workspace: historyWorkspace(), onRoomSelected, onLoadRoomHistory });
+    fireEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    await act(async () => pending.reject(new Error('offline')));
+    expect(screen.queryByText(/Could not load older messages/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    expect(onRoomSelected.mock.calls.map(([roomId]) => roomId)).toEqual(['welcome', 'dev-shack', 'welcome']);
+  });
+
+  it('consumes a notification once across snapshot refreshes and handles a different event in the same room', async () => {
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    const options = { workspace: historyWorkspace(), pushRoute: { roomId: 'welcome', eventId: 'm2' }, onOpenEventContext };
+    const { rerenderWorkspace } = renderWorkspace(options);
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'm2'));
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    rerenderWorkspace(structuredClone(options.workspace));
+    expect(screen.getByLabelText('Message Dev Shack')).toBeInTheDocument();
+    expect(onOpenEventContext).toHaveBeenCalledTimes(1);
+    options.pushRoute = { roomId: 'welcome', eventId: 'm3' };
+    rerenderWorkspace(structuredClone(options.workspace));
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenLastCalledWith('welcome', 'm3'));
+    expect(onOpenEventContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not page on mount or snapshot refresh and only loads at a user-reached edge', async () => {
+    const onLoadRoomHistory = vi.fn().mockResolvedValue(undefined);
+    const onHistoryDetached = vi.fn();
+    const workspace = historyWorkspace();
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onLoadRoomHistory, onHistoryDetached });
+    rerenderWorkspace(structuredClone(workspace));
+    expect(onLoadRoomHistory).not.toHaveBeenCalled();
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 10;
+    fireEvent.scroll(timeline);
+    expect(onLoadRoomHistory).toHaveBeenCalledWith('welcome', 'backward');
+    expect(onHistoryDetached).toHaveBeenCalledWith('welcome', true);
+    await act(async () => {});
+  });
+
+  it('does not send a receipt for filtered loaded results when a new live message arrives', () => {
+    const workspace = historyWorkspace('live');
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 0; room.timelineUnreadCount = 0; room.readUpToMessageId = 'm5';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), { target: { value: 'Encryption' } });
+    const updated = structuredClone(workspace);
+    updated.messagesByRoom.welcome.push({ ...updated.messagesByRoom.welcome[0], id: 'later', body: 'Encryption update' });
+    updated.historyByRoom!.welcome.revision += 1;
+    rerenderWorkspace(updated);
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('restores a historical room’s reading position on revisit without overriding an explicit context target', async () => {
+    const workspace = historyWorkspace();
+    workspace.historyByRoom!['dev-shack'] = { mode: 'history', revision: 1, canLoadOlder: false, canLoadNewer: true };
+    const { rerenderWorkspace, container } = renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 300;
+    fireEvent.scroll(timeline);
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    timeline.scrollTop = 50;
+    fireEvent.scroll(timeline);
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    expect(timeline.scrollTop).toBe(300);
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    const context = structuredClone(workspace);
+    context.historyByRoom!.welcome = { ...context.historyByRoom!.welcome, mode: 'context', revision: 2, targetEventId: 'm2', targetStatus: 'found' };
+    rerenderWorkspace(context);
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    expect(container.querySelector('[data-event-id="m2"]')).toHaveFocus();
+    await act(async () => {});
+  });
+
+  it('does not replay a historical nudge when paging through old messages', async () => {
+    vi.useFakeTimers();
+    try {
+      const workspace = historyWorkspace();
+      workspace.messagesByRoom.welcome[0].nudge = true;
+      const { container, rerenderWorkspace } = renderWorkspace({ workspace });
+      act(() => vi.advanceTimersByTime(10));
+      expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
+      const context = structuredClone(workspace);
+      context.historyByRoom!.welcome.mode = 'context';
+      rerenderWorkspace(context);
+      act(() => vi.advanceTimersByTime(10));
+      expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
+      const live = structuredClone(workspace);
+      live.historyByRoom!.welcome.mode = 'live';
+      rerenderWorkspace(live);
+      act(() => vi.advanceTimersByTime(10));
+      expect(container.querySelector('.aimtrix-window')).toHaveClass('is-nudging');
+      rerenderWorkspace(context);
+      expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
+    } finally { vi.useRealTimers(); }
+    await act(async () => {});
+  });
+
+  it('blocks read receipts from a cached live room until a notification target has committed', async () => {
+    const workspace = historyWorkspace('live');
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 0; room.timelineUnreadCount = 0; room.readUpToMessageId = 'm5';
+    const pending = pendingSend();
+    const onOpenEventContext = vi.fn().mockReturnValue(pending.promise);
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, pushRoute: { roomId: 'welcome', eventId: 'm2' }, onOpenEventContext, onMarkRoomRead });
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'm2'));
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    // A refresh of the old live snapshot must not expose a receipt window.
+    rerenderWorkspace(structuredClone(workspace));
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    const context = structuredClone(workspace);
+    context.historyByRoom!.welcome = { ...context.historyByRoom!.welcome, mode: 'context', revision: 2, targetEventId: 'm2', targetStatus: 'found' };
+    rerenderWorkspace(context);
+    await act(async () => pending.resolve());
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    const live = structuredClone(workspace);
+    live.historyByRoom!.welcome.revision = 3;
+    rerenderWorkspace(live);
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome'));
+  });
+
+  it.each([true, false])('releases superseded pagination feedback when external context arrives (loading snapshot: %s)', async (includesLoadingSnapshot) => {
+    const older = pendingSend();
+    const newer = pendingSend();
+    const onLoadRoomHistory = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const workspace = historyWorkspace();
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onLoadRoomHistory });
+    fireEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+    expect(screen.getByText('Loading older messages…')).toBeInTheDocument();
+    const context = structuredClone(workspace);
+    context.historyByRoom!.welcome = { ...context.historyByRoom!.welcome, mode: 'context', revision: 2, targetEventId: 'm2' };
+    if (includesLoadingSnapshot) {
+      context.historyByRoom!.welcome.loading = 'context';
+      rerenderWorkspace(context);
+      expect(screen.queryByText('Loading older messages…')).not.toBeInTheDocument();
+      expect(screen.getByText('Opening message context…')).toBeInTheDocument();
+    }
+    const ready = structuredClone(context);
+    ready.historyByRoom!.welcome = { ...ready.historyByRoom!.welcome, revision: 3, loading: undefined, targetStatus: 'found' };
+    rerenderWorkspace(ready);
+    // The older request is still unresolved, but the context is fully usable.
+    expect(screen.queryByText('Loading older messages…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Load newer messages' }));
+    expect(onLoadRoomHistory).toHaveBeenLastCalledWith('welcome', 'forward');
+    await act(async () => older.reject(new Error('superseded request failed')));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Loading newer messages…')).toBeInTheDocument();
+    await act(async () => newer.resolve());
+    expect(screen.queryByText('Loading newer messages…')).not.toBeInTheDocument();
+  });
+
+  it('resolves event-only notifications from loaded messages and explains unknown events truthfully', async () => {
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    const options = { workspace: historyWorkspace(), pushRoute: { eventId: 'm2' }, onOpenEventContext };
+    const { rerenderWorkspace } = renderWorkspace(options);
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'm2'));
+    options.pushRoute = { eventId: '$unknown' };
+    rerenderWorkspace(structuredClone(options.workspace));
+    await waitFor(() => expect(screen.getByText(/This notification does not include a room/)).toBeInTheDocument());
+    expect(onOpenEventContext).toHaveBeenCalledTimes(1);
   });
 });

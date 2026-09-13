@@ -71,7 +71,7 @@ Use a distinct owner for concurrent runs. Cleanup never invokes Docker prune, re
 
 [stack.mjs](../tests/live-matrix/stack.mjs) owns image pins, generated settings, lifecycle, bounded HTTP calls and registration. [journeys.mjs](../tests/live-matrix/journeys.mjs) owns real browser actions and protocol assertions. Add a named check to the report allowlist with an explicit evidence claim; keep synthetic data generated at runtime. For history, receipts and recovery, reuse separate contexts and real Matrix helpers, and verify the recipient or restored device rather than only HTTP success.
 
-SAS/incoming verification, key-backup restore, withheld keys, old-thread/context retrieval, federation, delegated OIDC, Firefox/WebKit, physical/mobile/native shells, and large-account performance remain separate work. This baseline does not close their TODO items. Optional TURN/LiveKit and push/APNs/FCM infrastructure should use separate services, credentials, and jobs under #169/#176, so unavailable provider infrastructure cannot silently skip the baseline Matrix gate.
+SAS/incoming verification, key-backup restore, withheld keys, old-thread retrieval, federation, delegated OIDC, Firefox/WebKit, physical/mobile/native shells, and large-account performance remain separate work. This baseline does not close their TODO items. Optional TURN/LiveKit and push/APNs/FCM infrastructure should use separate services, credentials, and jobs under #169/#176, so unavailable provider infrastructure cannot silently skip the baseline Matrix gate.
 
 ## Validation record
 
@@ -106,3 +106,8 @@ The delivery change adds `encrypted-retry-reconnect-and-cancel` and `encrypted-t
 These checks exposed and now guard SDK chronological-thread gaps: unsent replies omitted from timelines, and accepted first replies missing after remote-echo reconciliation. Aimtrix retains original SDK events until a timeline owns them, with cancellation/session cleanup and immutable summary updates. See [delivery behavior and evidence](message-delivery.md). The 12/13-check records above remain historical evidence for their earlier revisions.
 
 September 13 local working-tree validation passed **15/15 twice**, including both delivery journeys and complete cleanup. The full local gate passed **274 unit tests** and **40 browser tests with 6 intentional project skips**. CI reports identify their own checkout revision.
+
+
+## Polish 06 extension
+
+The `encrypted-history-and-context` journey sends 350 real encrypted messages, reloads a device, pages backward beyond the visible limit and forward again, opens an exact old event with both neighbours, checks reading position during an incoming event, returns to live, and handles a redacted target. Normal runs now contain 16 checks. See [history navigation](history-navigation.md) for the implementation and remaining evidence boundaries.

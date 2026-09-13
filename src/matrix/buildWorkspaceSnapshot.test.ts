@@ -400,3 +400,46 @@ describe('message delivery snapshots', () => {
     expect(accepted[0]).toMatchObject({ body: 'Edited', edited: true });
   });
 });
+
+
+describe('history window snapshots', () => {
+  it('uses already-loaded late relations outside the selected pagination range', () => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Earlier' }, '$earlier');
+    const reaction = fakeEvent('m.reaction', { 'm.relates_to': { rel_type: 'm.annotation', event_id: '$earlier', key: '✨' } }, '$late-reaction');
+    const visibleChild = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Outside the selected window', 'm.relates_to': { rel_type: 'm.annotation', event_id: '$earlier', key: '✨' } }, '$visible-annotation');
+    const client = fakeClient([original]);
+    Object.assign(client.getVisibleRooms()[0], { getUnfilteredTimelineSet: () => ({ relations: { getAllChildEventsForEvent: (id: string) => id === '$earlier' ? [reaction, visibleChild] : [] } }) });
+    const cache = createWorkspaceSnapshotCache();
+    cache.history.set('!room:test', { events: [original], state: { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true } });
+    const selected = buildWorkspaceSnapshot(client, 'online', [], [], cache).messagesByRoom['!room:test'];
+    expect(selected).toHaveLength(1);
+    expect(selected[0].reactions).toEqual([{ key: '✨', count: 1, reacted: false }]);
+    expect(cache.history.get('!room:test')!.events).toEqual([original]);
+  });
+
+  it('renders selected older messages and their relations while the sidebar stays live', () => {
+    const events = Array.from({ length: 400 }, (_, index) => fakeEvent('m.room.message', { msgtype: 'm.text', body: `Synthetic history ${index}` }, `$history-${index}`));
+    const reaction = fakeEvent('m.reaction', { 'm.relates_to': { rel_type: 'm.annotation', event_id: '$history-10', key: '✨' } }, '$reaction');
+    const edit = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* Corrected', 'm.new_content': { msgtype: 'm.text', body: 'Corrected' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$history-10' } }, '$edit');
+    const client = fakeClient(events);
+    const cache = createWorkspaceSnapshotCache();
+    cache.history.set('!room:test', { events: [...events.slice(0, 250), reaction, edit], state: { mode: 'history', revision: 1, canLoadOlder: false, canLoadNewer: true } });
+    const snapshot = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    const messages = snapshot.messagesByRoom['!room:test'];
+    expect(messages).toHaveLength(250);
+    expect(messages[10]).toMatchObject({ id: '$history-10', body: 'Corrected', reactions: [{ key: '✨', count: 1, reacted: false }] });
+    expect(snapshot.rooms[0].lastMessage).toBe('Synthetic history 399');
+    expect(snapshot.historyByRoom?.['!room:test']).toMatchObject({ mode: 'history', canLoadNewer: true });
+  });
+
+  it('keeps unresolved reply targets actionable and does not append new local sends into old context', () => {
+    const reply = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'A reply', 'm.relates_to': { 'm.in_reply_to': { event_id: '$older' } } }, '$reply');
+    const pending = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'New synthetic send' }, '$pending', '@me:test'), { status: 'sending', getTxnId: () => 'pending-txn' }) as unknown as MatrixEvent;
+    const cache = createWorkspaceSnapshotCache();
+    cache.localEvents.set('!room:test', new Map([['pending-txn', pending]]));
+    cache.history.set('!room:test', { events: [reply], state: { mode: 'context', revision: 1, canLoadOlder: true, canLoadNewer: true, targetEventId: '$reply', targetStatus: 'found' } });
+    const snapshot = buildWorkspaceSnapshot(fakeClient([reply, pending]), 'online', [], [], cache);
+    expect(snapshot.messagesByRoom['!room:test']).toHaveLength(1);
+    expect(snapshot.messagesByRoom['!room:test'][0].replyTo).toEqual({ eventId: '$older', senderName: 'Earlier message', body: 'Open the original message' });
+  });
+});
