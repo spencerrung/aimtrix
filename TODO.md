@@ -155,11 +155,13 @@ These retain compatibility depth and validation obligations alongside additive f
 
 ### Scale, portability, and release validation
 
-- [ ] Add disposable Synapse integration CI for password/SSO, encrypted multi-device sync, backup restore, uploads, and moderation. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#164](https://github.com/spencerrung/aimtrix/issues/164).
+- [x] Add disposable Synapse/Dex integration infrastructure and CI for password/standard SSO, encrypted multi-device sync, authenticated encrypted uploads, and moderation; see [live evidence](docs/live-matrix-tests.md).
+- [ ] Extend disposable Synapse integration coverage to backup restore and complete release journeys. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#164](https://github.com/spencerrung/aimtrix/issues/164).
 - [ ] Add Firefox and WebKit browser matrices and screen-reader/manual keyboard audits. — [#162](https://github.com/spencerrung/aimtrix/issues/162).
 - [ ] Add 10k-room and long-running sync profiling beyond the current bundle/timeline bounds. — [#163](https://github.com/spencerrung/aimtrix/issues/163).
 - [ ] Virtualize the rendered timeline if profiling shows the bounded 250-event list still limits very large rooms. — [#146](https://github.com/spencerrung/aimtrix/issues/146), [#163](https://github.com/spencerrung/aimtrix/issues/163).
-- [ ] Verify send/receive latency and backdrop application against a live homeserver (demo-mode and unit coverage only exercise the local echo and incremental publish paths locally). — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#164](https://github.com/spencerrung/aimtrix/issues/164).
+- [x] Measure baseline live send/receive latency and verify shared/private backdrop application against disposable Synapse; scope and timings are recorded in [live evidence](docs/live-matrix-tests.md).
+- [ ] Extend latency/backdrop evidence to broader release topologies and scale targets. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#164](https://github.com/spencerrung/aimtrix/issues/164).
 - [ ] Complete clean-machine and physical-device native install/upgrade, secure-store, media and lifecycle validation for the existing Tauri/Capacitor implementations; retain platform-specific capability limits. — [#175](https://github.com/spencerrung/aimtrix/issues/175).
 
 - [ ] Verify real closed-app Web Push/APNs/FCM delivery and token/lifecycle behavior for claimed platforms; existing adapters and privacy proofs remain implemented. — [#176](https://github.com/spencerrung/aimtrix/issues/176).

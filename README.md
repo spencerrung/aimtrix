@@ -14,6 +14,8 @@ The [capability baseline](docs/capability-baseline.md) records what is implement
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) organizes the next implementation program into ordered GitHub issues with dependencies and acceptance criteria, while preserving Aimtrix's Aqua/Aero character. The [visual references and interaction rules](docs/design/interaction-rules.md) make the next layout and interaction decisions reviewable through a standalone synthetic prototype.
 
+The [disposable live Matrix harness](docs/live-matrix-tests.md) tests the built client against fresh Synapse and Dex services, including encrypted messaging across devices, authenticated encrypted media, moderation, backdrops, and standard SSO.
+
 Use the login-screen demo link, or open `/?demo=1`, to explore the interface without a Matrix account.
 
 ## Development

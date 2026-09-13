@@ -20,7 +20,9 @@
     "desktop:build": "tauri build",
     "desktop:info": "tauri info",
     "check": "npm run lint && npm run test && npm run build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:matrix": "node tests/live-matrix/run.mjs",
+    "test:matrix:privacy": "node --test tests/live-matrix/report.test.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

@@ -11,3 +11,6 @@ coverage/
 src-tauri/tauri.release.generated.json
 playwright-report/
 test-results/
+
+# Allowlisted disposable Matrix test summaries only; never browser/session traces.
+matrix-test-results/

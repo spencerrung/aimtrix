@@ -6,6 +6,8 @@ Tracking issue: [#140 — ordered implementation program](https://github.com/spe
 
 Step 02 deliverable: [Aqua/Aero visual references and interaction rules](design/interaction-rules.md), including a standalone interactive prototype, responsive/theme samples, and an issue-mapped implementation contract. Reference QA is separate from shipped-client and live Matrix acceptance.
 
+Step 03 deliverable: [disposable live Matrix tests](live-matrix-tests.md), with a reproducible Synapse/Dex setup, encrypted browser journeys, private diagnostics and CI. Broader recovery/native/provider gates remain open.
+
 ## Product goal
 
 Aimtrix should be a dependable daily Matrix client that people enjoy spending time in. Preserve its full-viewport hosted experience, roughly 65/35 Aqua-era character versus modern behavior, original Aero artwork, playful space rail, buddy list, personality drawer, foundational E2EE, and static self-hosting.

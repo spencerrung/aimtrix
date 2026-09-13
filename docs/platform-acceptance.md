@@ -4,7 +4,7 @@ Status: 0.x release-gate checklist
 
 See the dated [capability baseline](capability-baseline.md) for current command results and explicitly untested boundaries. This checklist defines required evidence; an unchecked manual scenario is not made complete by a passing browser suite.
 
-This is the repeatable acceptance plan for the hosted Aimtrix PWA and native clients. The [release operations runbook](release-operations.md) defines promotion ownership, evidence, rollback, and incident response; the [mobile-wrapper evaluation](mobile.md) records the current Capacitor-versus-Tauri recommendation and native blockers. Automated browser coverage proves browser-detectable behavior; it does not prove APNs/FCM/Web Push delivery, E2EE interoperability with a live homeserver, or OS-level install behavior. Those require the manual checks below.
+This is the repeatable acceptance plan for the hosted Aimtrix PWA and native clients. The [release operations runbook](release-operations.md) defines promotion ownership, evidence, rollback, and incident response; the [mobile-wrapper evaluation](mobile.md) records the current Capacitor-versus-Tauri recommendation and native blockers. The [disposable live Matrix harness](live-matrix-tests.md) adds dated Linux Chromium/Synapse/Dex evidence for its explicitly listed protocol journeys. The separate demo-based browser suite proves browser-detectable behavior; it does not prove APNs/FCM/Web Push delivery, E2EE interoperability with a live homeserver, or OS-level install behavior. Those require the manual checks below.
 
 ## Ownership and evidence
 
@@ -111,4 +111,4 @@ Re-run the relevant automated and manual rows when any of these change:
 - homeserver, push gateway, VAPID/APNs/FCM application, TURN, or LiveKit configuration;
 - the hosted origin, manifest, CSP, runtime configuration, or deployed image.
 
-The matrix is not a claim that live native/provider interoperability is complete. That release gate remains blocked until the disposable live delivery and multi-device E2EE checks have dated evidence.
+The matrix is not a claim that live native/provider interoperability is complete. The baseline harness supplies bounded multi-device E2EE evidence; native/provider delivery and the remaining release journeys still require their own dated evidence.
