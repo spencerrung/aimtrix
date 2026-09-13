@@ -1,5 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultUserPreferences } from './settings/preferences';
+import { defaultRuntimeConfig } from './config/runtimeConfig';
 import { demoWorkspace } from './demo/demoWorkspace';
 import { defaultProfilePersonalization, type ProfilePersonalization } from './settings/profilePersonalization';
 import type { MatrixControllerSnapshot } from './matrix/MatrixController';
@@ -36,6 +38,8 @@ beforeEach(() => {
   localStorage.clear(); sessionStorage.clear();
 });
 
+afterEach(() => { vi.restoreAllMocks(); });
+
 describe('App account privacy', () => {
   it('uses account data and never seeds another account from the old global profile cache', async () => {
     localStorage.setItem('aimtrix.profile.v1', JSON.stringify({ ...defaultProfilePersonalization, bio: 'Legacy account profile' }));
@@ -61,5 +65,27 @@ describe('App account privacy', () => {
     await act(async () => resolveUpdate());
     expect(screen.getByTestId('profile-bio')).toHaveTextContent('Restored profile');
     expect(screen.queryByText('Old pending update')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('App optional appearance storage', () => {
+  it.each(['methods', 'getter'])('keeps the controller storage error reachable when storage %s are denied', async (denied) => {
+    harness.snapshot = { status: 'error', issue: 'storage', canRetry: true, error: 'Encrypted storage is unavailable. Check browser permissions and try again.' };
+    const reject = () => { throw new DOMException('Synthetic denied storage', 'SecurityError'); };
+    if (denied === 'getter') vi.spyOn(window, 'localStorage', 'get').mockImplementation(reject);
+    else {
+      vi.spyOn(Storage.prototype, 'getItem').mockImplementation(reject);
+      vi.spyOn(Storage.prototype, 'setItem').mockImplementation(reject);
+      vi.spyOn(Storage.prototype, 'removeItem').mockImplementation(reject);
+    }
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Encrypted storage needs attention' })).toBeVisible();
+    expect(screen.getByText('Encrypted storage is unavailable. Check browser permissions and try again.')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    expect(screen.queryByTestId('profile-bio')).not.toBeInTheDocument();
+    expect(document.documentElement.dataset.theme).toBe(defaultRuntimeConfig.defaultTheme);
+    expect(document.documentElement.dataset.accent).toBe(defaultUserPreferences.accent);
+    expect(document.documentElement.dataset.density).toBe(defaultUserPreferences.density);
   });
 });

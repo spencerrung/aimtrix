@@ -14,6 +14,14 @@ describe('browser platform', () => {
     expect(platform.deepLinks.ssoRedirectUrl()).toContain(window.location.pathname);
   });
 
+  it('constructs without browser storage access so credential errors can reach recovery UI', async () => {
+    vi.spyOn(window, 'localStorage', 'get').mockImplementation(() => { throw new DOMException('Synthetic denial', 'SecurityError'); });
+    vi.spyOn(window, 'sessionStorage', 'get').mockImplementation(() => { throw new DOMException('Synthetic denial', 'SecurityError'); });
+    const platform = createBrowserPlatform();
+    await expect(platform.credentials.load()).rejects.toMatchObject({ name: 'SecurityError' });
+    await expect(platform.sso.load()).rejects.toMatchObject({ name: 'SecurityError' });
+  });
+
   it('keeps SSO state in the browser session until the callback completes', async () => {
     const platform = createBrowserPlatform();
     const pending = { baseUrl: 'https://matrix.example.com', serverName: 'example.com' };

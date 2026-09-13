@@ -38,27 +38,30 @@ export function parseStoredMatrixSession(value: unknown): StoredMatrixSession | 
 }
 
 export function createBrowserCredentialStore(
-  storage: Storage = localStorage,
+  storage?: Storage,
 ): CredentialStore<StoredMatrixSession> {
+  // Resolve browser storage during the operation, so construction still succeeds
+  // when the browser denies access and the controller can present recovery UI.
+  const target = () => storage ?? localStorage;
   return {
     async load() {
+      const source = target();
+      const serialized = source.getItem(SESSION_KEY);
+      if (!serialized) return undefined;
       try {
-        const serialized = storage.getItem(SESSION_KEY);
-        if (!serialized) return undefined;
-        const parsed: unknown = JSON.parse(serialized);
-        const session = parseStoredMatrixSession(parsed);
+        const session = parseStoredMatrixSession(JSON.parse(serialized));
         if (session) return session;
-        storage.removeItem(SESSION_KEY);
       } catch {
-        storage.removeItem(SESSION_KEY);
+        // Malformed records are removable; unavailable storage must reject.
       }
+      source.removeItem(SESSION_KEY);
       return undefined;
     },
     async save(session) {
-      storage.setItem(SESSION_KEY, JSON.stringify(session));
+      target().setItem(SESSION_KEY, JSON.stringify(session));
     },
     async clear() {
-      storage.removeItem(SESSION_KEY);
+      target().removeItem(SESSION_KEY);
     },
   };
 }

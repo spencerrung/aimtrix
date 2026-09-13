@@ -19,6 +19,7 @@ import { MediaProvider } from './matrix/MediaProvider';
 import { getAimtrixPlatform } from './platform/aimtrixPlatform';
 import { parsePushRoute, pushRouteFromMessage, type PushRoute } from './pwa/pushRouting';
 import {
+  defaultUserPreferences,
   loadUserPreferences,
   saveUserPreferences,
   type UserPreferences,
@@ -33,8 +34,13 @@ import {
 const THEME_KEY = 'aimtrix.theme';
 const DEMO_PROFILE_KEY = 'aimtrix.demo.profile.v1';
 
+// Appearance is optional. Credential and crypto storage failures stay with the controller.
+function optionalAppearance<T>(operation: (storage: Storage) => T, fallback: T): T {
+  try { return operation(window.localStorage); } catch { return fallback; }
+}
+
 function initialTheme(configured: ThemeName): ThemeName {
-  const saved = localStorage.getItem(THEME_KEY);
+  const saved = optionalAppearance((storage) => storage.getItem(THEME_KEY), null);
   return saved === 'aqua' || saved === 'graphite' || saved === 'midnight' ? saved : configured;
 }
 
@@ -51,8 +57,8 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
     () => config.features.demoMode && new URLSearchParams(window.location.search).get('demo') === '1',
   );
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme(config.defaultTheme));
-  const [preferences, setPreferences] = useState<UserPreferences>(() => loadUserPreferences());
-  const [demoPersonalization, setDemoPersonalization] = useState<ProfilePersonalization>(() => loadProfilePersonalization(localStorage, DEMO_PROFILE_KEY));
+  const [preferences, setPreferences] = useState<UserPreferences>(() => optionalAppearance(loadUserPreferences, { ...defaultUserPreferences }));
+  const [demoPersonalization, setDemoPersonalization] = useState<ProfilePersonalization>(() => optionalAppearance((storage) => loadProfilePersonalization(storage, DEMO_PROFILE_KEY), structuredClone(defaultProfilePersonalization)));
   const [accountPersonalization, setAccountPersonalization] = useState<{ owner: string; value: ProfilePersonalization }>();
   const profileOwner = snapshot.status === 'ready' ? snapshot.workspace.user.id : undefined;
   const profilePersonalization = snapshot.status === 'ready' && accountPersonalization?.owner === snapshot.workspace.user.id
@@ -92,7 +98,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
-    localStorage.setItem(THEME_KEY, theme);
+    optionalAppearance((storage) => storage.setItem(THEME_KEY, theme), undefined);
     const color = theme === 'midnight' ? '#1d2b3a' : theme === 'graphite' ? '#77818b' : '#72aee6';
     document.querySelector('meta[name="theme-color"]')?.setAttribute('content', color);
   }, [theme]);
@@ -131,7 +137,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
     root.dataset.messageScale = preferences.messageScale;
     root.dataset.motion = preferences.motion;
     root.dataset.messageSurface = preferences.messageSurface;
-    saveUserPreferences(preferences);
+    optionalAppearance((storage) => saveUserPreferences(preferences, storage), undefined);
     controller.setCallDevices({
       microphoneId: preferences.microphoneId,
       cameraId: preferences.cameraId,
@@ -156,13 +162,15 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         messageSurface: current.messageSurface,
       })));
     } else {
-      controller.savePersonalization(loadUserPreferences());
+      controller.savePersonalization(optionalAppearance(loadUserPreferences, { ...defaultUserPreferences }));
     }
   }, [controller, snapshot.status]);
 
   useEffect(() => {
-    if (demo) saveProfilePersonalization(demoPersonalization, localStorage, DEMO_PROFILE_KEY);
-    else localStorage.removeItem('aimtrix.profile.v1');
+    optionalAppearance((storage) => {
+      if (demo) saveProfilePersonalization(demoPersonalization, storage, DEMO_PROFILE_KEY);
+      else storage.removeItem('aimtrix.profile.v1');
+    }, undefined);
   }, [demo, demoPersonalization]);
 
   useEffect(() => {
