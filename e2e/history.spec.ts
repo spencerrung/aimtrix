@@ -48,7 +48,11 @@ test('older pages, reply context and return to live work across themes', async (
   await expect(timeline.locator('[data-event-id="$history-399"]')).toBeVisible();
   await expect(target).toHaveCount(0);
   for (let pageIndex = 0; pageIndex < 8 && await timeline.locator('[data-event-id="$history-0"]').count() === 0; pageIndex++) {
-    await page.getByRole('button', { name: 'Load older messages', exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+    const older = page.getByRole('button', { name: 'Load older messages', exact: true });
+    await expect(older).toBeEnabled();
+    const firstEvent = await timeline.locator('[data-event-id]').first().getAttribute('data-event-id');
+    await older.evaluate((button: HTMLButtonElement) => button.click());
+    await expect.poll(() => timeline.locator('[data-event-id]').first().getAttribute('data-event-id')).not.toBe(firstEvent);
     await expect(page.getByText('Loading older messages…', { exact: true })).toHaveCount(0);
     expect(await timeline.locator('.timeline-message').count()).toBeLessThanOrEqual(250);
   }
@@ -66,7 +70,11 @@ test('incoming events and content resizing preserve the detached reading anchor'
   // The fourth page adds at the older edge and trims the newer edge: total
   // row count stays 250, so scrollHeight deltas cannot preserve this anchor.
   for (let index = 0; index < 4; index++) {
-    await page.getByRole('button', { name: 'Load older messages', exact: true }).evaluate((button: HTMLButtonElement) => button.click());
+    const older = page.getByRole('button', { name: 'Load older messages', exact: true });
+    await expect(older).toBeEnabled();
+    const firstEvent = await timeline.locator('[data-event-id]').first().getAttribute('data-event-id');
+    await older.evaluate((button: HTMLButtonElement) => button.click());
+    await expect.poll(() => timeline.locator('[data-event-id]').first().getAttribute('data-event-id')).not.toBe(firstEvent);
     await expect(page.getByText('Loading older messages…', { exact: true })).toHaveCount(0);
     await expect.poll(async () => Math.abs((await anchor.boundingBox())!.y - top)).toBeLessThan(2);
   }

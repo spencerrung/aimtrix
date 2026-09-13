@@ -1,3 +1,5 @@
+import { MemberActions } from './MemberActions';
+import { useShellNavigation } from './useShellNavigation';
 import type { VolatileDrafts } from './volatileDrafts';
 import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
 import { useDialogBusy } from '../../components/dialogContext';
@@ -9,7 +11,6 @@ import {
   ArrowDown,
   ArrowLeft,
   ArrowUp,
-  Ban,
   BellRing,
   Check,
   ChevronDown,
@@ -41,7 +42,6 @@ import {
   Sparkles,
   Sticker,
   Trash2,
-  UserMinus,
   UserPlus,
   Users,
   Video,
@@ -1808,6 +1808,7 @@ type WorkspacePanelId = 'buddies' | 'conversation' | 'thread';
 type ComposerSubmitResult = 'sent' | 'edited' | 'retained' | false;
 
 function Conversation({
+  contextHost, contextPanel, conversationVisible, contextWidth, contextMaximum, onContextResize, onSearch, onCloseContext, onRevealConversation,
   room,
   history,
   members,
@@ -1871,6 +1872,15 @@ function Conversation({
   onLoadLinkPreview,
   onSendNudge,
 }: {
+  contextHost: HTMLDivElement | null;
+  contextPanel: 'thread' | 'details' | 'search' | null;
+  conversationVisible: boolean;
+  contextWidth: number;
+  contextMaximum: number;
+  onContextResize: (width: number) => void;
+  onSearch: () => void;
+  onCloseContext: () => void;
+  onRevealConversation: () => void;
   room?: RoomSummary;
   history?: HistorySummary;
   members: MemberSummary[];
@@ -1936,6 +1946,10 @@ function Conversation({
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
+  const edgeScrollIntent = useRef<{ direction?: 'backward' | 'forward'; roomId?: string; until: number } | undefined>(undefined);
+  const touchScrollY = useRef<number | undefined>(undefined);
+  const armEdgeScroll = (direction?: 'backward' | 'forward') => { edgeScrollIntent.current = { direction, roomId: room?.id, until: Date.now() + 750 }; };
+  useLayoutEffect(() => { edgeScrollIntent.current = undefined; }, [conversationVisible, room?.id]);
   const historyRequestToken = useRef(0);
   const activeHistoryRequest = useRef<number | undefined>(undefined);
   const historyActionRevision = useRef<number | undefined>(undefined);
@@ -1962,25 +1976,21 @@ function Conversation({
   const [composerCaret, setComposerCaret] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
   const [timelineDetached, setTimelineDetached] = useState(false);
-  const [threadPanelWidth, setThreadPanelWidth] = useState(() => {
-    try {
-      const stored = Number(localStorage.getItem('aimtrix.thread-panel-width.v1'));
-      return Number.isFinite(stored) ? Math.max(300, Math.min(stored, 680)) : 390;
-    } catch {
-      return 390;
-    }
-  });
+  const threadPanelWidth = contextWidth;
   const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
   const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
   const fileInput = useRef<HTMLInputElement>(null);
   const mainComposer = useRef<InlineComposerHandle>(null);
   const composerForm = useRef<HTMLFormElement>(null);
   const threadComposer = useRef<HTMLTextAreaElement>(null);
+  const threadFileInput = useRef<HTMLInputElement>(null);
+  const [threadMoreOpen, setThreadMoreOpen] = useState(false);
+  const [pendingSearchEvent, setPendingSearchEvent] = useState<{ roomId?: string; eventId: string }>();
   const [emojiOpen, setEmojiOpen] = useState(false);
   const [codeLanguage, setCodeLanguage] = useState('text');
   const [codeDraftMode, setCodeDraftMode] = useState(false);
   const composerNavigation = useRef(0);
-  useLayoutEffect(() => { composerNavigation.current += 1; }, [room?.id, threadRoot?.id]);
+  useLayoutEffect(() => { composerNavigation.current += 1; }, [room?.id, threadRoot?.id, contextPanel, conversationVisible]);
   const currentComposition = useRef({ draftRevision, threadDraftRevision, codeLanguage, codeDraftMode });
   useLayoutEffect(() => { currentComposition.current = { draftRevision, threadDraftRevision, codeLanguage, codeDraftMode }; });
   const [mentionsByRoom, setMentionsByRoom] = useState<Record<string, ComposerMention[]>>({});
@@ -2051,7 +2061,8 @@ function Conversation({
       return next;
     });
   }, []);
-  const [searchOpen, setSearchOpen] = useState(false);
+  const searchOpen = contextPanel === 'search';
+  const [moreOpen, setMoreOpen] = useState(false);
   const [gifOpen, setGifOpen] = useState(false);
   const [messageQuery, setMessageQuery] = useState('');
   const [stickerOpen, setStickerOpen] = useState(false);
@@ -2059,7 +2070,7 @@ function Conversation({
   const [stickerStatus, setStickerStatus] = useState<'idle' | 'loading' | 'error'>('idle');
   const [stickerManifest, setStickerManifest] = useState(defaultStickerPack ?? stickerPacks[0]?.manifestUrl ?? '');
   useEffect(() => {
-    if (!room?.id || window.matchMedia?.('(max-width: 720px)').matches) return;
+    if (!room?.id || window.matchMedia?.('(max-width: 767px)').matches) return;
     const frame = requestAnimationFrame(() => {
       if (document.activeElement === document.body || document.activeElement?.closest('.buddy-row')) mainComposer.current?.focus();
     });
@@ -2081,7 +2092,8 @@ function Conversation({
   const roomBackgroundStyle = roomBackgroundSource
     ? ({ '--room-backdrop-image': `url("${roomBackgroundSource}")` } as CSSProperties)
     : undefined;
-  const visibleMessages = messageQuery.trim()
+  const visibleMessages = messages;
+  const searchResults = messageQuery.trim()
     ? messages.filter((message) =>
         `${message.senderName} ${message.body}`.toLowerCase().includes(messageQuery.trim().toLowerCase()),
       )
@@ -2104,7 +2116,6 @@ function Conversation({
       roomId: room?.id,
       marker: resolveEntryUnreadMarker(room, messages),
     });
-    if (searchOpen) setSearchOpen(false);
     if (messageQuery) setMessageQuery('');
   } else if (
     entryUnreadState.marker &&
@@ -2422,7 +2433,7 @@ function Conversation({
 
   const restoreTimelineViewport = useCallback(() => {
     const element = timeline.current;
-    if (!element) return;
+    if (!element || !conversationVisible || element.closest('[hidden]')) return;
     if (viewportMode.current === 'bottom') {
       runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
       return;
@@ -2438,11 +2449,11 @@ function Conversation({
     }
     runProgrammaticScroll(() => { restoreTimelineAnchor(element, readingAnchor.current); });
     readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
-  }, [runProgrammaticScroll]);
+  }, [conversationVisible, runProgrammaticScroll]);
 
   useLayoutEffect(() => {
     const element = timeline.current;
-    if (!element) return;
+    if (!element || !conversationVisible || element.closest('[hidden]')) return;
     const roomChanged = previousRoomId.current !== room?.id;
     if (roomChanged) {
       if (previousRoomId.current) {
@@ -2548,7 +2559,7 @@ function Conversation({
     }
     if (history?.mode === 'live' && viewportMode.current !== 'bottom') onDetachedChange?.(true);
     previousTimelineMessages.current = messages;
-  }, [activeEntryUnreadMarker, history, historyAction, historicalWindow, messages, onDetachedChange, restoreTimelineViewport, room?.id, runProgrammaticScroll]);
+  }, [conversationVisible, activeEntryUnreadMarker, history, historyAction, historicalWindow, messages, onDetachedChange, restoreTimelineViewport, room?.id, runProgrammaticScroll]);
 
   useLayoutEffect(() => {
     const content = timelineContent.current;
@@ -2576,8 +2587,8 @@ function Conversation({
   const latestMessageId = messages.at(-1)?.id;
   const activeRoomId = room?.id;
   const reportLatestRead = useCallback(() => {
-    if (!activeRoomId || !latestMessageId || !onReadLatest || historicalWindow || history?.loading || historyAction
-      || messageQuery.trim() || viewportMode.current !== 'bottom' || (onReturnToLive && !history)) return;
+    if (!conversationVisible || !activeRoomId || !latestMessageId || !onReadLatest || historicalWindow || history?.loading || historyAction
+      || pendingSearchEvent || searchOpen || viewportMode.current !== 'bottom' || (onReturnToLive && !history)) return;
     const element = timeline.current;
     if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 48) return;
     if (reportedRead.current?.roomId === activeRoomId && reportedRead.current.eventId === latestMessageId) return;
@@ -2586,10 +2597,11 @@ function Conversation({
     void onReadLatest().catch(() => {
       if (reportedRead.current?.roomId === requested.roomId && reportedRead.current.eventId === requested.eventId) reportedRead.current = undefined;
     });
-  }, [activeRoomId, historicalWindow, history, historyAction, latestMessageId, messageQuery, onReadLatest, onReturnToLive]);
+  }, [conversationVisible, activeRoomId, historicalWindow, history, historyAction, latestMessageId, pendingSearchEvent, searchOpen, onReadLatest, onReturnToLive]);
 
   const requestHistory = useCallback(async (direction: 'backward' | 'forward', retry = false) => {
     if (!onLoadMore || activeHistoryRequest.current !== undefined || historyLoading || (!retry && (direction === 'backward' ? !history?.canLoadOlder : !history?.canLoadNewer))) return;
+    edgeScrollIntent.current = undefined;
     const element = timeline.current;
     if (element) readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
     viewportMode.current = 'detached';
@@ -2612,12 +2624,13 @@ function Conversation({
   }, [history?.canLoadNewer, history?.canLoadOlder, history?.revision, historyLoading, onDetachedChange, onLoadMore, room?.id]);
 
   const openContext = useCallback(async (eventId: string) => {
+    edgeScrollIntent.current = undefined;
+    if (!conversationVisible) { setPendingSearchEvent({ roomId: room?.id, eventId }); onRevealConversation(); return; }
     const element = timeline.current;
     if (element) readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
     viewportMode.current = 'detached';
     setTimelineDetached(true);
-    setMessageQuery('');
-    setSearchOpen(false);
+    if (searchOpen) onRevealConversation();
     setLocalHistoryError(undefined);
     positionedContext.current = undefined;
     pendingLatest.current = undefined;
@@ -2641,11 +2654,16 @@ function Conversation({
     } finally {
       if (token === historyRequestToken.current && previousRoomId.current === roomAtStart) { activeHistoryRequest.current = undefined; setHistoryAction(undefined); }
     }
-  }, [onDetachedChange, onOpenContext, room?.id, runProgrammaticScroll]);
+  }, [conversationVisible, onRevealConversation, onDetachedChange, onOpenContext, room?.id, runProgrammaticScroll, searchOpen]);
+  useEffect(() => {
+    if (conversationVisible && pendingSearchEvent) {
+      queueMicrotask(() => { setPendingSearchEvent(undefined); if (pendingSearchEvent.roomId === room?.id) void openContext(pendingSearchEvent.eventId); });
+    }
+  }, [conversationVisible, openContext, pendingSearchEvent, room?.id]);
 
   const returnToLatest = useCallback(() => {
-    setMessageQuery('');
-    setSearchOpen(false);
+    edgeScrollIntent.current = undefined;
+    if (searchOpen) onCloseContext();
     setLocalHistoryError(undefined);
     setLocalTarget(undefined);
     positionedContext.current = undefined;
@@ -2676,7 +2694,7 @@ function Conversation({
       runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
       reportLatestRead();
     });
-  }, [history, onDetachedChange, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll]);
+  }, [history, onCloseContext, onDetachedChange, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll, searchOpen]);
 
   useEffect(() => { if (viewportMode.current === 'bottom') reportLatestRead(); }, [history?.revision, latestMessageId, reportLatestRead, timelineDetached]);
 
@@ -2684,7 +2702,8 @@ function Conversation({
 
   const handleTimelineScroll = useCallback(() => {
     const element = timeline.current;
-    if (!element || programmaticTimelineScroll.current) return;
+    if (!element || !conversationVisible || programmaticTimelineScroll.current) return;
+    const movement = element.scrollTop - lastKnownScrollTop.current;
     const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
     lastKnownScrollTop.current = element.scrollTop;
     const detached = historicalWindow || !atBottom;
@@ -2694,10 +2713,14 @@ function Conversation({
     readingAnchor.current = captureTimelineAnchor(element);
     onDetachedChange?.(detached);
     if (!detached) reportLatestRead();
-    if (messageQuery.trim() || historyLoading || historyError) return;
-    if (element.scrollTop <= 80 && history?.canLoadOlder) void requestHistory('backward');
-    else if (atBottom && history?.canLoadNewer) void requestHistory('forward');
-  }, [historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, messageQuery, onDetachedChange, reportLatestRead, requestHistory]);
+    // Layout, focus and anchor restoration also emit scroll events. Only a
+    // fresh user scroll gesture may turn an edge into automatic pagination;
+    // otherwise a restored bounded window can immediately page itself away.
+    const intent = edgeScrollIntent.current;
+    if (!intent || intent.roomId !== activeRoomId || intent.until < Date.now() || historyLoading || historyError) return;
+    if (movement < 0 && intent.direction !== 'forward' && element.scrollTop <= 80 && history?.canLoadOlder) void requestHistory('backward');
+    else if (movement > 0 && intent.direction !== 'backward' && atBottom && history?.canLoadNewer) void requestHistory('forward');
+  }, [activeRoomId, conversationVisible, historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, onDetachedChange, reportLatestRead, requestHistory]);
 
   const loadEmojiCatalog = useCallback(() => {
     if (catalogRequested.current) return;
@@ -2800,14 +2823,10 @@ function Conversation({
     return () => controller.abort();
   }, [stickerManifest, stickerOpen]);
 
-  const setPanelWidth = (width: number) => {
-    const next = Math.max(300, Math.min(width, Math.min(680, window.innerWidth - 160)));
-    setThreadPanelWidth(next);
-    try { localStorage.setItem('aimtrix.thread-panel-width.v1', String(next)); } catch { /* best-effort */ }
-  };
+  const setPanelWidth = onContextResize;
 
   const startPanelResize = (event: PointerEvent<HTMLDivElement>) => {
-    if (window.matchMedia('(max-width: 720px)').matches) return;
+    if (window.matchMedia('(max-width: 767px)').matches) return;
     resizeStart.current = { x: event.clientX, width: threadPanelWidth };
     event.currentTarget.setPointerCapture(event.pointerId);
   };
@@ -2877,12 +2896,14 @@ function Conversation({
 
   return (
     <main
-      className={`conversation${activeThread && threadRoot && !threadCollapsed ? ' conversation--thread-open' : ''}${hasRoomBackground ? ` conversation--backdrop room-backdrop--${room.background?.preset ?? 'none'}${roomBackgroundSource ? ' has-custom-backdrop' : ''}` : ''}`}
+      inert={!conversationVisible}
+      hidden={!conversationVisible}
+      className={`conversation${hasRoomBackground ? ` conversation--backdrop room-backdrop--${room.background?.preset ?? 'none'}${roomBackgroundSource ? ' has-custom-backdrop' : ''}` : ''}`}
       style={{ ...roomBackgroundStyle, '--thread-panel-width': `${threadPanelWidth}px` } as CSSProperties}
       aria-label={`Conversation with ${room.name}`}
     >
       <header className="conversation-header">
-        <IconButton label="Back to buddy list" onClick={onBack}>
+        <IconButton className="conversation-back" label="Back to buddy list" onClick={onBack}>
           <ArrowLeft className="mobile-back" size={18} />
         </IconButton>
         <Avatar
@@ -2893,11 +2914,11 @@ function Conversation({
           size="small"
         />
         <div className="conversation-header__copy">
-          <h2>{room.name}</h2>
+          <h2 tabIndex={-1} data-room-heading>{room.name}</h2>
           <p>{room.statusMessage || (room.kind === 'direct' ? 'Direct message' : 'Matrix room')}</p>
         </div>
         <div className="conversation-header__actions">
-          <IconButton label="Search loaded messages" active={searchOpen} onClick={() => setSearchOpen((open) => !open)}><Search size={17} /></IconButton>
+          <IconButton label="Search loaded messages" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
           {room.encrypted ? <span className="encrypted-pill"><ShieldCheck size={13} /> Encrypted</span> : null}
           {callsEnabled && room.kind === 'direct' ? (
             <span className="header-call-actions">
@@ -2907,21 +2928,13 @@ function Conversation({
           ) : null}
           <IconButton label="Decorate conversation background" onClick={onOpenBackground}><Paintbrush size={17} /></IconButton>
           <IconButton className="conversation-header__desktop-action" label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
-          <IconButton className="conversation-header__desktop-action" label="Toggle room details" onClick={onToggleDetails}>
+          <IconButton label="Toggle room details" onClick={onToggleDetails}>
             <PanelRight size={18} />
           </IconButton>
         </div>
       </header>
       <div className="conversation-history-controls">
-      {searchOpen ? (
-        <label className="message-search">
-          <Search size={15} />
-          <span className="sr-only">Search loaded messages</span>
-          <input autoFocus value={messageQuery} placeholder="Search loaded messages" onChange={(event) => setMessageQuery(event.target.value)} />
-          {messageQuery ? <span>{visibleMessages.length} found</span> : null}
-          <button type="button" aria-label="Close message search" onClick={() => { setSearchOpen(false); setMessageQuery(''); }}><X size={14} /></button>
-        </label>
-      ) : null}
+
 
       {historyLoading ? <p className="history-progress" role="status">{historyLoading === 'backward' ? 'Loading older messages…' : historyLoading === 'forward' ? 'Loading newer messages…' : historyLoading === 'context' ? 'Opening message context…' : 'Returning to latest messages…'}</p> : null}
       {historyError ? <div className="history-feedback"><p role="alert">{historyError}</p>{historyErrorDirection && (historyErrorDirection !== 'context' || (onOpenContext && (localHistoryError?.eventId ?? history?.targetEventId))) ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => {
@@ -2942,6 +2955,15 @@ function Conversation({
         aria-label="Messages"
         aria-live="polite"
         onScroll={handleTimelineScroll}
+        onWheel={(event) => { if (event.deltaY) armEdgeScroll(event.deltaY < 0 ? 'backward' : 'forward'); }}
+        onTouchStart={(event) => { touchScrollY.current = event.touches[0]?.clientY; }}
+        onTouchMove={(event) => { const y = event.touches[0]?.clientY; if (y !== undefined && touchScrollY.current !== undefined && y !== touchScrollY.current) armEdgeScroll(y > touchScrollY.current ? 'backward' : 'forward'); touchScrollY.current = y; }}
+        onPointerDown={(event) => { if (event.target === event.currentTarget) armEdgeScroll(); }}
+        onKeyDown={(event) => {
+          if (event.defaultPrevented || (event.target as HTMLElement).closest('button, input, textarea, select, [contenteditable=true]')) return;
+          if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) armEdgeScroll('backward');
+          else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) armEdgeScroll(event.shiftKey && event.key === ' ' ? 'backward' : 'forward');
+        }}
       >
         <div ref={timelineContent} className="timeline-content">
           {history && onLoadMore ? <div className="history-edge">{history.canLoadOlder
@@ -3016,15 +3038,15 @@ function Conversation({
       </section>
       {timelineDetached || historicalWindow ? <button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button> : null}
 
-      {activeThread && threadRoot && !threadCollapsed ? (
-        <aside className="thread-panel" aria-label="Thread" style={{ width: threadPanelWidth }}>
+      {contextHost && activeThread && threadRoot ? createPortal(
+        <aside hidden={contextPanel !== 'thread' || threadCollapsed} inert={contextPanel !== 'thread' || threadCollapsed} className="thread-panel" aria-label="Thread">
           <div
             className="thread-panel__resize"
             role="separator"
             aria-label="Resize thread panel"
             aria-orientation="vertical"
-            aria-valuemin={300}
-            aria-valuemax={680}
+            aria-valuemin={260}
+            aria-valuemax={contextMaximum}
             aria-valuenow={Math.round(threadPanelWidth)}
             tabIndex={0}
             onPointerDown={startPanelResize}
@@ -3034,13 +3056,13 @@ function Conversation({
             onKeyDown={(event) => {
               if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth(threadPanelWidth + 24); }
               if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth(threadPanelWidth - 24); }
-              if (event.key === 'Home') { event.preventDefault(); setPanelWidth(300); }
-              if (event.key === 'End') { event.preventDefault(); setPanelWidth(680); }
+              if (event.key === 'Home') { event.preventDefault(); setPanelWidth(260); }
+              if (event.key === 'End') { event.preventDefault(); setPanelWidth(contextMaximum); }
             }}
           />
           <header className="thread-panel__header">
-            <span><MessageCircle size={16} /><strong>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}</small></span>
-            <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><X size={16} /></button></span>
+            <span><MessageCircle size={16} /><strong tabIndex={-1} data-panel-heading>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}</small></span>
+            <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></span>
           </header>
           <div className="thread-panel__timeline">
             <div className="thread-panel__root">
@@ -3085,6 +3107,10 @@ function Conversation({
             ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
           </div> : null}
           <form className="thread-panel__composer" onSubmit={submitThread}>
+            {notice && (uploadInProgress || failedUploadName) ? <div className="thread-panel__composer-context" role="status"><span>{notice}</span>{uploadInProgress ? <button type="button" onClick={onCancelUpload}>Cancel upload</button> : <button type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button>}</div> : null}
+            <input ref={threadFileInput} type="file" className="sr-only" aria-label="Choose thread attachment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onUploadAttachment(file, threadRoot.id); event.target.value = ''; }} />
+            <button type="button" aria-label="More thread tools" aria-expanded={threadMoreOpen} onClick={() => setThreadMoreOpen((open) => !open)}><Plus size={18} /></button>
+            {threadMoreOpen && contextPanel === 'thread' ? <Popover className="thread-tools" label="Thread tools" onClose={() => setThreadMoreOpen(false)}><button type="button" onClick={() => { threadFileInput.current?.click(); setThreadMoreOpen(false); }}>Attach a file</button></Popover> : null}
             {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={cancelThreadEdit}><X size={14} /></button></div> : null}
             <label>
               <span className="sr-only">Message thread</span>
@@ -3107,8 +3133,18 @@ function Conversation({
               <Send size={15} /> Send
             </button>
           </form>
-        </aside>
+        </aside>, contextHost
       ) : null}
+      {contextHost && contextPanel === 'thread' && (!activeThread || !threadRoot) ? createPortal(<aside className="search-panel" aria-label="Thread">
+        <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Thread</strong><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></header>
+        <p className="search-scope" role="status">This thread is no longer in the loaded conversation. Return to the conversation to find its available context. Your draft is kept for this session.</p>
+      </aside>, contextHost) : null}
+      {contextHost ? createPortal(<aside hidden={!searchOpen} inert={!searchOpen} className="search-panel" aria-label="Search loaded messages">
+        <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Search loaded messages</strong><button type="button" aria-label="Close message search" onClick={onCloseContext}><X size={16} /></button></header>
+        <label className="message-search"><Search size={15} /><span className="sr-only">Search loaded messages</span><input value={messageQuery} placeholder="Search loaded messages" onChange={(event) => setMessageQuery(event.target.value)} /></label>
+        <p className="search-scope">Search covers messages loaded in this conversation.</p>
+        <div className="search-results">{messageQuery.trim() ? <><p role="status">{searchResults.length} found</p>{searchResults.map((message) => <button key={message.id} type="button" onClick={() => void openContext(message.id)}><strong>{message.senderName}</strong><span>{message.body}</span></button>)}</> : <p>Enter a name or phrase to find a message.</p>}</div>
+      </aside>, contextHost) : null}
       {activeThread && threadRoot && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
 
       <div className="typing-strip" aria-live="polite">
@@ -3123,10 +3159,10 @@ function Conversation({
           <button type="button" aria-label="Cancel reply or edit" onClick={cancelContext}><X size={15} /></button>
         </div>
       ) : null}
-      {gifOpen && gifEndpoint ? (
+      {conversationVisible && gifOpen && gifEndpoint ? (
         <Popover className="gif-popover" label="GIF picker" onClose={() => setGifOpen(false)}><GifPicker endpoint={gifEndpoint} onSelect={(gif) => { onSendGif(gif); setGifOpen(false); }} /></Popover>
       ) : null}
-      {stickerOpen ? (
+      {conversationVisible && stickerOpen ? (
         <Popover className="sticker-tray" label="Sticker picker" onClose={() => setStickerOpen(false)}>
           <header><strong>Sticker packs</strong><select aria-label="Sticker pack" value={stickerManifest} onChange={(event) => setStickerManifest(event.target.value)}>{stickerPacks.map((pack) => <option value={pack.manifestUrl} key={pack.manifestUrl}>{pack.name}</option>)}</select></header>
           <div aria-busy={stickerStatus === 'loading'}>
@@ -3144,7 +3180,7 @@ function Conversation({
           </div>
         </Popover>
       ) : null}
-      {emojiOpen ? (
+      {conversationVisible && emojiOpen ? (
         <Popover className="emoji-tray" label="Emoji picker" onClose={() => setEmojiOpen(false)}>
           <header><strong>Emoji</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
           <label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input value={emojiQuery} placeholder="Search emoji" onChange={(event) => setEmojiQuery(event.target.value)} /></label>
@@ -3210,7 +3246,9 @@ function Conversation({
           onClick={() => insertMention(member)}
         ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
       </div> : null}
-      <form ref={composerForm} className="composer" onSubmit={submit}>
+      <form ref={composerForm} className="composer" onSubmit={submit} onKeyDown={(event) => {
+        if (event.key === 'Escape' && moreOpen) { event.preventDefault(); event.stopPropagation(); setMoreOpen(false); composerForm.current?.querySelector<HTMLButtonElement>('.composer__more')?.focus(); }
+      }}>
         <input
           ref={fileInput}
           className="sr-only"
@@ -3222,11 +3260,9 @@ function Conversation({
             event.target.value = '';
           }}
         />
-        <IconButton className="composer__attachment" label="Attach a file" onClick={() => fileInput.current?.click()}>
-          <Paperclip size={18} />
-        </IconButton>
         <label className="composer__field">
           <span className="sr-only">Message {room.name}</span>
+          {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
           <InlineComposer
             ref={mainComposer}
             ariaLabel={`Message ${room.name}`}
@@ -3267,8 +3303,9 @@ function Conversation({
             onBlur={() => setComposerFocused(false)}
           />
         </label>
-        <div className="composer__actions">
-          {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
+        <button type="button" className="icon-button composer__more" aria-label="More message tools" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><Plus size={18} /></button>
+        <div aria-label="Message tools" className={`composer__actions${moreOpen ? ' is-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMoreOpen(false); composerForm.current?.querySelector<HTMLButtonElement>('.composer__more')?.focus(); } }}>
+          <IconButton className="composer__attachment-more" label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={18} /></IconButton>
           {gifEndpoint ? (
             <IconButton label="Search GIFs" active={gifOpen} onClick={() => {
             setGifOpen((open) => !open);
@@ -3734,19 +3771,7 @@ function DetailsPanel({
                       size="small"
                     />
                     <span><strong>{member.displayName}</strong><small>{member.membership === 'ban' ? 'Banned' : member.membership === 'invite' ? 'Invited' : member.role || member.presence}</small></span>
-                    {room.canManage && member.id !== workspace.user.id && (member.powerLevel ?? 0) < (room.ownPowerLevel ?? 0) ? (
-                      <span className="member-moderation">
-                        {member.membership === 'ban' ? (
-                          <button type="button" title="Unban member" aria-label={`Unban ${member.displayName}`} onClick={() => void runRoomAction('Unban member', () => onRemoveMember?.(room.id, member.id, 'unban') ?? Promise.resolve())}><Check size={12} /></button>
-                        ) : (
-                          <>
-                            {(room.ownPowerLevel ?? 0) >= 100 ? <select aria-label={`Role for ${member.displayName}`} value={(member.powerLevel ?? 0) >= 50 ? 50 : (member.powerLevel ?? 0) >= 25 ? 25 : 0} onChange={(event) => void runRoomAction('Update role', () => onSetMemberPower?.(room.id, member.id, Number(event.target.value)) ?? Promise.resolve())}><option value="0">Member</option><option value="25">Decorator</option><option value="50">Moderator</option></select> : null}
-                            {member.membership === 'join' ? <button type="button" title="Remove member" aria-label={`Remove ${member.displayName}`} onClick={() => setConfirmation({ title: `Remove member: ${member.displayName}?`, description: 'They will need to rejoin or be invited again.', label: 'Remove member', action: () => onRemoveMember?.(room.id, member.id, 'kick') ?? Promise.resolve() })}><UserMinus size={12} /></button> : null}
-                            <button type="button" title="Ban member" aria-label={`Ban ${member.displayName}`} onClick={() => setConfirmation({ title: `Ban member: ${member.displayName}?`, description: 'They cannot rejoin until a moderator removes the ban.', label: 'Ban member', action: () => onRemoveMember?.(room.id, member.id, 'ban') ?? Promise.resolve() })}><Ban size={12} /></button>
-                          </>
-                        )}
-                      </span>
-                    ) : null}
+                    <MemberActions room={room} member={member} currentUserId={workspace.user.id} onRemoveMember={onRemoveMember} onSetMemberPower={onSetMemberPower} onRunAction={runRoomAction} onConfirm={setConfirmation} />
                   </div>
                 )) : <p className="drawer-empty">No buddy details have arrived yet.</p>}
               </div>
@@ -3923,14 +3948,68 @@ export function Workspace({
     }
   });
   const [query, setQuery] = useState('');
-  const [detailsOpen, setDetailsOpen] = useState(preferences.detailsOpenByDefault);
+  const { route: shellRoute, navigate: navigateShell, back: shellBack } = useShellNavigation({
+    surface: 'list', roomId: selectedRoomId, spaceId: activeSpace,
+    panel: preferences.detailsOpenByDefault ? 'details' : null,
+  });
+  const [shellWidth, setShellWidth] = useState(window.innerWidth);
+  const contextDocked = shellWidth >= 1200;
+  const mobileChatOpen = shellRoute.surface !== 'list';
+  const contextPanel = contextDocked || shellRoute.surface === 'context' ? shellRoute.panel : null;
+  const detailsOpen = contextPanel === 'details';
+  const conversationVisible = (shellWidth >= 768 || mobileChatOpen) && (contextDocked || !contextPanel);
+  const [contextHost, setContextHost] = useState<HTMLDivElement | null>(null);
+  const contextOpener = useRef<HTMLElement | null>(null);
+  const suppressContextReturnFocus = useRef(false);
+  const previousFocusRoute = useRef({ panel: contextPanel, surface: shellRoute.surface, roomId: selectedRoomId });
+  const openPanel = useCallback((panel: 'thread' | 'details' | 'search', threadRootId?: string) => {
+    if (!shellRoute.panel || shellRoute.surface !== 'context') contextOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    navigateShell({ ...shellRoute, surface: 'context', roomId: selectedRoomId, spaceId: activeSpace, panel, threadRootId: threadRootId ?? shellRoute.threadRootId });
+  }, [activeSpace, navigateShell, selectedRoomId, shellRoute]);
+  const closePanel = useCallback(() => {
+    if (shellRoute.surface === 'context') shellBack();
+    else navigateShell({ ...shellRoute, panel: null }, { replace: true });
+  }, [navigateShell, shellBack, shellRoute]);
+  useLayoutEffect(() => {
+    const element = appStage.current;
+    if (!element || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => setShellWidth(element.clientWidth || window.innerWidth));
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const previous = previousFocusRoute.current;
+    if (previous.panel === contextPanel && previous.surface === shellRoute.surface && previous.roomId === selectedRoomId) return;
+    previousFocusRoute.current = { panel: contextPanel, surface: shellRoute.surface, roomId: selectedRoomId };
+    if (shellWidth >= 768 && previous.roomId !== selectedRoomId && previous.panel === contextPanel && shellRoute.surface !== 'context') return;
+    const scheduledFrom = document.activeElement;
+    const frame = requestAnimationFrame(() => {
+      const active = document.activeElement;
+      if (active !== scheduledFrom && active instanceof HTMLElement && active !== document.body && !active.closest('[hidden], [inert]')) return;
+      if (contextPanel && (previous.panel !== contextPanel || (shellRoute.surface === 'context' && previous.surface !== 'context'))) contextHost?.querySelector<HTMLElement>(':scope > :not([hidden]) [data-panel-heading]')?.focus({ preventScroll: true });
+      else if (shellRoute.surface === 'list' && shellWidth < 768) appStage.current?.querySelector<HTMLElement>('.buddy-row--selected')?.focus({ preventScroll: true });
+      else {
+        if (suppressContextReturnFocus.current) { suppressContextReturnFocus.current = false; return; }
+        const opener = previous.panel && !contextPanel ? contextOpener.current : null;
+        if (opener?.isConnected && opener.getClientRects().length) opener.focus({ preventScroll: true });
+        else appStage.current?.querySelector<HTMLElement>('[data-room-heading]')?.focus({ preventScroll: true });
+      }
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [contextHost, contextPanel, selectedRoomId, shellRoute.surface, shellWidth]);
   const [deleteTarget, setDeleteTarget] = useState<MessageSummary>();
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
-  const [mobileChatOpen, setMobileChatOpen] = useState(false);
   const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
+  const [appliedShellRoute, setAppliedShellRoute] = useState(shellRoute);
+  if (appliedShellRoute !== shellRoute) {
+    setAppliedShellRoute(shellRoute);
+    if (shellRoute.roomId) setSelectedRoomId(shellRoute.roomId);
+    if (shellRoute.spaceId) setActiveSpace(shellRoute.spaceId);
+    if (shellRoute.threadRootId) setActiveThreadRootId(shellRoute.threadRootId);
+  }
   const [threadCollapsed, setThreadCollapsed] = useState(false);
   const [collapsedPanels, setCollapsedPanels] = useState<Record<WorkspacePanelId, boolean>>(() => {
     try {
@@ -3943,13 +4022,17 @@ export function Workspace({
     try {
       const stored = JSON.parse(localStorage.getItem('aimtrix.workspace-panel-widths.v1') || '{}') as Partial<{ buddies: number; details: number }>;
       return {
-        buddies: typeof stored.buddies === 'number' ? Math.max(220, Math.min(stored.buddies, 520)) : 300,
-        details: typeof stored.details === 'number' ? Math.max(260, Math.min(stored.details, 560)) : 300,
+        buddies: typeof stored.buddies === 'number' ? Math.max(220, Math.min(stored.buddies, 520)) : 248,
+        details: typeof stored.details === 'number' ? Math.max(260, Math.min(stored.details, 560)) : 320,
       };
     } catch {
-      return { buddies: 300, details: 300 };
+      return { buddies: 248, details: 320 };
     }
   });
+  const buddyWidth = collapsedPanels.buddies ? 48 : contextDocked
+    ? Math.min(panelWidths.buddies, Math.max(220, shellWidth - 66 - 16 - 420 - (contextPanel ? 260 : 0))) : 232;
+  const contextMaximum = Math.max(260, Math.min(560, shellWidth - 66 - buddyWidth - 16 - 420));
+  const contextWidth = Math.min(panelWidths.details, contextMaximum);
   const panelResizeStart = useRef<{ panel: 'buddies' | 'details'; x: number; width: number } | undefined>(undefined);
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
   const [drafts, setDrafts] = useState<Record<string, string>>(() => draftStore?.read(workspace.user.id).rooms ?? {});
@@ -3987,7 +4070,8 @@ export function Workspace({
   const [sending, setSending] = useState(false);
   const [threadSending, setThreadSending] = useState(false);
   const [uploadInProgress, setUploadInProgress] = useState(false);
-  const [failedUpload, setFailedUpload] = useState<File>();
+  const uploadRunning = useRef(false);
+  const [failedUpload, setFailedUpload] = useState<{ file: File; roomId: string; threadRootId?: string; codeLanguage?: string }>();
   const [notice, setNotice] = useState<string>();
   const [nudgeActive, setNudgeActive] = useState(false);
   const latestNudgeId = useRef<string | undefined>(undefined);
@@ -4071,6 +4155,14 @@ export function Workspace({
   const effectiveRoomId = visibleRooms.some((room) => room.id === selectedRoomId)
     ? selectedRoomId
     : visibleRooms[0]?.id;
+  const [compositionRoom, setCompositionRoom] = useState(effectiveRoomId);
+  if (compositionRoom !== effectiveRoomId) {
+    setCompositionRoom(effectiveRoomId);
+    setReplyTarget(undefined);
+    setReplyThreadRootId(undefined);
+    setEditingMessage(undefined);
+    setEditingThreadMessage(undefined);
+  }
   const selectedRoomBase = visibleRooms.find((room) => room.id === effectiveRoomId);
   const scopeSpace = activeSpaceSummary?.kind === 'matrix' && effectiveRoomId && activeSpaceSummary.roomIds.includes(effectiveRoomId)
     ? activeSpaceSummary
@@ -4117,7 +4209,7 @@ export function Workspace({
     : undefined;
   const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
   const threadDraft = activeThreadRootId ? threadDrafts[activeThreadRootId] ?? '' : '';
-  useLayoutEffect(() => { composerNavigation.current += 1; }, [effectiveRoomId, activeThreadRootId]);
+  useLayoutEffect(() => { composerNavigation.current += 1; }, [effectiveRoomId, activeThreadRootId, contextPanel, conversationVisible]);
   useLayoutEffect(() => { currentHistoryRoom.current = effectiveRoomId; }, [effectiveRoomId]);
   const selectedHistory = effectiveRoomId ? workspace.historyByRoom?.[effectiveRoomId] : undefined;
   const pendingRouteRoom = pushRoute?.roomId ?? (pushRoute?.eventId
@@ -4182,16 +4274,16 @@ export function Workspace({
     [config.emojiPacks],
   );
 
-  const selectRoom = useCallback((roomId: string) => {
+  const selectRoom = useCallback((roomId: string, spaceId = activeSpace) => {
     setSelectedRoomId(roomId);
-    setMobileChatOpen(true);
+    navigateShell({ surface: 'conversation', roomId, spaceId, panel: contextDocked && shellRoute.panel === 'details' ? 'details' : null });
     setNotice(undefined);
     setReplyTarget(undefined);
     setReplyThreadRootId(undefined);
     setEditingMessage(undefined);
     setEditingThreadMessage(undefined);
     setActiveThreadRootId(undefined);
-  }, []);
+  }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
   useEffect(() => {
     if (!pushRoute || handledPushRoute.current === pushRoute) return;
@@ -4218,9 +4310,8 @@ export function Workspace({
       if (handledPushRoute.current !== pushRoute) return;
       if (targetSpace && targetSpace.id !== activeSpace) {
         setActiveSpace(targetSpace.id);
-        void onSpaceSelected?.(targetSpace.id).catch(() => undefined);
       }
-      selectRoom(roomId);
+      selectRoom(roomId, targetSpace?.id ?? activeSpace);
       if (pushRoute.eventId) {
         const open = historyHandlers.current.onOpenEventContext;
         if (!open) { setNotice('Message context is not available in this session.'); return; }
@@ -4239,12 +4330,15 @@ export function Workspace({
     }
   }, [locationKey, selectedRoomId, activeSpace]);
 
+  useEffect(() => {
+    if (workspace.mode === 'matrix') void onSpaceSelected?.(activeSpace).catch(() => undefined);
+  }, [activeSpace, onSpaceSelected, workspace.mode]);
+
   const selectSpace = (spaceId: string) => {
     const space = workspace.spaces.find((candidate) => candidate.id === spaceId);
     setActiveSpace(spaceId);
     setQuery('');
-    setMobileChatOpen(false);
-    if (workspace.mode === 'matrix') void onSpaceSelected?.(spaceId).catch(() => undefined);
+    navigateShell({ surface: 'list', spaceId, roomId: space?.roomIds.includes(selectedRoomId ?? '') ? selectedRoomId : space?.roomIds[0], panel: contextDocked && shellRoute.panel === 'details' ? 'details' : null });
     if (space && !space.roomIds.includes(selectedRoomId ?? '')) {
       setSelectedRoomId(space.roomIds.find((roomId) => workspace.rooms.some((room) => room.id === roomId)));
     }
@@ -4254,12 +4348,13 @@ export function Workspace({
     if (typingTimer.current !== undefined) window.clearTimeout(typingTimer.current);
   }, []);
 
-  const uploadAttachment = async (file: File, threadRootId?: string, codeLanguage?: string): Promise<boolean> => {
-    if (!effectiveRoomId) return false;
+  const uploadAttachment = async (file: File, threadRootId?: string, codeLanguage?: string, roomId = effectiveRoomId): Promise<boolean> => {
+    if (!roomId) return false;
     if (workspace.mode === 'demo') {
       const message: MessageSummary = {
         id: `demo-code-file-${Date.now()}`,
-        roomId: effectiveRoomId,
+        roomId,
+        threadRootId,
         senderId: workspace.user.id,
         senderName: workspace.user.displayName,
         body: file.name,
@@ -4272,10 +4367,12 @@ export function Workspace({
         codeLanguage,
         isOwn: true,
       };
-      setDemoMessages((current) => ({ ...current, [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message] }));
+      if (threadRootId) setDemoThreadMessages((current) => ({ ...current, [threadRootId]: [...(current[threadRootId] ?? []), message] }));
+      else setDemoMessages((current) => ({ ...current, [roomId]: [...(current[roomId] ?? []), message] }));
       return true;
     }
-    if (!onUploadAttachment) return false;
+    if (!onUploadAttachment || uploadRunning.current) return false;
+    uploadRunning.current = true;
     setSending(true);
     setUploadInProgress(true);
     setFailedUpload(undefined);
@@ -4284,19 +4381,20 @@ export function Workspace({
     try {
       const progress = (loaded: number, total: number) => {
         const percent = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
-        setNotice(`Uploading ${file.name} — ${percent}%`);
+        if (currentHistoryRoom.current === roomId) setNotice(`Uploading ${file.name} — ${percent}%`);
       };
       if (codeLanguage) {
-        await onUploadAttachment(effectiveRoomId, file, progress, threadRootId, codeLanguage);
+        await onUploadAttachment(roomId, file, progress, threadRootId, codeLanguage);
       } else {
-        await onUploadAttachment(effectiveRoomId, file, progress, threadRootId);
+        await onUploadAttachment(roomId, file, progress, threadRootId);
       }
-      setNotice(undefined);
+      if (currentHistoryRoom.current === roomId) setNotice(undefined);
       uploaded = true;
     } catch {
-      setFailedUpload(file);
-      setNotice('That attachment could not be encrypted and uploaded.');
+      setFailedUpload({ file, roomId, threadRootId, codeLanguage });
+      if (currentHistoryRoom.current === roomId) setNotice('That attachment could not be encrypted and uploaded.');
     } finally {
+      uploadRunning.current = false;
       setUploadInProgress(false);
       setSending(false);
     }
@@ -4436,22 +4534,24 @@ export function Workspace({
   };
 
   const handleStartReply = useCallback((message: MessageSummary) => {
+    if (!conversationVisible) closePanel();
     bumpDraft(effectiveRoomId);
     bumpThreadDraft(activeThreadRootId);
     setReplyTarget(message);
     setReplyThreadRootId(message.threadRootId ?? (message.isThreadRoot ? message.id : undefined));
     setEditingMessage(undefined);
     setEditingThreadMessage(undefined);
-  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, effectiveRoomId]);
+  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, closePanel, conversationVisible, effectiveRoomId]);
 
   const handleStartThread = useCallback((message: MessageSummary) => {
+    if (!conversationVisible) closePanel();
     bumpDraft(effectiveRoomId);
     bumpThreadDraft(activeThreadRootId);
     setReplyTarget(message);
     setReplyThreadRootId(message.threadRootId ?? message.id);
     setEditingMessage(undefined);
     setEditingThreadMessage(undefined);
-  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, effectiveRoomId]);
+  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, closePanel, conversationVisible, effectiveRoomId]);
 
   const handleStartEdit = useCallback((message: MessageSummary) => {
     if (!effectiveRoomId) return;
@@ -4492,8 +4592,8 @@ export function Workspace({
   }, [workspace.mode, onToggleReaction]);
 
   const applyPreferences = (nextPreferences: UserPreferences) => {
-    if (nextPreferences.detailsOpenByDefault !== preferences.detailsOpenByDefault) {
-      setDetailsOpen(nextPreferences.detailsOpenByDefault);
+    if (nextPreferences.detailsOpenByDefault !== preferences.detailsOpenByDefault && shellRoute.surface !== 'context') {
+      navigateShell({ ...shellRoute, panel: nextPreferences.detailsOpenByDefault ? 'details' : null }, { replace: true });
     }
     onPreferencesChange(nextPreferences);
   };
@@ -4687,7 +4787,7 @@ export function Workspace({
 
   const setPanelWidth = (panel: 'buddies' | 'details', width: number) => {
     const minimum = panel === 'buddies' ? 220 : 260;
-    const maximum = panel === 'buddies' ? 520 : 560;
+    const maximum = panel === 'buddies' ? Math.min(520, shellWidth - 66 - 16 - 420 - (contextPanel ? 260 : 0)) : contextMaximum;
     const next = Math.max(minimum, Math.min(maximum, width));
     if (panel === 'buddies') setPanelCollapsed(panel, false);
     setPanelWidths((current) => {
@@ -4740,7 +4840,7 @@ export function Workspace({
   }, []);
 
   return (
-    <div ref={appStage} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
+    <div ref={appStage} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}${contextPanel ? ' context-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented && contextPanel && !(event.target as HTMLElement).closest('[role=dialog]')) { event.preventDefault(); closePanel(); } }}>
       <section className={`aimtrix-window${connectionNotice ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
           <div className="app-titlebar__identity">
@@ -4772,7 +4872,7 @@ export function Workspace({
         <div
           className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
           style={{
-            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${panelWidths.buddies}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '48px' : 'minmax(360px, 1fr)'} 0px 0px ${detailsOpen ? '8px' : '0px'} ${detailsOpen ? `${panelWidths.details}px` : '0px'}`,
+            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${buddyWidth}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '48px' : 'minmax(420px, 1fr)'} 0px 0px ${contextPanel ? '8px' : '0px'} ${contextPanel ? `${contextWidth}px` : '0px'}`,
           }}
         >
           <SpaceRail
@@ -4799,8 +4899,17 @@ export function Workspace({
             onRejectInvite={onRejectInvite}
             onReorganize={onReorganizeSpaceChildren}
           />}
-          {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(panelWidths.buddies)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', panelWidths.buddies + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
+          {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(buddyWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', buddyWidth - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', buddyWidth + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           <Conversation
+            contextHost={contextHost}
+            contextPanel={contextPanel}
+            conversationVisible={conversationVisible && (!contextDocked || !collapsedPanels.conversation)}
+            contextWidth={contextWidth}
+            contextMaximum={contextMaximum}
+            onContextResize={(width) => setPanelWidth('details', width)}
+            onSearch={() => contextPanel === 'search' ? closePanel() : openPanel('search')}
+            onCloseContext={closePanel}
+            onRevealConversation={() => { suppressContextReturnFocus.current = true; closePanel(); }}
             room={selectedRoom}
             history={selectedHistory}
             members={effectiveMembersByRoom[effectiveRoomId ?? ''] ?? []}
@@ -4814,10 +4923,10 @@ export function Workspace({
             threadDraftRevision={threadDraftRevision}
             sending={sending}
             threadSending={threadSending}
-            notice={notice}
+            notice={notice ?? (failedUpload?.roomId === effectiveRoomId ? 'That attachment could not be encrypted and uploaded.' : undefined)}
             uploadInProgress={uploadInProgress}
-            failedUploadName={failedUpload?.name}
-            onBack={() => setMobileChatOpen(false)}
+            failedUploadName={failedUpload && failedUpload.roomId === effectiveRoomId ? failedUpload.file.name : undefined}
+            onBack={shellBack}
             replyTarget={replyTarget}
             editingMessage={editingMessage?.message}
             editingThreadMessage={editingThreadMessage?.message}
@@ -4846,13 +4955,14 @@ export function Workspace({
             }}
             onSubmit={submitMessage}
             onThreadSubmit={submitThreadMessage}
-            onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onToggleDetails={() => detailsOpen ? closePanel() : openPanel('details')}
             onCollapseConversation={() => setPanelCollapsed('conversation', true)}
             onOpenBackground={() => setBackgroundDialogOpen(true)}
             onStartReply={handleStartReply}
             onStartThread={handleStartThread}
             onOpenThread={(message) => {
               setActiveThreadRootId(message.id);
+              openPanel('thread', message.id);
               setThreadCollapsed(false);
               if (workspace.mode === 'matrix') {
                 void onThreadOpened?.(message.roomId, message.id).catch(() =>
@@ -4860,8 +4970,8 @@ export function Workspace({
                 );
               }
             }}
-            onCloseThread={() => { setActiveThreadRootId(undefined); setThreadCollapsed(false); }}
-            onToggleThreadCollapsed={() => setThreadCollapsed((collapsed) => !collapsed)}
+            onCloseThread={closePanel}
+            onToggleThreadCollapsed={() => { setThreadCollapsed((collapsed) => !collapsed); if (threadCollapsed) openPanel('thread', activeThreadRootId); else closePanel(); }}
             onStartEdit={handleStartEdit}
             onStartThreadEdit={handleStartThreadEdit}
             onTogglePin={handleTogglePin}
@@ -4890,7 +5000,7 @@ export function Workspace({
             onSendSticker={sendSticker}
             onUploadAttachment={(file, threadRootId, codeLanguage) => uploadAttachment(file, threadRootId, codeLanguage)}
             onCancelUpload={() => onCancelUpload?.()}
-            onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload); }}
+            onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload.file, failedUpload.threadRootId, failedUpload.codeLanguage, failedUpload.roomId); }}
             onLoadMore={onLoadRoomHistory ? paginateCurrentRoom : undefined}
             onOpenContext={onOpenEventContext ? openCurrentEventContext : undefined}
             onReturnToLive={onReturnToLive ? returnCurrentRoomToLive : undefined}
@@ -4918,8 +5028,10 @@ export function Workspace({
             onLoadLinkPreview={onLoadLinkPreview}
           />
           {collapsedPanels.conversation ? <button className="workspace-collapsed-panel workspace-collapsed-panel--conversation" type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={18} /></button> : null}
-          {detailsOpen ? <div className="workspace-panel-resize workspace-panel-resize--details" role="separator" aria-label="Resize conversation and details" aria-orientation="vertical" aria-valuemin={260} aria-valuemax={560} aria-valuenow={Math.round(panelWidths.details)} tabIndex={0} onPointerDown={(event) => startPanelResize('details', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('details', panelWidths.details + 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('details', panelWidths.details - 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('details', 260); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('details', 560); } }} /> : null}
-          {detailsOpen ? (
+          {contextPanel ? <div className="workspace-panel-resize workspace-panel-resize--details" role="separator" aria-label="Resize conversation and details" aria-orientation="vertical" aria-valuemin={260} aria-valuemax={contextMaximum} aria-valuenow={Math.round(contextWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('details', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('details', contextWidth + 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('details', contextWidth - 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('details', 260); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('details', 560); } }} /> : null}
+          <div ref={setContextHost} className="context-panel" hidden={!contextPanel} role={contextDocked ? undefined : 'main'} aria-label={contextDocked ? undefined : 'Conversation context'}>
+            <div hidden={!detailsOpen} inert={!detailsOpen} className="details-surface">
+            <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Room details</strong><button type="button" aria-label="Close room details" onClick={closePanel}><ArrowLeft size={16} /> Back</button></header>
             <DetailsPanel
               key={selectedRoomConfigured?.id}
               workspace={{ ...workspace, membersByRoom: effectiveMembersByRoom }}
@@ -4938,7 +5050,8 @@ export function Workspace({
               onSetMemberPower={setMemberPower}
               onLeave={onLeaveRoom}
             />
-          ) : null}
+            </div>
+          </div>
         </div>
 
         {workspace.call ? (

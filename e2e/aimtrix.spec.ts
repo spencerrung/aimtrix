@@ -184,6 +184,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await composer.press('Enter');
   await expect(page.getByText('@Mara', { exact: true }).last()).toBeVisible();
 
+  if (!(await page.getByRole('button', { name: 'Insert code block' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Insert code block' }).click();
   await expect(page.getByLabel('Code block mode')).toHaveText('text code');
   await page.getByRole('combobox', { name: 'Code language' }).selectOption('javascript');
@@ -194,6 +195,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await codeBlock.getByRole('button', { name: 'Copy' }).click();
   await expect(codeBlock.getByRole('button', { name: 'Copied' })).toBeVisible();
 
+  if (!(await page.getByRole('button', { name: 'Insert code block' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Insert code block' }).click();
   await composer.fill('line one\nline two\nline three\nline four\nline five\nline six');
   await page.getByRole('button', { name: 'Send code as file' }).click();
@@ -202,10 +204,12 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await codeFile.getByRole('button', { name: 'Expand' }).click();
   await expect(codeFile).toContainText('line six');
 
+  if (!(await page.getByRole('button', { name: 'Add emoji' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByRole('button', { name: 'Insert 🌈' }).click();
   await expect(composer).toHaveText('🌈');
 
+  if (!(await page.getByRole('button', { name: 'Add emoji' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Add emoji' }).click();
   const emojiPicker = page.getByLabel('Emoji picker');
   await emojiPicker.getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
@@ -223,6 +227,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(composer).toHaveText('🌈');
   await page.keyboard.press('Backspace');
   await expect(composerToken).toHaveCount(0);
+  if (!(await page.getByRole('button', { name: 'Add emoji' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByLabel('Emoji picker').getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
   await page.getByLabel('Emoji picker').getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
@@ -239,6 +244,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   });
   await page.keyboard.press('Delete');
   await expect(composer.locator('[data-inline-composer-token="true"]')).toHaveCount(0);
+  if (!(await page.getByRole('button', { name: 'Add emoji' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Add emoji' }).click();
   await page.getByLabel('Emoji picker').getByRole('textbox', { name: 'Search emoji' }).fill('bufo');
   await page.getByLabel('Emoji picker').getByRole('button', { name: 'Insert :bufo-add-bufo:' }).click();
@@ -250,10 +256,12 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await expect(sentInlineEmoji).toBeVisible();
   await expect(sentInlineEmoji).toHaveCSS('display', 'inline');
 
+  if (!(await page.getByRole('button', { name: 'Open sticker pack' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByRole('button', { name: 'Send Aqua hello' }).click();
   await expect(page.getByRole('img', { name: 'Aqua hello' })).toBeVisible();
 
+  if (!(await page.getByRole('button', { name: 'Open sticker pack' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Open sticker pack' }).click();
   await page.getByLabel('Sticker pack', { exact: true }).selectOption({ label: 'Aero Days' });
   await page.getByRole('button', { name: 'Send Bubble Buddy' }).click();
@@ -396,14 +404,19 @@ test('profile page supports banners, frames, bios, and pinned stickers', async (
   await expect(page.getByRole('dialog', { name: 'My profile page' })).toBeVisible();
 });
 
-test('loaded message search filters the timeline', async ({ page }, testInfo) => {
+test('loaded message search opens results without filtering the conversation', async ({ page }, testInfo) => {
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
   await page.getByRole('button', { name: 'Search loaded messages' }).click();
   await page.getByPlaceholder('Search loaded messages').fill('2006');
-  await expect(page.getByText('The goal: 2006 in spirit, 2026 where it matters.')).toBeVisible();
-  await expect(page.getByText("Okay, this already feels like the chat app we should've had all along.")).toBeHidden();
+  const results = page.getByRole('complementary', { name: 'Search loaded messages' });
+  await expect(results.getByText('The goal: 2006 in spirit, 2026 where it matters.')).toBeVisible();
+  await expect(results.getByText("Okay, this already feels like the chat app we should've had all along.")).toHaveCount(0);
+  await results.getByRole('button', { name: /The goal: 2006/ }).click();
+  await expect(results).toBeHidden();
+  await expect(page.getByRole('main', { name: 'Conversation with Welcome Lounge' })).toBeVisible();
+  await expect(page.locator('.timeline [data-event-id="m2"]')).toBeFocused();
 });
 
 test('critical settings expose a truthful demo state', async ({ page }) => {

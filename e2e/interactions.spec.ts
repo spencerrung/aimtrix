@@ -59,6 +59,7 @@ test('dialogs contain focus, restore triggers and retain Aqua character across t
 test('pickers accept touch and keyboard with Escape restoring their trigger', async ({ page }, info) => {
   await page.goto('/?demo=1');
   if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  await page.getByRole('button', { name: 'More message tools' }).click();
   const trigger = page.getByRole('button', { name: 'Add emoji', exact: true });
   await trigger.click();
   await expect(page.getByRole('textbox', { name: 'Search emoji', exact: true })).toBeFocused();
