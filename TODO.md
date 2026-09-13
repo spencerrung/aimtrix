@@ -118,6 +118,8 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 
 ### Browser, accessibility, and QA
 
+- [x] Shared native modal/picker focus, nested dismissal, guarded confirmations, failed-action retention and cancellable initiated verification; see [interaction behavior and evidence boundaries](docs/accessible-interactions.md). Broader screen-reader/browser acceptance remains #162.
+
 - [x] Conservative installable PWA shell and explicit update/reload prompt.
 - [x] Playwright desktop/mobile coverage for navigation, messaging, emoji, stickers, settings, search, themes, and drawer behavior.
 - [x] Axe WCAG A/AA desktop checks and responsive/focus-visible acceptance coverage.

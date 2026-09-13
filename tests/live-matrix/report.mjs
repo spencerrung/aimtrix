@@ -4,7 +4,7 @@ export const checkNames = new Set([
   'password-login-three-devices', 'encrypted-room-create-and-join',
   'encrypted-send-receive-and-latency', 'authenticated-encrypted-media',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
-  'private-dm-backdrop-isolation', 'standard-sso-token-callback',
+  'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback',
   'diagnostic-failure-probe', 'cleanup',
 ]);
 export const failureCategories = ['strict mode violation', 'Timeout', 'not a file input', 'matrix-http-status', 'media-requires-authentication', 'attachment-ciphertext', 'mxc-upload', 'other'];

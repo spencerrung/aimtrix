@@ -290,7 +290,7 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
   await page.getByRole('button', { name: 'Add reaction' }).first().click();
   let picker = page.getByRole('dialog', { name: 'Choose a reaction' });
   await expect(picker).toBeVisible();
-  await expect(picker.getByRole('button', { name: 'React with 👍' })).toBeFocused();
+  await expect(picker.getByRole('textbox', { name: 'Search reaction emoji' })).toBeFocused();
   await picker.getByRole('button', { name: 'React with 🎉' }).click();
   await expect(picker).toBeHidden();
 
@@ -314,7 +314,7 @@ test('shared images open in an accessible viewer', async ({ page }, testInfo) =>
   await trigger.click();
   const viewer = page.getByRole('dialog', { name: 'Viewing aimtrix-mark.svg' });
   await expect(viewer).toBeVisible();
-  await expect(viewer).toBeFocused();
+  await expect(viewer.getByRole('button', { name: 'Actual size' })).toBeFocused();
   await viewer.getByRole('button', { name: 'Actual size' }).click();
   await expect(viewer.getByRole('button', { name: 'Fit image' })).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('Escape');

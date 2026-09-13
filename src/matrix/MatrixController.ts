@@ -180,6 +180,7 @@ export class MatrixController {
   private personalizationSaveTimer?: number;
   private profilePersonalizationLoaded = false;
   private profilePersonalizationSaveTimer?: number;
+  private profilePersonalizationWrites = new WeakMap<MatrixClient, Promise<void>>();
   private readonly spaceHierarchies = new Map<string, SpaceHierarchyRoomData[]>();
   private readonly spaceHierarchyRequests = new Map<string, Promise<void>>();
   private readonly lastReadReceiptByRoom = new Map<string, string>();
@@ -352,6 +353,7 @@ export class MatrixController {
   }
 
   public shutdown(): void {
+    this.resetProfilePersonalization();
     this.detachClientListeners();
     this.client?.stopClient();
     this.client = undefined;
@@ -759,59 +761,68 @@ export class MatrixController {
     };
   }
 
-  public async verifyDevice(deviceId: string): Promise<DeviceVerificationChallenge> {
+  public async verifyDevice(deviceId: string, signal?: AbortSignal): Promise<DeviceVerificationChallenge> {
     const client = this.client;
     const crypto = client?.getCrypto();
     if (!client || !crypto) throw new Error('Encryption is not available.');
+    signal?.throwIfAborted();
     const request = await crypto.requestDeviceVerification(client.getSafeUserId(), deviceId);
-    if (request.phase < VerificationPhase.Ready) {
-      await new Promise<void>((resolve, reject) => {
-        const finish = (error?: Error) => {
+    const cancelled = () => new Error('Verification was cancelled.');
+    const cancelRequest = () => { void request.cancel().catch(() => undefined); };
+    signal?.addEventListener('abort', cancelRequest, { once: true });
+    const cleanup = () => signal?.removeEventListener('abort', cancelRequest);
+    try {
+      if (signal?.aborted) { cancelRequest(); throw cancelled(); }
+      if (request.phase < VerificationPhase.Ready) {
+        await new Promise<void>((resolve, reject) => {
+          const finish = (error?: Error) => {
+            window.clearTimeout(timeout);
+            request.off(VerificationRequestEvent.Change, handleChange);
+            signal?.removeEventListener('abort', abort);
+            if (error) reject(error); else resolve();
+          };
+          const abort = () => finish(cancelled());
+          const handleChange = () => {
+            if (request.phase === VerificationPhase.Cancelled) finish(cancelled());
+            else if (request.phase >= VerificationPhase.Ready) finish();
+          };
+          const timeout = window.setTimeout(() => finish(new Error('Verification request timed out.')), 120000);
+          request.on(VerificationRequestEvent.Change, handleChange);
+          signal?.addEventListener('abort', abort, { once: true });
+          handleChange();
+          if (signal?.aborted) abort();
+        });
+      }
+      signal?.throwIfAborted();
+      const verifier = request.verifier ?? await request.startVerification('m.sas.v1');
+      signal?.throwIfAborted();
+      let rejectSas: (reason?: unknown) => void = () => undefined;
+      const sasPromise = new Promise<ShowSasCallbacks>((resolve, reject) => {
+        const finish = (error?: unknown, callbacks?: ShowSasCallbacks) => {
           window.clearTimeout(timeout);
-          request.off(VerificationRequestEvent.Change, handleChange);
-          if (error) reject(error);
-          else resolve();
+          verifier.off(VerifierEvent.ShowSas, showSas);
+          signal?.removeEventListener('abort', abort);
+          if (callbacks) resolve(callbacks); else reject(error);
         };
-        const handleChange = () => {
-          if (request.phase === VerificationPhase.Cancelled) {
-            finish(new Error('Verification was cancelled.'));
-          } else if (request.phase >= VerificationPhase.Ready) {
-            finish();
-          }
-        };
-        const timeout = window.setTimeout(
-          () => finish(new Error('Verification request timed out.')),
-          120000,
-        );
-        request.on(VerificationRequestEvent.Change, handleChange);
+        const abort = () => finish(cancelled());
+        const showSas = (callbacks: ShowSasCallbacks) => finish(undefined, callbacks);
+        rejectSas = (error) => finish(error);
+        const timeout = window.setTimeout(() => finish(new Error('Verification timed out.')), 120000);
+        verifier.once(VerifierEvent.ShowSas, showSas);
+        signal?.addEventListener('abort', abort, { once: true });
+        if (signal?.aborted) abort();
       });
-    }
-    const verifier = request.verifier ?? await request.startVerification('m.sas.v1');
-    let rejectSas: (reason?: unknown) => void = () => undefined;
-    const sasPromise = new Promise<ShowSasCallbacks>((resolve, reject) => {
-      rejectSas = reject;
-      const timeout = window.setTimeout(() => reject(new Error('Verification timed out.')), 120000);
-      verifier.once(VerifierEvent.ShowSas, (callbacks: ShowSasCallbacks) => {
-        window.clearTimeout(timeout);
-        resolve(callbacks);
-      });
-    });
-    const completion = verifier.verify();
-    void completion.catch(rejectSas);
-    const sas = await sasPromise;
-    const emoji = sas.sas.emoji ?? [];
-    if (!emoji.length) {
-      sas.cancel();
-      throw new Error('The other device did not provide emoji verification.');
-    }
-    return {
-      emoji,
-      confirm: async () => {
-        await sas.confirm();
-        await completion;
-      },
-      cancel: () => sas.cancel(),
-    };
+      const completion = verifier.verify();
+      void completion.catch(rejectSas);
+      const sas = await sasPromise;
+      const emoji = sas.sas.emoji ?? [];
+      if (!emoji.length) { sas.cancel(); throw new Error('The other device did not provide emoji verification.'); }
+      return {
+        emoji,
+        confirm: async () => { try { await sas.confirm(); await completion; } finally { cleanup(); } },
+        cancel: () => { cleanup(); sas.cancel(); },
+      };
+    } catch (error) { cleanup(); cancelRequest(); throw error; }
   }
 
   public async renameDevice(deviceId: string, displayName: string): Promise<void> {
@@ -1362,19 +1373,41 @@ export class MatrixController {
     return event ? parseProfilePersonalization(event.getContent()) : undefined;
   }
 
+  private resetProfilePersonalization(): void {
+    if (this.profilePersonalizationSaveTimer !== undefined) window.clearTimeout(this.profilePersonalizationSaveTimer);
+    this.profilePersonalizationSaveTimer = undefined;
+    this.profilePersonalizationLoaded = false;
+  }
+
+  private writeProfilePersonalization(client: MatrixClient, personalization: ProfilePersonalization): Promise<void> {
+    const portable = parseProfilePersonalization(personalization) as unknown as Record<string, unknown>;
+    const previous = this.profilePersonalizationWrites.get(client) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      if (this.client !== client) throw new Error('The Matrix session changed.');
+      const accountClient = client as unknown as { setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown> };
+      await accountClient.setAccountData(PROFILE_PERSONALIZATION_EVENT, portable);
+      if (this.client !== client) throw new Error('The Matrix session changed.');
+    });
+    this.profilePersonalizationWrites.set(client, write);
+    return write;
+  }
+
+  public async updateProfilePersonalization(personalization: ProfilePersonalization): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    if (this.profilePersonalizationSaveTimer !== undefined) window.clearTimeout(this.profilePersonalizationSaveTimer);
+    this.profilePersonalizationSaveTimer = undefined;
+    await this.writeProfilePersonalization(client, personalization);
+  }
+
   public saveProfilePersonalization(personalization: ProfilePersonalization): void {
-    if (!this.client || !this.profilePersonalizationLoaded) return;
-    if (this.profilePersonalizationSaveTimer !== undefined) {
-      window.clearTimeout(this.profilePersonalizationSaveTimer);
-    }
+    const client = this.client;
+    if (!client || !this.profilePersonalizationLoaded) return;
+    if (this.profilePersonalizationSaveTimer !== undefined) window.clearTimeout(this.profilePersonalizationSaveTimer);
     this.profilePersonalizationSaveTimer = window.setTimeout(() => {
-      const client = this.client;
-      if (!client) return;
-      const accountClient = client as unknown as {
-        setAccountData: (type: string, content: Record<string, unknown>) => Promise<unknown>;
-      };
-      const portable = parseProfilePersonalization(personalization) as unknown as Record<string, unknown>;
-      void accountClient.setAccountData(PROFILE_PERSONALIZATION_EVENT, portable).catch(() => undefined);
+      this.profilePersonalizationSaveTimer = undefined;
+      if (this.client !== client) return;
+      void this.writeProfilePersonalization(client, personalization).catch(() => undefined);
     }, 500);
   }
 
@@ -2290,6 +2323,7 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    this.resetProfilePersonalization();
     if (!this.client) return;
     this.uploadAbortController?.abort();
     this.activeCall?.hangup('user_hangup' as CallErrorCode, false);

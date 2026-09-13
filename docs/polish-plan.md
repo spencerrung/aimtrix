@@ -8,6 +8,8 @@ Step 02 deliverable: [Aqua/Aero visual references and interaction rules](design/
 
 Step 03 deliverable: [disposable live Matrix tests](live-matrix-tests.md), with a reproducible Synapse/Dex setup, encrypted browser journeys, private diagnostics and CI. Broader recovery/native/provider gates remain open.
 
+Step 04 deliverable: [accessible interaction foundations](accessible-interactions.md), covering shared modal/picker behavior, keyboard focus, action feedback and cancellable verification. Live and assistive-technology evidence boundaries remain explicit.
+
 ## Product goal
 
 Aimtrix should be a dependable daily Matrix client that people enjoy spending time in. Preserve its full-viewport hosted experience, roughly 65/35 Aqua-era character versus modern behavior, original Aero artwork, playful space rail, buddy list, personality drawer, foundational E2EE, and static self-hosting.

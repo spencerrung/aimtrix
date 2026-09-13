@@ -1,3 +1,4 @@
+import { Dialog, DialogClose } from '../../components/Dialog';
 import {
   Check,
   ImagePlus,
@@ -106,11 +107,13 @@ export function ProfileDialog({
   stickerPacks: StickerPackDefinition[];
   canUpload: boolean;
   dataSaver: boolean;
-  onChange: (personalization: ProfilePersonalization) => void;
+  onChange: (personalization: ProfilePersonalization) => void | Promise<void>;
   onUploadBanner?: (file: File) => Promise<string>;
   onSignOut: () => void;
   onClose: () => void;
 }) {
+  const [saveError, setSaveError] = useState<string>();
+  const [busy, setBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(personalization);
   const [activePack, setActivePack] = useState(personalization.defaultStickerPack ?? stickerPacks[0]?.manifestUrl ?? '');
@@ -169,12 +172,14 @@ export function ProfileDialog({
 
   const installPack = async (event: FormEvent) => {
     event.preventDefault();
+    if (busy) return;
     setNotice(undefined);
     const manifestUrl = normalizeManifestUrl(newPackUrl);
     if (!manifestUrl || !newPackName.trim()) {
       setNotice('Enter a name and an HTTPS manifest URL.');
       return;
     }
+    setBusy(true);
     try {
       await loadStickerPack(manifestUrl);
       const installedStickerPacks = [
@@ -188,11 +193,12 @@ export function ProfileDialog({
       setNotice('Pack checked and ready. Save your page to sync it.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'That sticker pack could not be loaded.');
-    }
+    } finally { setBusy(false); }
   };
 
   const uploadBanner = async (file: File) => {
-    if (!onUploadBanner) return;
+    if (!onUploadBanner || busy) return;
+    setBusy(true);
     setNotice('Uploading your banner to Matrix…');
     try {
       const bannerMxc = await onUploadBanner(file);
@@ -200,17 +206,16 @@ export function ProfileDialog({
       setNotice('Banner uploaded. Save your page to keep it.');
     } catch (error) {
       setNotice(error instanceof Error ? error.message : 'Your banner could not be uploaded.');
-    }
+    } finally { setBusy(false); }
   };
 
   return (
-    <div className="profile-dialog-backdrop" role="presentation" onMouseDown={onClose}>
-      <section className="profile-dialog" role="dialog" aria-modal="true" aria-labelledby="profile-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
+    <Dialog className="profile-dialog" backdropClassName="profile-dialog-backdrop" aria-labelledby="profile-dialog-title" onClose={onClose} busy={busy}>
         <header className="profile-dialog__titlebar">
           <div><Sparkles size={16} /><strong id="profile-dialog-title">My profile page</strong></div>
-          <button type="button" aria-label="Close profile page" onClick={onClose}><X size={17} /></button>
+          <DialogClose aria-label="Close profile page"><X size={17} /></DialogClose>
         </header>
-        <div className={`profile-dialog__layout${editing ? ' is-editing' : ''}`}>
+        <fieldset disabled={busy} className={`interaction-fields profile-dialog__layout${editing ? ' is-editing' : ''}`}>
           <div className="profile-dialog__preview">
             <ProfilePreview user={user} profile={draft} dataSaver={dataSaver} />
             <div className="profile-dialog__actions">
@@ -229,7 +234,7 @@ export function ProfileDialog({
                 <div className="banner-choice-grid">
                   {bannerPresetNames.map((preset) => <button type="button" key={preset} className={`profile-banner--${preset}${draft.bannerPreset === preset && !draft.bannerMxc ? ' is-active' : ''}`} aria-pressed={draft.bannerPreset === preset && !draft.bannerMxc} onClick={() => update({ bannerPreset: preset, bannerMxc: undefined })}><span>{labels.banner[preset]}</span></button>)}
                 </div>
-                <input ref={bannerInput} className="sr-only" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadBanner(file); event.target.value = ''; }} />
+                <input ref={bannerInput} className="sr-only" aria-label="Profile banner image" type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadBanner(file); event.target.value = ''; }} />
                 <div className="profile-inline-actions">
                   <button className="aqua-button" type="button" disabled={!canUpload} onClick={() => bannerInput.current?.click()}><ImagePlus size={13} /> Upload image</button>
                   {draft.bannerMxc ? <button className="text-button" type="button" onClick={() => update({ bannerMxc: undefined })}>Use preset instead</button> : null}
@@ -267,15 +272,16 @@ export function ProfileDialog({
                 {personalPacks.length ? <ul className="installed-pack-list">{personalPacks.map((pack) => <li key={pack.id}><span><strong>{pack.name}</strong><small>{pack.manifestUrl}</small></span><button type="button" aria-label={`Remove ${pack.name}`} onClick={() => { update({ installedStickerPacks: draft.installedStickerPacks.filter((item) => item.manifestUrl !== pack.manifestUrl) }); if (activePack === pack.manifestUrl) setActivePack(stickerPacks[0]?.manifestUrl ?? ''); }}><Trash2 size={14} /></button></li>)}</ul> : null}
               </section>
 
+              {saveError ? <p className="settings-error" role="alert">{saveError}</p> : null}
               {notice ? <p className="profile-editor-notice" role="status">{notice}</p> : null}
               <div className="profile-editor-save">
                 <button className="text-button" type="button" onClick={() => setDraft({ ...defaultProfilePersonalization, installedStickerPacks: draft.installedStickerPacks })}><RotateCcw size={13} /> Reset decorations</button>
-                <button className="aqua-button aqua-button--primary" type="button" onClick={() => { onChange(draft); setEditing(false); setNotice(undefined); }}><Check size={14} /> Save my page</button>
+                <button className="aqua-button aqua-button--primary" type="button" onClick={() => { if (busy) return; setBusy(true); setSaveError(undefined); void Promise.resolve().then(() => onChange(draft)).then(() => { setEditing(false); setNotice('Profile decorations saved.'); }).catch(() => setSaveError('Your profile decorations could not be saved. Your edits are still here; try again.')).finally(() => setBusy(false)); }}><Check size={14} /> Save my page</button>
               </div>
             </div>
           ) : null}
-        </div>
-      </section>
-    </div>
+        </fieldset>
+        {!editing && notice ? <p className="profile-editor-notice" role="status">{notice}</p> : null}
+    </Dialog>
   );
 }

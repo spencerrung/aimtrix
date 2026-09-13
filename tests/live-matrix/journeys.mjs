@@ -141,9 +141,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const memberPath = `/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.member/${encode(accounts.charlie.user_id)}`;
       await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.power_levels`, { token: aliceSession.accessToken })).users?.[accounts.charlie.user_id] === 25, 'moderation-power');
       await drawer.getByRole('button', { name: 'Remove charlie', exact: true }).click();
+      await alice.getByRole('dialog').getByRole('button', { name: 'Remove member', exact: true }).click();
       await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'leave', 'moderation-kick');
       await api(`/_matrix/client/v3/rooms/${encode(roomId)}/invite`, { token: aliceSession.accessToken, method: 'POST', body: { user_id: accounts.charlie.user_id } });
       await drawer.getByRole('button', { name: 'Ban charlie', exact: true }).click();
+      await alice.getByRole('dialog').getByRole('button', { name: 'Ban member', exact: true }).click();
       await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'ban', 'moderation-ban');
       await drawer.getByRole('button', { name: 'Unban charlie', exact: true }).click();
       await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'leave', 'moderation-unban');
@@ -173,6 +175,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await api(accountPath(aliceSession.userId), { token: bobSession.accessToken, status: 403 });
       await api(`/_matrix/client/v3/rooms/${encode(dm)}/state/dev.alucard.aimtrix.room_background.v1`, { token: bobSession.accessToken, status: 404 });
       await backdrop.getByRole('button', { name: 'Close background decorator' }).click();
+    });
+    await check('private-profile-save', async () => {
+      await alice.locator('.self-card__profile').click();
+      const profile = alice.getByRole('dialog', { name: 'My profile page' });
+      await profile.getByRole('button', { name: 'Decorate my page', exact: true }).click();
+      await profile.getByRole('button', { name: 'Twilight', exact: true }).click();
+      await profile.getByRole('button', { name: 'Save my page', exact: true }).click();
+      await profile.getByRole('status').filter({ hasText: 'Profile decorations saved.' }).waitFor();
+      const path = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/dev.alucard.aimtrix.profile.v1`;
+      invariant((await api(path, { token: aliceSession.accessToken })).bannerPreset === 'twilight', 'private-profile-state');
+      await api(path, { token: bobSession.accessToken, status: 403 });
+      await profile.getByRole('button', { name: 'Close profile page' }).click();
     });
     await check('standard-sso-token-callback', async () => {
       const sso = await newPage();

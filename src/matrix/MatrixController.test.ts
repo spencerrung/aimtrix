@@ -861,6 +861,23 @@ describe('MatrixController protocol integration', () => {
     expect(uploadContent).toHaveBeenCalledWith(expect.any(File), expect.objectContaining({ includeFilename: false }));
   });
 
+  it('reports explicit profile save failures and prevents an older queued save overwriting retry', async () => {
+    vi.useFakeTimers();
+    try {
+      const setAccountData = vi.fn().mockRejectedValueOnce(new Error('synthetic denial')).mockResolvedValue({});
+      const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+      inject(controller, { getAccountData: vi.fn(), setAccountData } as unknown as Partial<MatrixClient>);
+      controller.loadProfilePersonalization();
+      controller.saveProfilePersonalization({ ...defaultProfilePersonalization, bio: 'Earlier synthetic draft' });
+      const next = { ...defaultProfilePersonalization, bio: 'Current synthetic draft' };
+      await expect(controller.updateProfilePersonalization(next)).rejects.toThrow('synthetic denial');
+      await expect(controller.updateProfilePersonalization(next)).resolves.toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(setAccountData).toHaveBeenCalledTimes(2);
+      expect(setAccountData).toHaveBeenLastCalledWith('dev.alucard.aimtrix.profile.v1', expect.objectContaining({ bio: next.bio }));
+    } finally { vi.useRealTimers(); }
+  });
+
   it('loads and privately saves strictly parsed profile decorations', async () => {
     vi.useFakeTimers();
     try {
@@ -882,6 +899,36 @@ describe('MatrixController protocol integration', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('orders explicit profile saves after an in-flight initial fallback', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: () => void;
+      const setAccountData = vi.fn().mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; })).mockResolvedValue({});
+      const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+      inject(controller, { getAccountData: vi.fn(), setAccountData } as unknown as Partial<MatrixClient>);
+      controller.loadProfilePersonalization();
+      controller.saveProfilePersonalization(defaultProfilePersonalization);
+      await vi.advanceTimersByTimeAsync(500);
+      const save = controller.updateProfilePersonalization({ ...defaultProfilePersonalization, bannerPreset: 'twilight' });
+      await Promise.resolve(); expect(setAccountData).toHaveBeenCalledTimes(1);
+      finish(); await save;
+      expect(setAccountData).toHaveBeenLastCalledWith('dev.alucard.aimtrix.profile.v1', expect.objectContaining({ bannerPreset: 'twilight' }));
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('never applies a queued profile fallback to a replacement Matrix client', async () => {
+    vi.useFakeTimers();
+    try {
+      const oldWrite = vi.fn(); const replacementWrite = vi.fn();
+      const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+      inject(controller, { getAccountData: vi.fn(), setAccountData: oldWrite } as unknown as Partial<MatrixClient>);
+      controller.loadProfilePersonalization(); controller.saveProfilePersonalization(defaultProfilePersonalization);
+      inject(controller, { setAccountData: replacementWrite } as unknown as Partial<MatrixClient>);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(oldWrite).not.toHaveBeenCalled(); expect(replacementWrite).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
   });
 
   it('writes shared backgrounds and power-level-backed decorator policy', async () => {

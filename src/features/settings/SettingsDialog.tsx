@@ -1,3 +1,4 @@
+import { Dialog, DialogClose, DialogButton } from '../../components/Dialog';
 import {
   Check,
   LogOut,
@@ -94,7 +95,7 @@ export function SettingsDialog({
 
   const saveProfile = async (event: FormEvent) => {
     event.preventDefault();
-    if (!onSaveProfile) return;
+    if (!onSaveProfile || saving) return;
     setSaving(true);
     setSaved(false);
     setError(undefined);
@@ -109,31 +110,26 @@ export function SettingsDialog({
   };
 
   const checkForUpdate = async () => {
-    if (!install) return;
+    if (!install || checkingUpdate) return;
     setCheckingUpdate(true);
     setUpdateStatus(undefined);
     try {
       setUpdateStatus(await install.checkForUpdate());
+    } catch {
+      setUpdateStatus({ status: 'unavailable' });
     } finally {
       setCheckingUpdate(false);
     }
   };
 
   return (
-    <div className="settings-backdrop" role="presentation" onMouseDown={onClose}>
-      <section
-        className="settings-window"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="settings-title"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
+    <Dialog className="settings-window" backdropClassName="settings-backdrop" aria-labelledby="settings-title" onClose={onClose} busy={saving || checkingUpdate}>
         <header className="settings-titlebar">
           <div>
             <Sparkles size={16} aria-hidden="true" />
             <strong id="settings-title">Personalize Aimtrix</strong>
           </div>
-          <button type="button" aria-label="Close settings" onClick={onClose}><X size={17} /></button>
+          <DialogClose aria-label="Close settings"><X size={17} /></DialogClose>
         </header>
 
         <div className="settings-layout">
@@ -148,33 +144,34 @@ export function SettingsDialog({
               />
               <span><strong>{user.displayName}</strong><small>{user.id}</small></span>
             </div>
-            <button
+            <DialogButton
               type="button"
               className={section === 'profile' ? 'is-active' : ''}
-              onClick={() => setSection('profile')}
+              disabled={saving || checkingUpdate} onClick={() => setSection('profile')}
             >
               <UserRound size={16} /> Profile & status note
-            </button>
-            <button
+            </DialogButton>
+            <DialogButton
               type="button"
               className={section === 'appearance' ? 'is-active' : ''}
-              onClick={() => setSection('appearance')}
+              disabled={saving || checkingUpdate} onClick={() => setSection('appearance')}
             >
               <Palette size={16} /> Appearance
-            </button>
-            <button
+            </DialogButton>
+            <DialogButton
               type="button"
               className={section === 'matrix' ? 'is-active' : ''}
-              onClick={() => setSection('matrix')}
+              disabled={saving || checkingUpdate} onClick={() => setSection('matrix')}
             >
               <ShieldCheck size={16} /> Matrix & security
-            </button>
-            <button className="settings-signout" type="button" onClick={onSignOut}>
+            </DialogButton>
+            <DialogButton className="settings-signout" type="button" onClick={onSignOut}>
               <LogOut size={15} /> Sign out
-            </button>
+            </DialogButton>
           </nav>
 
           <div className="settings-content">
+            {saving ? <p role="status">Saving profile…</p> : null}
             {section === 'profile' ? (
               <form onSubmit={(event) => void saveProfile(event)}>
                 <div className={`settings-profile-preview accent-${preferences.accent}`}>
@@ -195,7 +192,7 @@ export function SettingsDialog({
 
                 <div className="settings-section-heading settings-section-heading--with-action">
                   <div><h2>Profile and status note</h2><p>Standard Matrix display name and presence—visible in any client to people who share a room with you.</p></div>
-                  <button className="aqua-button profile-page-shortcut" type="button" onClick={onOpenProfilePage}><Paintbrush size={14} /> Decorate profile page</button>
+                  <DialogButton className="aqua-button profile-page-shortcut" type="button" onClick={onOpenProfilePage}><Paintbrush size={14} /> Decorate profile page</DialogButton>
                 </div>
                 {!canEditProfile ? <p className="settings-demo-note">Profile editing is disabled in demo mode.</p> : null}
                 <label className="settings-field">
@@ -204,7 +201,7 @@ export function SettingsDialog({
                     value={displayName}
                     maxLength={80}
                     disabled={!canEditProfile || saving}
-                    onChange={(event) => setDisplayName(event.target.value)}
+                    onChange={(event) => { setDisplayName(event.target.value); setSaved(false); }}
                   />
                 </label>
                 <fieldset className="presence-picker" disabled={!canEditProfile || saving}>
@@ -215,7 +212,7 @@ export function SettingsDialog({
                       key={option}
                       className={presence === option ? 'is-active' : ''}
                       aria-pressed={presence === option}
-                      onClick={() => setPresence(option)}
+                      onClick={() => { setPresence(option); setSaved(false); }}
                     >
                       <i className={`presence-swatch presence-swatch--${option}`} />
                       {option === 'away' ? 'Away' : option[0].toUpperCase() + option.slice(1)}
@@ -229,13 +226,13 @@ export function SettingsDialog({
                     maxLength={140}
                     placeholder="What are you up to?"
                     disabled={!canEditProfile || saving}
-                    onChange={(event) => setStatusMessage(event.target.value)}
+                    onChange={(event) => { setStatusMessage(event.target.value); setSaved(false); }}
                   />
                 </label>
                 <p className="settings-hint">Buddies see this under your name—even while you're online—in Aimtrix, Element, and other Matrix clients. It clears while you're offline. For anything private, use the note on your profile page instead.</p>
                 {error ? <p className="settings-error" role="alert">{error}</p> : null}
                 <div className="settings-save-row">
-                  {saved ? <span><Check size={14} /> Saved to Matrix</span> : null}
+                  {saved ? <span role="status"><Check size={14} /> Saved to Matrix</span> : null}
                   <button
                     className="aqua-button aqua-button--primary"
                     type="submit"
@@ -321,16 +318,13 @@ export function SettingsDialog({
                 <div className="settings-control-row">
                   <label>Interface motion</label>
                   <select
+                    aria-label="Interface motion"
                     value={preferences.motion}
                     onChange={(event) => updatePreferences({ motion: event.target.value as UserPreferences['motion'] })}
                   >
                     {motionNames.map((motion) => <option value={motion} key={motion}>{motion}</option>)}
                   </select>
                 </div>
-                <label className="settings-toggle-row">
-                  <span><strong>Play nudge effects</strong><small>Still show the readable Matrix notice when this is off.</small></span>
-                  <input type="checkbox" checked={preferences.nudgeEffects} onChange={(event) => updatePreferences({ nudgeEffects: event.target.checked })} />
-                </label>
                 <label className="settings-toggle-row">
                   <span><strong>Play nudge effects</strong><small>Still show the readable Matrix notice when this is off.</small></span>
                   <input type="checkbox" checked={preferences.nudgeEffects} onChange={(event) => updatePreferences({ nudgeEffects: event.target.checked })} />
@@ -373,7 +367,6 @@ export function SettingsDialog({
             )}
           </div>
         </div>
-      </section>
-    </div>
+    </Dialog>
   );
 }

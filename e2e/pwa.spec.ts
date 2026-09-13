@@ -24,7 +24,7 @@ test('browser install event offers an explicit install action', async ({ page })
 test('offline and reconnect states explain the Matrix boundary', async ({ page }) => {
   await page.context().setOffline(true);
   await page.evaluate(() => window.dispatchEvent(new Event('offline')));
-  const status = page.getByRole('status');
+  const status = page.locator('aside[role="status"]');
   await expect(status).toContainText('You’re offline');
   await expect(status).toContainText('Matrix history may be unavailable');
 
@@ -40,7 +40,7 @@ test('service-worker update prompt protects drafts before reload', async ({ page
     window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: waitingWorker }));
   });
 
-  const status = page.getByRole('status');
+  const status = page.getByRole('status').filter({ hasText: 'Aimtrix update ready' });
   await expect(status).toContainText('Aimtrix update ready');
   await expect(status).toContainText('Finish any draft');
   await status.getByRole('button', { name: 'Later' }).click();

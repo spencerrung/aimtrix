@@ -1,12 +1,31 @@
 @layer reset, tokens, base, components, layout, responsive;
 
 @layer reset {
+  dialog.interaction-dialog { width: 100%; height: 100%; max-width: none; max-height: none; margin: 0; border: 0; color: inherit; overflow: auto; }
+  dialog.interaction-dialog:not([open]) { display: none; }
+  dialog.interaction-dialog::backdrop { background: transparent; }
+  .interaction-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
   *, *::before, *::after { box-sizing: border-box; }
   html, body, #root { width: 100%; min-width: 320px; height: 100%; margin: 0; }
   body { overflow: hidden; }
   button, input, textarea { font: inherit; }
   button { color: inherit; }
   img { display: block; max-width: 100%; }
+}
+
+@layer layout {
+  .interaction-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: 20px; background: rgb(20 42 56 / 55%); }
+  .confirmation-dialog { width: min(440px, 100%); padding: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); box-shadow: 0 12px 48px #0005; }
+  .confirmation-dialog h2 { margin-top: 0; font-size: 1.1rem; }
+  .confirmation-dialog p { line-height: 1.5; }
+  .confirmation-dialog footer { display: flex; justify-content: flex-end; gap: 10px; }
+  .interaction-feedback:empty { margin: 0; }
+  .interaction-dialog { --text-faint: var(--text-soft); }
+  :root[data-theme="midnight"] .interaction-dialog .text-button { color: var(--blue); }
+  :root[data-theme="midnight"] .interaction-dialog .settings-signout { color: #ffafb7; }
+  :root[data-theme="midnight"] .interaction-dialog .room-background-choice.is-active { color: var(--text); }
+  .interaction-dialog :focus-visible { outline: 3px solid var(--focus); outline-offset: 3px; }
+  .interaction-dialog .verification-challenge { width: min(480px, 100%); }
 }
 
 @layer tokens {
@@ -799,7 +818,7 @@
   .installed-pack-list small { color: var(--text-faint); font-size: 0.54rem; }
   .installed-pack-list button { display: grid; padding: 4px; place-items: center; color: var(--busy); border: 0; background: transparent; }
   .profile-editor-notice { margin: 0 0 12px; padding: 8px 10px; color: var(--text-soft); border: 1px solid var(--border); border-radius: 7px; background: var(--blue-soft); font-size: 0.65rem; }
-  .profile-editor-save { position: sticky; bottom: -17px; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 -17px -17px; padding: 12px 17px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface-raised) 93%, transparent); backdrop-filter: blur(8px); }
+  .profile-editor-save { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0 -17px -17px; padding: 12px 17px; border-top: 1px solid var(--border); background: color-mix(in srgb, var(--surface-raised) 93%, transparent); backdrop-filter: blur(8px); }
   .profile-editor-save .text-button { display: inline-flex; align-items: center; gap: 4px; }
 
   /* Aqua's original Frutiger Aero layer: optimistic nature behind familiar Tiger-era chrome. */
@@ -906,7 +925,7 @@
   .composer-context strong { color: var(--blue-deep); font-size: 0.68rem; }
   .composer-context span { overflow: hidden; color: var(--text-soft); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
   .composer-context button { display: grid; width: 27px; height: 27px; padding: 0; place-items: center; color: var(--text-soft); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
-  .composer-context + .emoji-tray, .composer-context + .sticker-tray, .composer-context + .gif-picker { bottom: 116px; }
+  .composer-context + .emoji-tray, .composer-context + .sticker-tray, .composer-context + .gif-picker, .composer-context + .gif-popover .gif-picker { bottom: 116px; }
   .sticker-tray, .emoji-tray, .gif-picker {
     position: absolute;
     z-index: 12;
@@ -1039,9 +1058,10 @@
   .room-dialog-tabs button { display: flex; height: 42px; align-items: center; justify-content: center; gap: 6px; color: var(--text-soft); border: 0; border-right: 1px solid var(--border); background: var(--surface-soft); font-size: 0.68rem; font-weight: 700; }
   .room-dialog-tabs button:last-child { border-right: 0; }
   .room-dialog-tabs button.is-active { color: var(--selection-text); background: linear-gradient(var(--selection-start), var(--selection-end)); }
+  .room-dialog form .interaction-fields { display: grid; gap: 12px; }
   .room-dialog form { display: grid; gap: 12px; padding: 20px; }
-  .room-dialog form > label:not(.room-dialog-check) { display: grid; gap: 5px; color: var(--text-soft); font-size: 0.68rem; font-weight: 700; }
-  .room-dialog form input[type="text"], .room-dialog form > label:not(.room-dialog-check) input { height: 35px; padding: 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
+  .room-dialog form .interaction-fields > label:not(.room-dialog-check) { display: grid; gap: 5px; color: var(--text-soft); font-size: 0.68rem; font-weight: 700; }
+  .room-dialog form input[type="text"], .room-dialog form .interaction-fields > label:not(.room-dialog-check) input { height: 35px; padding: 0 9px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
   .room-dialog-check { display: flex; align-items: center; gap: 8px; color: var(--text-soft); font-size: 0.67rem; }
   .room-dialog-check span { display: flex; align-items: center; gap: 4px; }
   .room-dialog form > .aqua-button { justify-self: end; }
@@ -1112,7 +1132,7 @@
   .theme-choice--midnight > i { background: #20303d; }
   .theme-choice--midnight > i span { border-color: #536878; background: #162530; }
   .theme-choice strong { font-size: 0.71rem; }
-  .theme-choice small { margin-top: 2px; color: var(--text-faint); font-size: 0.58rem; }
+  .theme-choice small { margin-top: 2px; color: var(--text-soft); font-size: 0.58rem; }
   .accent-picker { display: flex; align-items: center; gap: 9px; margin: 0 0 24px; padding: 0; border: 0; }
   .accent-dot { display: grid; width: 30px; height: 30px; padding: 0; place-items: center; color: transparent; border: 2px solid var(--surface-raised); border-radius: 50%; background: var(--blue); box-shadow: 0 0 0 1px var(--border), inset 0 1px rgba(255,255,255,0.6); }
   .accent-dot--blue { background: #267fc2; }

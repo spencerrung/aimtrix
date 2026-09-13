@@ -31,10 +31,14 @@ test('timeline and composer survive a narrow landscape resize', async ({ page })
   await composer.press('Enter');
   await expect.poll(() => timeline.evaluate((element) => element.scrollHeight > element.clientHeight)).toBe(true);
 
-  await timeline.evaluate((element) => {
-    element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2);
-    element.dispatchEvent(new Event('scroll'));
-  });
+  // Wait until the client accepts detachment, after the send-to-latest frame.
+  await expect(async () => {
+    await timeline.evaluate((element) => {
+      element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) / 2);
+      element.dispatchEvent(new Event('scroll'));
+    });
+    await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeVisible();
+  }).toPass();
   const before = await timeline.evaluate((element) => element.scrollTop);
 
   await page.setViewportSize({ width: 568, height: 320 });
