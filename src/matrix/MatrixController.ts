@@ -185,7 +185,13 @@ export class MatrixController {
 
   private expireSession(error: unknown): void {
     const session = this.activeSession ?? this.recoverySession;
-    if (!session || this.snapshot.status === 'reauthentication-required') return;
+    if (this.snapshot.status === 'reauthentication-required') return;
+    if (!session) {
+      ++this.lifecycleRevision;
+      void this.stopCurrentClient();
+      this.setSnapshot({ status: 'signed-out', error: 'Your Matrix sign-in expired. Please start sign-in again.' });
+      return;
+    }
     ++this.lifecycleRevision;
     const data = error && typeof error === 'object' ? (error as { data?: { soft_logout?: unknown } }).data : undefined;
     this.recoverySession = { ...session, accessToken: '', recovery: data?.soft_logout === true ? 'soft' : 'hard' };
@@ -452,7 +458,9 @@ export class MatrixController {
     } catch (error) {
       if (revision !== this.lifecycleRevision) return;
       if (isSessionRejected(error)) this.expireSession(error);
-      else this.showConnectionError(error);
+      else if (loginToken && !this.activeSession && connectionIssue(error) !== 'storage') {
+        this.setSnapshot({ status: 'signed-out', error: 'SSO sign-in could not be completed. Please start sign-in again.', recovery: this.recoveryInfo() });
+      } else this.showConnectionError(error);
     }
   }
 

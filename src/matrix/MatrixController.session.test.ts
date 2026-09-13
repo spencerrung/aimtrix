@@ -185,6 +185,30 @@ describe('MatrixController session lifecycle', () => {
     expect(createClient).not.toHaveBeenCalled();
   });
 
+  it.each(['M_FORBIDDEN', 'M_UNKNOWN_TOKEN'])('returns an invalid SSO callback to sign-in after %s without retaining URL credentials', async (errcode) => {
+    const callbackToken = 'synthetic-callback-token';
+    window.history.replaceState({}, '', `/?loginToken=${callbackToken}`);
+    const login = vi.fn()
+      .mockImplementationOnce(async () => {
+        expect(new URL(window.location.href).searchParams.has('loginToken')).toBe(false);
+        throw { errcode, message: 'private callback diagnostic', data: { access_token: 'private response token' } };
+      })
+      .mockResolvedValue({ user_id: session.userId, device_id: session.deviceId, access_token: 'fresh-synthetic-token' });
+    const client = fakeClient();
+    createClient.mockReturnValueOnce({ login }).mockReturnValueOnce({ login }).mockReturnValueOnce(client);
+    const { controller, platform, credentials } = controllerFixture();
+    credentials.load.mockResolvedValue(undefined);
+    vi.mocked(platform.sso.load).mockResolvedValue({ baseUrl: session.baseUrl, serverName: session.serverName });
+    await controller.initialize();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'signed-out', error: expect.any(String) });
+    expect(JSON.stringify(controller.getSnapshot())).not.toMatch(/private callback|private response|synthetic-callback-token/);
+    expect(window.location.search).toBe('');
+    expect(credentials.save).not.toHaveBeenCalled();
+    await controller.login({ userId: session.userId, homeserver: session.baseUrl, password: 'synthetic-password' });
+    expect(client.startClient).toHaveBeenCalledOnce();
+    expect(credentials.save).toHaveBeenCalledWith({ ...session, accessToken: 'fresh-synthetic-token' });
+  });
+
   it.each(['emitted', 'thrown'] as const)('handles %s rejection during restoration without clearing crypto', async (mode) => {
     const client = fakeClient(); createClient.mockReturnValue(client);
     const error = { errcode: 'M_UNKNOWN_TOKEN', data: { soft_logout: false } };
