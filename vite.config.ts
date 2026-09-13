@@ -8,6 +8,7 @@ export default defineConfig({
     target: 'es2022',
   },
   test: {
+    include: ['src/**/*.{test,spec}.{ts,tsx}'],
     environment: 'jsdom',
     setupFiles: ['./src/test/setup.ts'],
     exclude: ['e2e/**', 'node_modules/**', 'dist/**'],

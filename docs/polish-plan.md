@@ -39,7 +39,7 @@ The review identified these priorities:
 
 The audit did not run the full quality suites, authenticate against a live homeserver, prove provider push delivery, exercise live calls, or validate native devices. Local demo and mocked behavior do not establish protocol interoperability.
 
-Issue 01 records implementation status separately from validation status. Use **implemented / partial / absent** for behavior and **mocked / browser-verified / live-verified / untested** for evidence, with dated references where available.
+The [capability baseline](capability-baseline.md), produced under issue 01, records implementation status separately from validation status. Use **implemented / partial / absent** for behavior and **mocked / browser-verified / live-verified / untested** for evidence, with dated references where available.
 
 ## Behavioral references
 

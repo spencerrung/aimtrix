@@ -1,5 +1,7 @@
 # Architecture
 
+The [capability baseline](capability-baseline.md) distinguishes implemented source paths from browser, live Matrix and native-device evidence.
+
 ## Boundaries
 
 Aimtrix is a static single-page application. It talks directly to a Matrix homeserver and, when calls are enabled, MatrixRTC infrastructure discovered through Matrix configuration. There is no required Aimtrix application server.
@@ -22,7 +24,7 @@ browser
 - `src/features/`: product surfaces such as authentication, the workspace, profile pages, and media pickers.
 - `src/components/`: reusable presentation components without Matrix SDK ownership.
 - `src/settings/`: strictly parsed local/private personalization models.
-- `src/styles/`: global reset, accessibility rules, and tokenized Aqua/Aero themes.
+- `src/styles.css`: global reset, accessibility rules, and tokenized Aqua/Aero themes.
 
 The UI should not depend throughout the tree on mutable Matrix SDK objects. The Matrix boundary produces immutable snapshots so React updates remain predictable and transformation logic can be tested without a homeserver.
 
@@ -56,7 +58,7 @@ Service-worker updates remain waiting until the user chooses **Reload**. Aimtrix
 
 Joined-space state provides the immediate `m.space.child` and `m.space.parent` graph. When a user selects a top-level space, Aimtrix also queries the standard room-hierarchy endpoint so nested subspaces and rooms that are visible but not yet joined can appear in the buddy sidebar. The UI keeps subspaces out of the top-level rail, resolves descendant rooms cycle-safely, preserves Matrix `order` values, aggregates unread state, and offers an explicit join action for hierarchy previews.
 
-Users with sufficient room-state power can enter arrange mode to drag, keyboard-reorder, or move children between joined spaces. Aimtrix persists mixed room/subspace ordering through standard `m.space.child` content and updates `m.space.parent` for moved subspaces where permitted. Top-level spaces have no Matrix parent to carry an order, so their private order is synchronized through `dev.alucard.aimtrix.space_order.v1`. Home and the dedicated Direct Messages scope are fixed local views and are never written as Matrix spaces.
+Users with sufficient room-state power can enter arrange mode to drag, keyboard-reorder, or move children between joined spaces. Aimtrix persists mixed room/subspace ordering through standard `m.space.child` content and updates `m.space.parent` for moved subspaces where permitted. Top-level spaces have no Matrix parent to carry an order, so their private order uses per-room `org.matrix.msc3230.space_order` account data through the SDK `EventType.SpaceOrder` API (MSC3230). Valid lexicographic order values take precedence; the older `dev.alucard.aimtrix.space_order.v1` list remains a read fallback and is migrated when no valid room-order values exist. Other clients may ignore this proposal-backed preference without affecting membership. Home and the dedicated Direct Messages scope are fixed local views and are never written as Matrix spaces.
 
 ## Read positions and conversation backdrops
 
@@ -76,6 +78,6 @@ Aimtrix itself remains stateless. Sent attachments, stickers, selected GIFs, and
 
 ## Custom behavior
 
-Use standard Matrix events for messages, edits, replies, reactions, receipts, presence, calls, stickers, pins, room state, and moderation. Image-backed emoji reactions use the standard `m.reaction` event with a stable `:pack-entry-id:` key and degrade to that plain-text key in clients without the pack. Portable client preferences are privately synchronized in `dev.alucard.aimtrix.preferences.v1`; camera, microphone, and speaker IDs remain device-local. `dev.alucard.aimtrix.profile.v1` carries a short bio, banner reference/preset, avatar frame, card/effect choices, up to three sticker references, and personal sticker-manifest registrations. These decorations are intentionally a private self-page, not a claim that Matrix exposes portable public banners. Like standard Matrix account data and profile media, this is homeserver-private rather than end-to-end encrypted and must not hold secrets. `dev.alucard.aimtrix.space_order.v1` contains only an ordered array of top-level Matrix space IDs. Other clients remain fully usable when they ignore these private account-data events.
+Use standard Matrix events for messages, edits, replies, reactions, receipts, presence, calls, stickers, pins, room state, and moderation. Image-backed emoji reactions use the standard `m.reaction` event with a stable `:pack-entry-id:` key and degrade to that plain-text key in clients without the pack. Portable client preferences are privately synchronized in `dev.alucard.aimtrix.preferences.v1`; camera, microphone, and speaker IDs remain device-local. `dev.alucard.aimtrix.profile.v1` carries a short bio, banner reference/preset, avatar frame, card/effect choices, up to three sticker references, and personal sticker-manifest registrations. These decorations are intentionally a private self-page, not a claim that Matrix exposes portable public banners. Like standard Matrix account data and profile media, this is homeserver-private rather than end-to-end encrypted and must not hold secrets. The legacy `dev.alucard.aimtrix.space_order.v1` contains only an ordered array of top-level Matrix space IDs; new root ordering writes use the per-room MSC3230 account-data event described above. Other clients remain fully usable when they ignore these private account-data events.
 
 Long code files use a standard `m.file` message with the optional `dev.alucard.aimtrix.code.v1` content object, currently `{ "language": "typescript" }`. Clients that do not understand the namespaced metadata still receive a normal downloadable file. Aimtrix previews these files collapsed, supports expand/collapse, copy, and download, and keeps the uploaded content encrypted through the existing attachment path in encrypted rooms.
