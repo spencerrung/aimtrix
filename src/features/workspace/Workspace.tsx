@@ -1946,6 +1946,10 @@ function Conversation({
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
+  const edgeScrollIntent = useRef<{ direction?: 'backward' | 'forward'; roomId?: string; until: number } | undefined>(undefined);
+  const touchScrollY = useRef<number | undefined>(undefined);
+  const armEdgeScroll = (direction?: 'backward' | 'forward') => { edgeScrollIntent.current = { direction, roomId: room?.id, until: Date.now() + 750 }; };
+  useLayoutEffect(() => { edgeScrollIntent.current = undefined; }, [conversationVisible, room?.id]);
   const historyRequestToken = useRef(0);
   const activeHistoryRequest = useRef<number | undefined>(undefined);
   const historyActionRevision = useRef<number | undefined>(undefined);
@@ -2597,6 +2601,7 @@ function Conversation({
 
   const requestHistory = useCallback(async (direction: 'backward' | 'forward', retry = false) => {
     if (!onLoadMore || activeHistoryRequest.current !== undefined || historyLoading || (!retry && (direction === 'backward' ? !history?.canLoadOlder : !history?.canLoadNewer))) return;
+    edgeScrollIntent.current = undefined;
     const element = timeline.current;
     if (element) readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
     viewportMode.current = 'detached';
@@ -2619,6 +2624,7 @@ function Conversation({
   }, [history?.canLoadNewer, history?.canLoadOlder, history?.revision, historyLoading, onDetachedChange, onLoadMore, room?.id]);
 
   const openContext = useCallback(async (eventId: string) => {
+    edgeScrollIntent.current = undefined;
     if (!conversationVisible) { setPendingSearchEvent({ roomId: room?.id, eventId }); onRevealConversation(); return; }
     const element = timeline.current;
     if (element) readingAnchor.current = captureTimelineAnchor(element) ?? readingAnchor.current;
@@ -2656,6 +2662,7 @@ function Conversation({
   }, [conversationVisible, openContext, pendingSearchEvent, room?.id]);
 
   const returnToLatest = useCallback(() => {
+    edgeScrollIntent.current = undefined;
     if (searchOpen) onCloseContext();
     setLocalHistoryError(undefined);
     setLocalTarget(undefined);
@@ -2696,6 +2703,7 @@ function Conversation({
   const handleTimelineScroll = useCallback(() => {
     const element = timeline.current;
     if (!element || !conversationVisible || programmaticTimelineScroll.current) return;
+    const movement = element.scrollTop - lastKnownScrollTop.current;
     const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
     lastKnownScrollTop.current = element.scrollTop;
     const detached = historicalWindow || !atBottom;
@@ -2705,10 +2713,14 @@ function Conversation({
     readingAnchor.current = captureTimelineAnchor(element);
     onDetachedChange?.(detached);
     if (!detached) reportLatestRead();
-    if (historyLoading || historyError) return;
-    if (element.scrollTop <= 80 && history?.canLoadOlder) void requestHistory('backward');
-    else if (atBottom && history?.canLoadNewer) void requestHistory('forward');
-  }, [conversationVisible, historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, onDetachedChange, reportLatestRead, requestHistory]);
+    // Layout, focus and anchor restoration also emit scroll events. Only a
+    // fresh user scroll gesture may turn an edge into automatic pagination;
+    // otherwise a restored bounded window can immediately page itself away.
+    const intent = edgeScrollIntent.current;
+    if (!intent || intent.roomId !== activeRoomId || intent.until < Date.now() || historyLoading || historyError) return;
+    if (movement < 0 && intent.direction !== 'forward' && element.scrollTop <= 80 && history?.canLoadOlder) void requestHistory('backward');
+    else if (movement > 0 && intent.direction !== 'backward' && atBottom && history?.canLoadNewer) void requestHistory('forward');
+  }, [activeRoomId, conversationVisible, historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, onDetachedChange, reportLatestRead, requestHistory]);
 
   const loadEmojiCatalog = useCallback(() => {
     if (catalogRequested.current) return;
@@ -2943,6 +2955,15 @@ function Conversation({
         aria-label="Messages"
         aria-live="polite"
         onScroll={handleTimelineScroll}
+        onWheel={(event) => { if (event.deltaY) armEdgeScroll(event.deltaY < 0 ? 'backward' : 'forward'); }}
+        onTouchStart={(event) => { touchScrollY.current = event.touches[0]?.clientY; }}
+        onTouchMove={(event) => { const y = event.touches[0]?.clientY; if (y !== undefined && touchScrollY.current !== undefined && y !== touchScrollY.current) armEdgeScroll(y > touchScrollY.current ? 'backward' : 'forward'); touchScrollY.current = y; }}
+        onPointerDown={(event) => { if (event.target === event.currentTarget) armEdgeScroll(); }}
+        onKeyDown={(event) => {
+          if (event.defaultPrevented || (event.target as HTMLElement).closest('button, input, textarea, select, [contenteditable=true]')) return;
+          if (['ArrowUp', 'PageUp', 'Home'].includes(event.key)) armEdgeScroll('backward');
+          else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) armEdgeScroll(event.shiftKey && event.key === ' ' ? 'backward' : 'forward');
+        }}
       >
         <div ref={timelineContent} className="timeline-content">
           {history && onLoadMore ? <div className="history-edge">{history.canLoadOlder

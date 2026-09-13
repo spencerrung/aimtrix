@@ -1874,10 +1874,85 @@ describe('Workspace history navigation', () => {
     rerenderWorkspace(structuredClone(workspace));
     expect(onLoadRoomHistory).not.toHaveBeenCalled();
     const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+    fireEvent.wheel(timeline, { deltaY: -390 });
     timeline.scrollTop = 10;
     fireEvent.scroll(timeline);
     expect(onLoadRoomHistory).toHaveBeenCalledWith('welcome', 'backward');
     expect(onHistoryDetached).toHaveBeenCalledWith('welcome', true);
+    await act(async () => {});
+  });
+
+  it('tracks programmatic edge scrolling without starting history pagination', () => {
+    const onLoadRoomHistory = vi.fn().mockResolvedValue(undefined);
+    const onHistoryDetached = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    renderWorkspace({ workspace: historyWorkspace(), onLoadRoomHistory, onHistoryDetached });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 10;
+    fireEvent.scroll(timeline);
+    timeline.scrollTop = 800;
+    fireEvent.scroll(timeline);
+    expect(onLoadRoomHistory).not.toHaveBeenCalled();
+    expect(onHistoryDetached).toHaveBeenCalledWith('welcome', true);
+  });
+
+  it('consumes one upward wheel gesture for one older page without paging after its restoration', async () => {
+    const onLoadRoomHistory = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    renderWorkspace({ workspace: historyWorkspace(), onLoadRoomHistory });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+    fireEvent.wheel(timeline, { deltaY: -390 });
+    timeline.scrollTop = 10;
+    fireEvent.scroll(timeline);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load older messages' })).toBeEnabled());
+    expect(onLoadRoomHistory).toHaveBeenCalledExactlyOnceWith('welcome', 'backward');
+    timeline.scrollTop = 0;
+    fireEvent.scroll(timeline);
+    timeline.scrollTop = 800;
+    fireEvent.scroll(timeline);
+    expect(onLoadRoomHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not page forward when a manual older page restores its bounded window at the newer edge', async () => {
+    const pending = pendingSend();
+    const onLoadRoomHistory = vi.fn().mockReturnValue(pending.promise);
+    const workspace = historyWorkspace();
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onLoadRoomHistory });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+    fireEvent.wheel(timeline, { deltaY: 50 });
+    fireEvent.click(screen.getByRole('button', { name: 'Load older messages' }));
+    const older = structuredClone(workspace);
+    older.historyByRoom!.welcome.revision++;
+    older.messagesByRoom.welcome.unshift({ ...older.messagesByRoom.welcome[0], id: 'synthetic-manual-older' });
+    rerenderWorkspace(older);
+    await act(async () => { pending.resolve(); await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
+    timeline.scrollTop = 800;
+    fireEvent.scroll(timeline);
+    expect(onLoadRoomHistory).toHaveBeenCalledExactlyOnceWith('welcome', 'backward');
+  });
+
+  it('allows PageDown navigation to load the newer edge', async () => {
+    const onLoadRoomHistory = vi.fn().mockResolvedValue(undefined);
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    renderWorkspace({ workspace: historyWorkspace(), onLoadRoomHistory });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 400;
+    fireEvent.scroll(timeline);
+    fireEvent.keyDown(timeline, { key: 'PageDown' });
+    timeline.scrollTop = 800;
+    fireEvent.scroll(timeline);
+    expect(onLoadRoomHistory).toHaveBeenCalledExactlyOnceWith('welcome', 'forward');
     await act(async () => {});
   });
 
