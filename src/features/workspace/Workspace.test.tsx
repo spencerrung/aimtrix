@@ -81,7 +81,9 @@ function renderWorkspace(
     onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
     onReturnToLive?: (roomId: string) => Promise<void>;
     onHistoryDetached?: (roomId: string, detached: boolean) => void;
-    onMarkRoomRead?: (roomId: string) => Promise<void>;
+    onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
+    onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
+    onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
     onSendMessage?: (
       roomId: string,
       body: string,
@@ -131,6 +133,8 @@ function renderWorkspace(
       onReturnToLive={overrides.onReturnToLive}
       onHistoryDetached={overrides.onHistoryDetached}
       onMarkRoomRead={overrides.onMarkRoomRead}
+      onMarkRoomUnread={overrides.onMarkRoomUnread}
+      onMarkThreadRead={overrides.onMarkThreadRead}
       onSendMessage={overrides.onSendMessage}
       onSendReply={overrides.onSendReply}
       onToggleReaction={overrides.onToggleReaction}
@@ -914,7 +918,7 @@ describe('Workspace demo', () => {
     expect(screen.getByRole('separator', { name: '3 unread messages below' })).toBeInTheDocument();
     expect(onMarkRoomRead).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
-    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome'));
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome', { eventId: 'm5' }));
 
     const readWorkspace = structuredClone(workspace);
     const readRoom = readWorkspace.rooms.find((room) => room.id === 'welcome');
@@ -1956,13 +1960,13 @@ describe('Workspace history navigation', () => {
     await act(async () => {});
   });
 
-  it('does not send a receipt for filtered loaded results when a new live message arrives', () => {
+  it('does not send a receipt for filtered loaded results when a new live message arrives', async () => {
     const workspace = historyWorkspace('live');
     const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
     room.unreadCount = 0; room.timelineUnreadCount = 0; room.readUpToMessageId = 'm5';
     const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
     const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
-    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
     fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), { target: { value: 'Encryption' } });
     const updated = structuredClone(workspace);
@@ -2039,7 +2043,7 @@ describe('Workspace history navigation', () => {
     live.historyByRoom!.welcome.revision = 3;
     rerenderWorkspace(live);
     fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
-    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome'));
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome', { eventId: 'm5' }));
   });
 
   it.each([true, false])('releases superseded pagination feedback when external context arrives (loading snapshot: %s)', async (includesLoadingSnapshot) => {
@@ -2082,5 +2086,178 @@ describe('Workspace history navigation', () => {
     rerenderWorkspace(structuredClone(options.workspace));
     await waitFor(() => expect(screen.getByText(/This notification does not include a room/)).toBeInTheDocument());
     expect(onOpenEventContext).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('Workspace read bookkeeping', () => {
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal('innerWidth', 1280); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+  function unreadWorkspace() {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.mode = 'matrix';
+    workspace.historyByRoom = { welcome: { mode: 'live', revision: 1, canLoadOlder: true, canLoadNewer: false } };
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 0; room.timelineUnreadCount = 0; room.readUpToMessageId = 'm5';
+    return workspace;
+  }
+
+  it('privately reports the observed main tail only after the tab is visible and focused', async () => {
+    const workspace = unreadWorkspace();
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    let visible: DocumentVisibilityState = 'hidden';
+    let focused = false;
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible);
+    vi.spyOn(document, 'hasFocus').mockImplementation(() => focused);
+    renderWorkspace({ workspace, onMarkRoomRead, preferences: { ...defaultUserPreferences, sendReadReceipts: false } });
+    screen.getByLabelText('Message Welcome Lounge').focus();
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    visible = 'visible'; fireEvent(document, new Event('visibilitychange'));
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    focused = true; fireEvent(window, new Event('focus'));
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome', { eventId: 'm5' }));
+    fireEvent(window, new Event('focus'));
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not read the main tail when incoming content is behind a focused docked panel', async () => {
+    const workspace = unreadWorkspace();
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    screen.getByLabelText('Message thread').focus();
+    const updated = structuredClone(workspace);
+    updated.messagesByRoom.welcome.push({ ...updated.messagesByRoom.welcome[0], id: 'unseen-main-tail' });
+    rerenderWorkspace(updated);
+    fireEvent.scroll(screen.getByRole('region', { name: 'Messages' }));
+    expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
+    screen.getByLabelText('Message Welcome Lounge').focus();
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenLastCalledWith('welcome', { eventId: 'unseen-main-tail' }));
+  });
+
+  it('reads a thread only at its visible focused tail and leaves hidden arrivals unread', async () => {
+    const workspace = unreadWorkspace();
+    const onMarkThreadRead = vi.fn().mockResolvedValue(undefined);
+    let visible: DocumentVisibilityState = 'hidden';
+    vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => visible);
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace, onMarkThreadRead, preferences: { ...defaultUserPreferences, sendReadReceipts: false } });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    screen.getByLabelText('Message thread').focus();
+    expect(onMarkThreadRead).not.toHaveBeenCalled();
+    const timeline = container.querySelector<HTMLElement>('.thread-panel__timeline')!;
+    Object.defineProperties(timeline, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 200 } });
+    visible = 'visible'; fireEvent(document, new Event('visibilitychange'));
+    expect(onMarkThreadRead).not.toHaveBeenCalled();
+    timeline.scrollTop = 800; fireEvent.scroll(timeline);
+    await waitFor(() => expect(onMarkThreadRead).toHaveBeenCalledWith('welcome', 'm2', { eventId: 'm2-thread-2' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Collapse thread' }));
+    const updated = structuredClone(workspace);
+    updated.threadsByRoot!.m2.messages.push({ ...updated.threadsByRoot!.m2.messages[0], id: 'unseen-thread-tail' });
+    rerenderWorkspace(updated);
+    fireEvent.scroll(timeline);
+    expect(onMarkThreadRead).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Expand thread' }));
+    screen.getByLabelText('Message thread').focus();
+    await waitFor(() => expect(onMarkThreadRead).toHaveBeenLastCalledWith('welcome', 'm2', { eventId: 'unseen-thread-tail' }));
+  });
+
+  it('shows a failed thread read status with a deliberate retry and no opening-only receipt', async () => {
+    const onMarkThreadRead = vi.fn().mockRejectedValueOnce(new Error('Synthetic unsupported private receipt')).mockResolvedValue(undefined);
+    const workspace = unreadWorkspace();
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace, onMarkThreadRead });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    screen.getByLabelText('Message thread').focus();
+    expect(await screen.findByRole('alert')).toHaveTextContent('Thread read status could not sync');
+    expect(onMarkThreadRead).toHaveBeenCalledTimes(1);
+    const timeline = container.querySelector<HTMLElement>('.thread-panel__timeline')!;
+    Object.defineProperties(timeline, { scrollHeight: { configurable: true, value: 1000 }, clientHeight: { configurable: true, value: 200 } });
+    const updated = structuredClone(workspace);
+    updated.threadsByRoot!.m2.messages.push({ ...updated.threadsByRoot!.m2.messages[0], id: 'unseen-after-failure' });
+    rerenderWorkspace(updated);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry thread read status' }));
+    await waitFor(() => expect(onMarkThreadRead).toHaveBeenCalledTimes(2));
+    expect(onMarkThreadRead).toHaveBeenLastCalledWith('welcome', 'm2', { eventId: 'm2-thread-2' });
+    expect(screen.queryByText('Thread read status could not sync. Older homeservers may not support private thread tracking.')).not.toBeInTheDocument();
+  });
+
+  it('keeps a marked-unread reminder through opening and returns to an unloaded saved message', async () => {
+    const workspace = unreadWorkspace();
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.markedUnread = true; room.badgeCount = 1; room.unreadEventId = '$saved-unloaded';
+    const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace, onMarkRoomRead, onOpenEventContext });
+    screen.getByLabelText('Message Welcome Lounge').focus();
+    expect(screen.getByLabelText('Marked unread')).toHaveTextContent('•');
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Return to saved message' }));
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', '$saved-unloaded'));
+    expect(onMarkRoomRead).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark conversation read' }));
+    await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome', { eventId: undefined, explicit: true }));
+  });
+
+  it('offers mobile mark-unread with pending, retry, and a saved visible return point', async () => {
+    vi.stubGlobal('innerWidth', 412);
+    const workspace = unreadWorkspace();
+    const pending = pendingSend();
+    const onMarkRoomUnread = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    const { container } = renderWorkspace({ workspace, onMarkRoomUnread });
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    vi.spyOn(timeline, 'getBoundingClientRect').mockReturnValue({ ...rect(100), height: 400, bottom: 500 });
+    const row = container.querySelector<HTMLElement>('[data-event-id="m2"]')!;
+    vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({ ...rect(160), height: 50, bottom: 210 });
+    fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
+    expect(onMarkRoomUnread).toHaveBeenCalledWith('welcome', 'm2');
+    expect(screen.getByRole('button', { name: 'Mark unread' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Saving read status');
+    expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
+    await act(async () => pending.reject(new Error('Synthetic save failure')));
+    expect(screen.getByRole('alert')).toHaveTextContent('Could not mark this conversation unread');
+    fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
+    await waitFor(() => expect(screen.getByText('Marked unread. Your reminder stays until you mark this conversation read.')).toBeVisible());
+    expect(onMarkRoomUnread).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Read status' })).toHaveFocus();
+  });
+
+  it('keeps Escape working during a read-status save and never steals focus when it finishes', async () => {
+    const pending = pendingSend();
+    renderWorkspace({ workspace: unreadWorkspace(), onMarkRoomUnread: vi.fn().mockReturnValue(pending.promise) });
+    fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
+    expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    composer.focus();
+    await act(async () => pending.resolve());
+    expect(composer).toHaveFocus();
+    expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
+  });
+
+  it('shows a reminder dot for muted ordinary unreads without inventing a notification', () => {
+    const workspace = unreadWorkspace();
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 12; room.highlightCount = 0; room.badgeCount = 1; room.muted = true; room.markedUnread = true;
+    renderWorkspace({ workspace });
+    expect(screen.getByLabelText('Marked unread')).toHaveTextContent('•');
+    expect(screen.queryByLabelText('1 unread notifications')).not.toBeInTheDocument();
+  });
+
+  it('uses badge policy for room rows while retaining the raw unread boundary', () => {
+    const workspace = unreadWorkspace();
+    const room = workspace.rooms.find((candidate) => candidate.id === 'welcome')!;
+    room.unreadCount = 12; room.timelineUnreadCount = 12; room.badgeCount = 2; room.muted = true;
+    renderWorkspace({ workspace });
+    const row = screen.getByRole('button', { name: /Welcome Lounge.*2 unread notifications/ });
+    expect(within(row).getByLabelText('2 unread notifications')).toHaveTextContent('2');
+    expect(within(row).queryByText('12')).not.toBeInTheDocument();
   });
 });

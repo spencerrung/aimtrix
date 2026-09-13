@@ -32,6 +32,7 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 - [x] One contextual thread/details/search surface, bounded desktop widths, shared mobile/browser Back, retained reading anchors and drafts, accessible More/member menus, and reduced-height composition. See [conversation shell](docs/conversation-shell.md); physical keyboard/native Back acceptance remains separate.
 - [x] Movable history bounded to 250 visible messages, older/newer navigation, old-event/reply context, stable reading anchors, truthful loading/retry/end states, and return to live. See [history navigation](docs/history-navigation.md); full search, old threads and receipt reconciliation retain their separate gates.
 - [x] Text, notices, emotes, replies, edits, redaction, reactions, pins, typing state, and read-receipt sending.
+- [x] Private main/thread read tracking, focused live-tail advancement, consistent mute/highlight badges, explicit read/unread reminders and saved message context. See [read state](docs/unread-state.md) for cross-device semantics and older-server/physical-device boundaries.
 - [x] Image/video/audio/file rendering and authenticated encrypted-attachment decryption.
 - [x] Encrypted/unencrypted uploads with limits, progress, cancellation, and retry.
 - [x] Join by alias/ID, public-directory search, invite accept/reject, leave, room creation, encrypted room creation, direct-chat creation, and space creation.

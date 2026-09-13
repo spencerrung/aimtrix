@@ -200,6 +200,175 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
       await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
+    await check('private-read-tracking-and-reminders', async () => {
+      const preferencesPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/dev.alucard.aimtrix.preferences.v1`;
+      const setPublicReads = async (page, enabled) => {
+        await page.bringToFront();
+        await page.getByRole('button', { name: 'Open settings', exact: true }).click();
+        const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+        await settings.getByRole('checkbox', { name: /^Send read receipts/ }).setChecked(enabled);
+        await until(async () => {
+          try { return (await api(preferencesPath, { token: aliceSession.accessToken })).sendReadReceipts === enabled; }
+          catch { return false; }
+        }, 'receipt-preference-persisted');
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      };
+      const readAction = async (page, unread) => {
+        await page.bringToFront();
+        await page.getByRole('button', { name: 'Read status', exact: true }).click();
+        const popover = page.getByRole('dialog', { name: 'Conversation read status', exact: true });
+        await popover.getByRole('button', { name: unread ? 'Mark unread' : 'Mark conversation read', exact: true }).click();
+        await popover.getByText(unread ? /^Marked unread\. Your reminder/ : /^Conversation marked read\./).waitFor();
+        // Saving must retain keyboard focus: exercise Escape without refocusing.
+        await page.keyboard.press('Escape');
+        await popover.waitFor({ state: 'hidden' });
+      };
+      const followLatest = async (page) => {
+        await page.bringToFront();
+        const latest = page.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.isVisible()) {
+          await latest.click();
+          await latest.waitFor({ state: 'hidden' });
+        }
+      };
+      const sendMain = async (marker) => {
+        await bob.bringToFront();
+        const accepted = bob.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/'));
+        await bob.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
+        await bob.getByRole('button', { name: 'Send message', exact: true }).click();
+        const response = await accepted;
+        invariant(response.ok(), 'receipt-message-accepted');
+        return (await response.json()).event_id;
+      };
+      // Keep identifiers and sync payloads in memory. Neither observer is an SDK
+      // client, and neither sends receipts or changes the account it observes.
+      // Select the room from each response below. Synapse's room-ID filter also
+      // filters room account-data objects, which lack their own room_id field.
+      const filter = encode(JSON.stringify({ presence: { types: [] }, account_data: { types: [] }, room: {
+        state: { types: [] }, timeline: { types: [], limit: 0 },
+        ephemeral: { types: ['m.receipt'] }, account_data: { types: ['m.fully_read', 'm.marked_unread'] },
+      } }));
+      const observeSync = async (token) => {
+        const first = await api(`/_matrix/client/v3/sync?timeout=0&filter=${filter}`, { token });
+        let since = first.next_batch;
+        const receipts = [];
+        const accountData = new Map();
+        return { receipts, accountData, poll: async () => {
+          const response = await api(`/_matrix/client/v3/sync?timeout=0&filter=${filter}&since=${encode(since)}`, { token });
+          since = response.next_batch;
+          const room = response.rooms?.join?.[roomId];
+          for (const event of room?.ephemeral?.events ?? []) {
+            if (event.type !== 'm.receipt') continue;
+            for (const [eventId, types] of Object.entries(event.content)) {
+              for (const [type, users] of Object.entries(types)) {
+                const receipt = users[aliceSession.userId];
+                if (receipt) receipts.push({ eventId, type, threadId: receipt.thread_id });
+              }
+            }
+          }
+          for (const event of room?.account_data?.events ?? []) accountData.set(event.type, event.content);
+        } };
+      };
+      const sentReceipts = [];
+      const recordReceipt = (request) => {
+        if (request.method() !== 'POST') return;
+        const path = new URL(request.url()).pathname.split('/').map(decodeURIComponent);
+        const receipt = path.indexOf('receipt');
+        if (receipt < 0 || path[receipt - 1] !== roomId) return;
+        sentReceipts.push({ type: path[receipt + 1], eventId: path[receipt + 2], threadId: request.postDataJSON()?.thread_id });
+      };
+      for (const page of [alice, bob, aliceSecond]) await openRoom(page, roomName);
+      await setPublicReads(alice, false);
+      await setPublicReads(aliceSecond, false);
+      await followLatest(alice);
+      alice.on('request', recordReceipt); aliceSecond.on('request', recordReceipt);
+      try {
+        const own = await observeSync(secondSession.accessToken);
+        const other = await observeSync(bobSession.accessToken);
+        const privateMarker = `Synthetic private reading ${randomBytes(8).toString('hex')}`;
+        const privateEvent = await sendMain(privateMarker);
+        await alice.locator('.timeline-message').filter({ hasText: privateMarker }).waitFor({ timeout: 45000 });
+        await readAction(alice, false);
+        await until(async () => {
+          await own.poll(); await other.poll();
+          return own.receipts.some((receipt) => receipt.eventId === privateEvent && receipt.type === 'm.read.private' && receipt.threadId === 'main')
+            && own.accountData.get('m.fully_read')?.event_id === privateEvent;
+        }, 'private-main-read-own-device-sync');
+        invariant(sentReceipts.some((receipt) => receipt.eventId === privateEvent && receipt.type === 'm.read.private' && receipt.threadId === 'main'), 'private-main-receipt-scope');
+
+        // A fresh reply exercises the old privacy regression: opening a thread
+        // with public receipts off must never silently send an m.read receipt.
+        await bob.bringToFront();
+        const bobRoot = bob.locator('.timeline .timeline-message:has(.thread-summary)').first();
+        const rootId = await bobRoot.getAttribute('data-event-id');
+        invariant(Boolean(rootId), 'receipt-thread-root');
+        await bobRoot.locator('.thread-summary').click();
+        const threadMarker = `Synthetic private thread reading ${randomBytes(8).toString('hex')}`;
+        const accepted = bob.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/'));
+        const bobThread = bob.getByRole('complementary', { name: 'Thread', exact: true });
+        await bobThread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(threadMarker);
+        await bobThread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
+        const response = await accepted;
+        invariant(response.ok(), 'receipt-thread-message-accepted');
+        const threadEvent = (await response.json()).event_id;
+        await alice.bringToFront();
+        await alice.locator(`.timeline [data-event-id=${JSON.stringify(rootId)}] .thread-summary`).click();
+        const aliceThread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+        await aliceThread.locator('.timeline-message').filter({ hasText: threadMarker }).waitFor({ timeout: 45000 });
+        await aliceThread.locator('.thread-panel__timeline').evaluate((element) => {
+          element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll'));
+        });
+        await until(async () => {
+          await own.poll(); await other.poll();
+          return own.receipts.some((receipt) => receipt.eventId === threadEvent && receipt.type === 'm.read.private' && receipt.threadId === rootId);
+        }, 'private-thread-read-own-device-sync');
+        invariant(sentReceipts.some((receipt) => receipt.eventId === threadEvent && receipt.type === 'm.read.private' && receipt.threadId === rootId), 'private-thread-receipt-scope');
+        invariant(own.accountData.get('m.fully_read')?.event_id === privateEvent, 'thread-read-preserves-main-position');
+        await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
+        await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
+
+        await readAction(alice, true);
+        await until(async () => {
+          await own.poll(); await other.poll();
+          return own.accountData.get('m.marked_unread')?.unread === true;
+        }, 'marked-unread-own-device-sync');
+        const returnPoint = own.accountData.get('m.marked_unread')?.['dev.alucard.aimtrix.return_point']?.event_id;
+        invariant(typeof returnPoint === 'string' && returnPoint.startsWith('$'), 'marked-unread-return-point');
+        await aliceSecond.bringToFront();
+        await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
+        const reminder = aliceSecond.locator('.conversation-history-controls .history-context').filter({ hasText: 'Marked unread for later.' });
+        await reminder.waitFor({ timeout: 45000 });
+        await reminder.getByRole('button', { name: 'Return to saved message', exact: true }).click();
+        await until(async () => aliceSecond.locator('[data-event-id]').evaluateAll((elements, target) =>
+          elements.some((element) => element.getAttribute('data-event-id') === target && element === element.ownerDocument.activeElement), returnPoint), 'marked-unread-return-context');
+        const markerPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/rooms/${encode(roomId)}/account_data/m.marked_unread`;
+        invariant((await api(markerPath, { token: secondSession.accessToken })).unread === true, 'reminder-persists-after-return');
+        await readAction(alice, false);
+        await until(async () => { await own.poll(); return own.accountData.get('m.marked_unread')?.unread === false; }, 'marked-unread-explicit-clear');
+        await aliceSecond.bringToFront();
+        await reminder.waitFor({ state: 'hidden' });
+        await other.poll();
+        invariant(!other.receipts.some((receipt) => receipt.type === 'm.read.private' || receipt.eventId === privateEvent || receipt.eventId === threadEvent), 'private-receipts-absent-to-other-user');
+        invariant(!sentReceipts.some((receipt) => receipt.type === 'm.read' && [privateEvent, threadEvent].includes(receipt.eventId)), 'no-public-read-with-privacy-off');
+        invariant(!other.accountData.has('m.marked_unread'), 'reminder-private-to-account');
+
+        await setPublicReads(alice, true);
+        await followLatest(alice);
+        const publicMarker = `Synthetic public reading ${randomBytes(8).toString('hex')}`;
+        const publicEvent = await sendMain(publicMarker);
+        await alice.locator('.timeline-message').filter({ hasText: publicMarker }).waitFor({ timeout: 45000 });
+        await readAction(alice, false);
+        await until(async () => {
+          await other.poll();
+          return other.receipts.some((receipt) => receipt.eventId === publicEvent && receipt.type === 'm.read' && receipt.threadId === 'main');
+        }, 'public-main-read-other-user-sync');
+        invariant(sentReceipts.some((receipt) => receipt.eventId === publicEvent && receipt.type === 'm.read' && receipt.threadId === 'main'), 'public-main-receipt-scope');
+        await setPublicReads(aliceSecond, true);
+      } finally {
+        alice.off('request', recordReceipt); aliceSecond.off('request', recordReceipt);
+      }
+    });
     await check('encrypted-history-and-context', async () => {
       await openRoom(alice, roomName);
       // Buddy rows prefer a room topic to message previews. Clear this test

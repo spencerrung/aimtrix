@@ -12,6 +12,10 @@ const harness = vi.hoisted(() => ({
   remote: undefined as ProfilePersonalization | undefined,
   update: vi.fn<() => Promise<void>>(),
   forget: vi.fn<() => Promise<void>>(),
+  markRead: vi.fn(),
+  markThreadRead: vi.fn(),
+  markUnread: vi.fn(),
+  notificationPreferences: vi.fn(),
 }));
 vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   constructor() { return new Proxy(this, { get: (target, key) => Reflect.get(target, key) ?? (() => undefined) }); }
@@ -20,14 +24,25 @@ vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   loadProfilePersonalization = () => harness.remote;
   updateProfilePersonalization = () => harness.update();
   forgetSession = () => harness.forget();
+  markRoomRead = (...args: unknown[]) => harness.markRead(...args);
+  markThreadRead = (...args: unknown[]) => harness.markThreadRead(...args);
+  markRoomUnread = (...args: unknown[]) => harness.markUnread(...args);
+  setNotificationPreferences = (preferences: unknown) => harness.notificationPreferences(preferences);
 } }));
 vi.mock('./config/runtimeConfig', async (original) => {
   const actual = await original<typeof import('./config/runtimeConfig')>();
   return { ...actual, loadRuntimeConfig: async () => ({ config: actual.defaultRuntimeConfig, warnings: [] }) };
 });
-vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange }: {
+vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread }: {
   workspace: typeof demoWorkspace; profilePersonalization: ProfilePersonalization; onProfilePersonalizationChange: (next: ProfilePersonalization) => Promise<void>;
-}) => <main><span>{workspace.user.id}</span><span data-testid="profile-bio">{profilePersonalization.bio}</span><button onClick={() => void onProfilePersonalizationChange({ ...profilePersonalization, bio: 'Old pending update' })}>Update profile</button></main> }));
+  onMarkRoomRead: (roomId: string, options: { eventId: string; explicit: boolean }) => Promise<void>;
+  onMarkThreadRead: (roomId: string, rootId: string, options: { eventId: string }) => Promise<void>;
+  onMarkRoomUnread: (roomId: string, eventId: string) => Promise<void>;
+}) => <main><span>{workspace.user.id}</span><span data-testid="profile-bio">{profilePersonalization.bio}</span><button onClick={() => void onProfilePersonalizationChange({ ...profilePersonalization, bio: 'Old pending update' })}>Update profile</button>
+  <button onClick={() => void onMarkRoomRead('synthetic-room', { eventId: '$viewed', explicit: true })}>Read main</button>
+  <button onClick={() => void onMarkThreadRead('synthetic-room', '$root', { eventId: '$reply' })}>Read thread</button>
+  <button onClick={() => void onMarkRoomUnread('synthetic-room', '$return')}>Unread reminder</button>
+</main> }));
 import App from './App';
 
 const ready = (userId = '@one:example.test'): MatrixControllerSnapshot => ({ status: 'ready', workspace: { ...demoWorkspace, mode: 'matrix', user: { ...demoWorkspace.user, id: userId } } });
@@ -35,6 +50,8 @@ function publish(snapshot: MatrixControllerSnapshot) { harness.snapshot = snapsh
 beforeEach(() => {
   harness.listeners.clear(); harness.snapshot = ready(); harness.remote = undefined;
   harness.update.mockReset().mockResolvedValue(undefined); harness.forget.mockReset().mockResolvedValue(undefined);
+  harness.notificationPreferences.mockReset();
+  harness.markRead.mockReset().mockResolvedValue(undefined); harness.markThreadRead.mockReset().mockResolvedValue(undefined); harness.markUnread.mockReset().mockResolvedValue(undefined);
   localStorage.clear(); sessionStorage.clear();
 });
 
@@ -87,5 +104,20 @@ describe('App optional appearance storage', () => {
     expect(document.documentElement.dataset.theme).toBe(defaultRuntimeConfig.defaultTheme);
     expect(document.documentElement.dataset.accent).toBe(defaultUserPreferences.accent);
     expect(document.documentElement.dataset.density).toBe(defaultUserPreferences.density);
+  });
+});
+
+
+describe('App receipt privacy', () => {
+  it.each([true, false])('passes public-receipt preference %s to both read paths and keeps reminder event IDs', async (publicReceipt) => {
+    localStorage.setItem('aimtrix.preferences.v1', JSON.stringify({ ...defaultUserPreferences, sendReadReceipts: publicReceipt }));
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Read main' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Read thread' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Unread reminder' }));
+    await waitFor(() => expect(harness.notificationPreferences).toHaveBeenLastCalledWith(expect.objectContaining({ sendReadReceipts: publicReceipt })));
+    expect(harness.markRead).toHaveBeenCalledWith('synthetic-room', { eventId: '$viewed', explicit: true, publicReceipt });
+    expect(harness.markThreadRead).toHaveBeenCalledWith('synthetic-room', '$root', { eventId: '$reply', publicReceipt });
+    expect(harness.markUnread).toHaveBeenCalledWith('synthetic-room', '$return');
   });
 });

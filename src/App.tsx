@@ -143,6 +143,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
       cameraId: preferences.cameraId,
     });
     controller.setNotificationPreferences({
+      sendReadReceipts: preferences.sendReadReceipts,
       desktopNotifications: preferences.desktopNotifications,
       notificationSounds: preferences.notificationSounds,
       soundVolume: preferences.soundVolume,
@@ -291,8 +292,9 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onUploadAttachment={(roomId, file, onProgress, threadRootId, codeLanguage) => controller.uploadAttachment(roomId, file, onProgress, threadRootId, codeLanguage)}
         onCancelUpload={() => controller.cancelUpload()}
         onSendGif={(roomId, gif) => controller.sendGif(roomId, gif)}
-        onMarkRoomRead={(roomId) => controller.markRoomRead(roomId)}
-        onThreadOpened={(roomId, rootId) => controller.markThreadRead(roomId, rootId)}
+        onMarkRoomRead={(roomId, options) => controller.markRoomRead(roomId, { ...options, publicReceipt: preferences.sendReadReceipts })}
+        onMarkRoomUnread={(roomId, eventId) => controller.markRoomUnread(roomId, eventId)}
+        onMarkThreadRead={(roomId, rootId, options) => controller.markThreadRead(roomId, rootId, { ...options, publicReceipt: preferences.sendReadReceipts })}
         onJoinRoom={(roomIdOrAlias) => controller.joinRoom(roomIdOrAlias)}
         onSearchPublicRooms={(query) => controller.searchPublicRooms(query)}
         onCreateDirectRoom={(userId) => controller.createDirectRoom(userId)}

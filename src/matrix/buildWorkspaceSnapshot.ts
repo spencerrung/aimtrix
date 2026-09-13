@@ -10,6 +10,7 @@ import {
   parseRoomBackground,
 } from './roomBackgrounds';
 import { resolveReadReceiptTarget, resolveReadReceiptTargets } from './readReceipts';
+import { LEGACY_MARKED_UNREAD_EVENT, MARKED_UNREAD_EVENT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import {
   resolveSpaceRelations,
   type SpaceHierarchyRoomData,
@@ -675,6 +676,7 @@ export function buildWorkspaceSnapshot(
   hierarchyRooms: SpaceHierarchyRoomData[] = [],
   rootSpaceOrder: string[] = [],
   cache?: WorkspaceSnapshotCache,
+  inMainTimelineForReceipt?: (event: MatrixEvent) => boolean,
 ): WorkspaceSnapshot {
   const userId = client.getSafeUserId();
   const matrixUser = currentUser(client, userId);
@@ -757,6 +759,8 @@ export function buildWorkspaceSnapshot(
       const summary: ThreadSummary = {
         rootId,
         replyCount,
+        unreadCount: room.getThreadUnreadNotificationCount?.(rootId, 'total' as NotificationCountType) ?? 0,
+        highlighted: (room.getThreadUnreadNotificationCount?.(rootId, 'highlight' as NotificationCountType) ?? 0) > 0,
         messages: replies,
         latestReply: latestReply
           ? {
@@ -772,7 +776,7 @@ export function buildWorkspaceSnapshot(
     if (messages.some((message) => threadsByRoot[message.id])) {
       messagesByRoom[room.roomId] = messages.map((message) => {
         const thread = threadsByRoot[message.id];
-        return thread ? { ...message, isThreadRoot: true, thread: { replyCount: thread.replyCount, latestReply: thread.latestReply } } : message;
+        return thread ? { ...message, isThreadRoot: true, thread: { replyCount: thread.replyCount, unreadCount: thread.unreadCount, highlighted: thread.highlighted, latestReply: thread.latestReply } } : message;
       });
     }
     const cachedMembers = cache?.members.get(room.roomId);
@@ -790,12 +794,43 @@ export function buildWorkspaceSnapshot(
     const latest = history?.state.mode && history.state.mode !== 'live'
       ? messagesForRoom(room, userId, pinnedIds, localEvents).at(-1)
       : messages.at(-1);
-    const unreadCount = room.getUnreadNotificationCount('total' as NotificationCountType);
-    const timelineUnreadCount = room.getRoomUnreadNotificationCount(
+    let unreadCount = room.getUnreadNotificationCount('total' as NotificationCountType);
+    let timelineUnreadCount = room.getRoomUnreadNotificationCount(
       'total' as NotificationCountType,
     );
-    const highlightCount = room.getUnreadNotificationCount('highlight' as NotificationCountType);
-    const readUpToEventId = timelineUnreadCount > 0 ? room.getEventReadUpTo(userId) : null;
+    let highlightCount = room.getUnreadNotificationCount('highlight' as NotificationCountType);
+    const pushRule = client.getRoomPushRule('global', room.roomId);
+    const muted = pushRule?.enabled !== false && (pushRule?.actions.some((action) => action === 'dont_notify') ?? false);
+    const markedUnreadEvent = room.getAccountData?.(MARKED_UNREAD_EVENT) ?? room.getAccountData?.(LEGACY_MARKED_UNREAD_EVENT);
+    const { markedUnread, unreadEventId } = parseMarkedUnread(markedUnreadEvent?.getContent());
+    const fullyReadId = room.getAccountData?.('m.fully_read')?.getContent<{ event_id?: unknown }>()?.event_id;
+    // A homeserver without private receipts can retain stale notification counts.
+    // Only a fully-read marker proven to cover the accepted main timeline may
+    // clear its counts. Thread counters remain authoritative and untouched.
+    if (inMainTimelineForReceipt && validUnreadEventId(fullyReadId)) {
+      const events = room.getLiveTimeline().getEvents();
+      const markerIndex = events.findIndex((event) => event.getId() === fullyReadId);
+      const acceptedMainEvent = (event: MatrixEvent) =>
+        validUnreadEventId(event.getId()) && (event.status === null || event.status === 'sent') && inMainTimelineForReceipt(event);
+      let lastMainIndex = -1;
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        if (acceptedMainEvent(events[index])) {
+          lastMainIndex = index;
+          break;
+        }
+      }
+      if (lastMainIndex >= 0 && markerIndex >= lastMainIndex && acceptedMainEvent(events[markerIndex])) {
+        unreadCount = Math.max(0, unreadCount - timelineUnreadCount);
+        highlightCount = Math.max(0, highlightCount - room.getRoomUnreadNotificationCount('highlight' as NotificationCountType));
+        timelineUnreadCount = 0;
+      }
+    }
+    // The aggregate already includes thread counts. Muting hides ordinary badge
+    // noise, while mentions and deliberate reminders remain visible.
+    const badgeCount = Math.max(markedUnread ? 1 : 0, muted ? highlightCount : unreadCount);
+    const readUpToEventId = timelineUnreadCount > 0
+      ? room.getEventReadUpTo(userId, true) ?? (validUnreadEventId(fullyReadId) ? fullyReadId : null)
+      : null;
     const readUpToMessageId = readUpToEventId
       ? resolveReadReceiptTarget(
           room.getLiveTimeline().getEvents().flatMap((event) => event.getId() ?? []),
@@ -835,7 +870,7 @@ export function buildWorkspaceSnapshot(
       group:
         membership === 'invite'
           ? 'Invites'
-          : unreadCount > 0
+          : badgeCount > 0
             ? 'Favorites'
             : isDirect
               ? 'Direct Messages'
@@ -848,6 +883,10 @@ export function buildWorkspaceSnapshot(
       lastMessage: latest?.body ?? roomTopic(room) ?? 'No messages yet',
       unreadCount,
       timelineUnreadCount,
+      highlightCount,
+      badgeCount,
+      markedUnread,
+      unreadEventId,
       readUpToMessageId,
       highlighted: highlightCount > 0,
       encrypted: room.hasEncryptionStateEvent(),
@@ -858,9 +897,7 @@ export function buildWorkspaceSnapshot(
         .getJoinedMembers()
         .filter((member) => member.userId !== userId && member.typing)
         .map((member) => member.name),
-      muted: client
-        .getRoomPushRule('global', room.roomId)
-        ?.actions.some((action) => action === 'dont_notify'),
+      muted,
       background,
       backgroundPolicy: {
         mode: isDirect ? 'members' : backgroundPermissionForThreshold(backgroundThreshold),
@@ -873,7 +910,7 @@ export function buildWorkspaceSnapshot(
   });
 
   rooms.sort((left, right) => {
-    if (left.unreadCount !== right.unreadCount) return right.unreadCount - left.unreadCount;
+    if (left.badgeCount !== right.badgeCount) return (right.badgeCount ?? 0) - (left.badgeCount ?? 0);
     return right.updatedAt - left.updatedAt;
   });
 
@@ -949,7 +986,7 @@ export function buildWorkspaceSnapshot(
               return rebuilt;
             })();
     }
-    const relatedRooms = relation.roomIds.flatMap((roomId) => {
+    const relatedRooms = [...new Set(relation.roomIds)].flatMap((roomId) => {
       const room = roomById.get(roomId);
       return room ? [room] : [];
     });
@@ -977,7 +1014,7 @@ export function buildWorkspaceSnapshot(
       childSpaceIds: relation.childSpaceIds,
       parentSpaceIds: relation.parentSpaceIds,
       roomIds: relation.roomIds,
-      unreadCount: relatedRooms.reduce((total, room) => total + room.unreadCount, 0),
+      unreadCount: relatedRooms.reduce((total, room) => total + (room.badgeCount ?? 0), 0),
       highlighted: relatedRooms.some((room) => room.highlighted),
     };
   });
@@ -1007,7 +1044,7 @@ export function buildWorkspaceSnapshot(
         .map((space) => space.id),
       parentSpaceIds: [],
       roomIds: chatRooms.map((room) => room.roomId),
-      unreadCount: rooms.reduce((total, room) => total + room.unreadCount, 0),
+      unreadCount: rooms.reduce((total, room) => total + (room.badgeCount ?? 0), 0),
       highlighted: rooms.some((room) => room.highlighted),
     },
     {
@@ -1025,7 +1062,7 @@ export function buildWorkspaceSnapshot(
       roomIds: rooms.filter((room) => room.kind === 'direct').map((room) => room.id),
       unreadCount: rooms
         .filter((room) => room.kind === 'direct')
-        .reduce((total, room) => total + room.unreadCount, 0),
+        .reduce((total, room) => total + (room.badgeCount ?? 0), 0),
       highlighted: rooms.some((room) => room.kind === 'direct' && room.highlighted),
     },
     ...orderedNestedSpaces,

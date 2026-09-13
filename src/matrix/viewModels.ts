@@ -53,8 +53,15 @@ export interface RoomSummary {
   presence?: PresenceState;
   statusMessage?: string;
   lastMessage: string;
+  /** SDK aggregate including threads, less any proven fully-read main count. */
   unreadCount: number;
+  /** Main timeline only, used for its unread boundary. */
   timelineUnreadCount?: number;
+  highlightCount?: number;
+  /** Display policy: ordinary unreads, muted highlights, or an explicit reminder. */
+  badgeCount?: number;
+  markedUnread?: boolean;
+  unreadEventId?: string;
   readUpToMessageId?: string;
   highlighted: boolean;
   encrypted: boolean;
@@ -77,6 +84,8 @@ export interface ReadReceiptSummary {
 export interface ThreadSummary {
   rootId: string;
   replyCount: number;
+  unreadCount?: number;
+  highlighted?: boolean;
   messages: MessageSummary[];
   latestReply?: Pick<MessageSummary, 'senderName' | 'body' | 'timestamp'>;
 }

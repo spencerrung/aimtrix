@@ -30,6 +30,7 @@ Ports are allocated on `127.0.0.1`; startup fails if another process claims an a
 | Disposable services | Pinned Synapse and Dex start as non-root services; loopback binding, read-only roots, disabled Docker logs, and health endpoints are checked |
 | Password login | Three application UI logins establish independent device IDs and IndexedDB crypto stores |
 | Room setup | Aimtrix creates an encrypted room; helpers invite/join synthetic peers through actual Matrix APIs; server state advertises Megolm |
+| Private read tracking and reminders | Two own devices observe private main/thread receipts and fully-read positions; another user cannot see those private receipts. Standard unread reminders and saved context synchronize, and enabling public receipts exposes the new main receipt. See [read state](unread-state.md). |
 | Encrypted send/receive | Alice sends through the composer; Bob and the second Alice device render the exact generated plaintext; outgoing/server events are encrypted and lack that plaintext; Bob sends a reply |
 | Session reload | The second Alice browser reloads and decrypts the earlier message; peers stay online, so this does not isolate stored-key restoration from possible key re-sharing |
 | Media | Aimtrix uploads encrypted bytes and sends an encrypted message; unauthenticated download fails, authenticated bytes differ from the source, and Bob's decrypted browser blob matches the original bytes exactly |
