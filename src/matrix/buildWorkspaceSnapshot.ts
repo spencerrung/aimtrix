@@ -1,3 +1,5 @@
+import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent } from './historyEvents';
+import type { HistoryView } from './RoomHistory';
 import { deliveryForStatus, deliveryFailureCopy } from './messageDelivery';
 import type { EncryptedMediaInfo } from './mediaContext';
 import {
@@ -78,6 +80,7 @@ interface CachedMembers {
 
 export interface WorkspaceSnapshotCache {
   roomVersions: Map<string, number>;
+  history: Map<string, HistoryView>;
   localEvents: Map<string, Map<string, MatrixEvent>>;
   presenceVersion: number;
   messages: Map<string, CachedMessages>;
@@ -87,6 +90,7 @@ export interface WorkspaceSnapshotCache {
 export function createWorkspaceSnapshotCache(): WorkspaceSnapshotCache {
   return {
     roomVersions: new Map<string, number>(),
+    history: new Map(),
     localEvents: new Map(),
     presenceVersion: 0,
     messages: new Map<string, CachedMessages>(),
@@ -457,7 +461,7 @@ function messagesForEvents(
     if (!rendered || !senderId || !eventId) return [];
     const sender = room.getMember(senderId);
     const replyEventId = content['m.relates_to']?.['m.in_reply_to']?.event_id;
-    const replyEvent = replyEventId ? eventById.get(replyEventId) : undefined;
+    const replyEvent = replyEventId ? eventById.get(replyEventId) ?? room.findEventById?.(replyEventId) : undefined;
     const replySenderId = replyEvent?.getSender();
     const replyRendered = replyEvent ? eventBody(replyEvent, replacements.get(replyEventId!)) : undefined;
     const eventReactions = [...(reactions.get(eventId)?.entries() ?? [])].map(
@@ -495,11 +499,11 @@ function messagesForEvents(
       nudge: rendered.nudge,
       threadRootId: threadRootByEventId.get(eventId) ?? (pendingEdit ? event.threadRootId ?? threadRootByEventId.get(content['m.relates_to']?.event_id ?? '') : undefined),
       isThreadRoot: threadRootIds.has(eventId),
-      replyTo: replyEventId && replyRendered
+      replyTo: replyEventId
         ? {
             eventId: replyEventId,
-            senderName: (replySenderId && room.getMember(replySenderId)?.name) || replySenderId || 'Unknown',
-            body: replyRendered.body,
+            senderName: (replySenderId && room.getMember(replySenderId)?.name) || replySenderId || 'Earlier message',
+            body: replyRendered?.body ?? (replyEvent?.isRedacted() ? 'This message was removed.' : 'Open the original message'),
           }
         : undefined,
       reactions: eventReactions.length ? eventReactions : undefined,
@@ -557,12 +561,28 @@ function messagesForRoom(
   userId: string,
   pinnedIds: ReadonlySet<string>,
   localEvents: MatrixEvent[] = [],
+  historyEvents?: MatrixEvent[],
 ): MessageSummary[] {
+  const selected = boundedTimelineEvents(mergeEvents(historyEvents ?? room.getLiveTimeline().getEvents(), localEvents.filter((event) => !event.threadRootId && originalEventContent(event)['m.relates_to']?.rel_type !== 'm.thread')));
+  const relations = room.getUnfilteredTimelineSet?.().relations;
+  const supplements: MatrixEvent[] = [];
+  const ids = new Set(selected.map((event) => event.getId()));
+  for (const event of selected) {
+    if (selected.length + supplements.length >= HISTORY_RAW_LIMIT) break;
+    for (const child of relations?.getAllChildEventsForEvent(event.getId()!) ?? []) {
+      if (selected.length + supplements.length >= HISTORY_RAW_LIMIT) break;
+      const relation = historyRelation(child);
+      if (!ids.has(child.getId()) && !isVisibleTimelineEvent(child) && child.status !== 'cancelled' && !child.isRedacted()
+        && (relation?.rel_type === 'm.annotation' || (relation?.rel_type === 'm.replace' && (child.status === null || child.status === 'sent')))) {
+        supplements.push(child); ids.add(child.getId());
+      }
+    }
+  }
   return messagesForEvents(
     room,
     userId,
     pinnedIds,
-    mergeEvents(room.getLiveTimeline().getEvents().slice(-250), localEvents.filter((event) => !event.threadRootId && originalEventContent(event)['m.relates_to']?.rel_type !== 'm.thread')),
+    [...selected, ...supplements],
     true,
   );
 }
@@ -676,9 +696,10 @@ export function buildWorkspaceSnapshot(
 
   const rooms: RoomSummary[] = chatRooms.map((room) => {
     const localEvents = [...(cache?.localEvents.get(room.roomId)?.values() ?? [])].filter((event) => event.status !== 'cancelled');
+    const history = cache?.history.get(room.roomId);
     const roomVersion = cache?.roomVersions.get(room.roomId) ?? 0;
     const timelineEvents = cache ? room.getLiveTimeline().getEvents() : undefined;
-    const fingerprint = timelineEvents ? timelineFingerprint(mergeEvents(timelineEvents, localEvents)) : '';
+    const fingerprint = timelineEvents ? `${history?.state.revision ?? 0}:${timelineFingerprint(mergeEvents(history?.events ?? timelineEvents, localEvents))}` : '';
     const cachedMessages = cache?.messages.get(room.roomId);
     const messages =
       cachedMessages && cachedMessages.version === roomVersion && cachedMessages.fingerprint === fingerprint
@@ -690,7 +711,7 @@ export function buildWorkspaceSnapshot(
                 (eventId): eventId is string => typeof eventId === 'string',
               ) ?? [],
             );
-            const rebuilt = messagesForRoom(room, userId, pinnedIds, localEvents);
+            const rebuilt = messagesForRoom(room, userId, pinnedIds, history?.state.mode === 'live' || !history ? localEvents : [], history?.events);
             const reconciled = cachedMessages
               ? reuseUnchangedMessages(cachedMessages.value, rebuilt)
               : rebuilt;
@@ -766,7 +787,9 @@ export function buildWorkspaceSnapshot(
     const membership = room.getMyMembership() === 'invite' ? 'invite' : 'join';
     const isDirect = directIds.has(room.roomId);
     const directMember = isDirect ? otherDirectMember(room, userId) : undefined;
-    const latest = messages.at(-1);
+    const latest = history?.state.mode && history.state.mode !== 'live'
+      ? messagesForRoom(room, userId, pinnedIds, localEvents).at(-1)
+      : messages.at(-1);
     const unreadCount = room.getUnreadNotificationCount('total' as NotificationCountType);
     const timelineUnreadCount = room.getRoomUnreadNotificationCount(
       'total' as NotificationCountType,
@@ -1040,6 +1063,7 @@ export function buildWorkspaceSnapshot(
     spaceRoomPreviews,
     rooms,
     messagesByRoom,
+    historyByRoom: cache ? Object.fromEntries([...cache.history].map(([id, view]) => [id, view.state])) : undefined,
     membersByRoom,
     threadsByRoot,
   };

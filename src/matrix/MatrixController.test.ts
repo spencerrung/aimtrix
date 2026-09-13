@@ -6,12 +6,13 @@ import { defaultRuntimeConfig } from '../config/runtimeConfig';
 import { defaultProfilePersonalization } from '../settings/profilePersonalization';
 import { MatrixController } from './MatrixController';
 import { MessageSendError } from './messageDelivery';
+import type { HistoryView } from './RoomHistory';
 import type { AimtrixPlatform } from '../platform/platform';
 
 type ControllerInternals = {
   client?: MatrixClient;
   sdk?: typeof import('matrix-js-sdk');
-  snapshotCache: { roomVersions: Map<string, number>; localEvents: Map<string, Map<string, MatrixEvent>> };
+  snapshotCache: { roomVersions: Map<string, number>; localEvents: Map<string, Map<string, MatrixEvent>>; history: Map<string, HistoryView> };
   connection: 'connecting' | 'online' | 'catching-up' | 'offline';
   attachThreadListeners: (room: unknown) => void;
   notifyForMessage: (event: unknown, room: unknown) => void;
@@ -288,6 +289,33 @@ describe('MatrixController protocol integration', () => {
     inject(fixture.controller, { getRoom: vi.fn().mockReturnValue(fixture.room) }, deliverySdk);
     finish(); await expect(pending).rejects.toThrow('Retry could not be confirmed');
     expect(fixture.publish).not.toHaveBeenCalled();
+  });
+
+  it('exposes bounded directional history actions and clears their selections on shutdown', async () => {
+    const fixture = deliveryFixture();
+    const events = Array.from({ length: 300 }, (_, index) => new MatrixEvent({
+      event_id: `$history-${index}`, room_id: fixture.room.roomId, sender: '@self:test', type: 'm.room.message',
+      content: { msgtype: 'm.text', body: `Synthetic history ${index}` },
+    }));
+    const timeline = { getEvents: () => events, getBaseIndex: () => 0, getNeighbouringTimeline: () => null, getPaginationToken: () => null };
+    Object.assign(fixture.room, {
+      getMyMembership: () => 'join', getLiveTimeline: () => timeline,
+      getUnfilteredTimelineSet: () => ({ getTimelineForEvent: () => timeline }),
+    });
+    Object.assign(fixture.client, { decryptEventIfNeeded: vi.fn().mockResolvedValue(undefined), isInitialSyncComplete: () => true });
+    const history = (fixture.controller as unknown as ControllerInternals).snapshotCache.history;
+    await fixture.controller.openRoomHistory(fixture.room.roomId);
+    expect(history.get(fixture.room.roomId)?.events[0].getId()).toBe('$history-50');
+    fixture.controller.setHistoryDetached(fixture.room.roomId, true);
+    await fixture.controller.loadRoomHistory(fixture.room.roomId);
+    expect(history.get(fixture.room.roomId)?.events[0].getId()).toBe('$history-0');
+    await fixture.controller.loadRoomHistory(fixture.room.roomId, 'forward');
+    expect(history.get(fixture.room.roomId)?.events[0].getId()).toBe('$history-50');
+    await fixture.controller.returnToLive(fixture.room.roomId);
+    expect(history.get(fixture.room.roomId)?.state.mode).toBe('live');
+    (fixture.controller as unknown as ControllerInternals).sdk = undefined;
+    fixture.controller.shutdown();
+    expect(history.size).toBe(0);
   });
 
   it('sends intentional mentions with portable Matrix HTML and Unicode emoji', async () => {

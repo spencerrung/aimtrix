@@ -224,7 +224,11 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onCancelMessage={(roomId, eventId) => controller.cancelMessage(roomId, eventId)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
-        onRoomSelected={(roomId) => controller.loadRoomHistory(roomId)}
+        onRoomSelected={(roomId) => controller.openRoomHistory(roomId)}
+        onLoadRoomHistory={(roomId, direction) => controller.loadRoomHistory(roomId, direction)}
+        onOpenEventContext={(roomId, eventId) => controller.openEventContext(roomId, eventId)}
+        onReturnToLive={(roomId) => controller.returnToLive(roomId)}
+        onHistoryDetached={(roomId, detached) => controller.setHistoryDetached(roomId, detached)}
         onSpaceSelected={(spaceId) => controller.loadSpaceHierarchy(spaceId)}
         onReorganizeSpaceChildren={(update) => controller.reorganizeSpaceChildren(update)}
         onReorderRootSpaces={(spaceIds) => controller.reorderRootSpaces(spaceIds)}

@@ -200,7 +200,70 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
       await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
+    await check('encrypted-history-and-context', async () => {
+      await openRoom(alice, roomName);
+      // Buddy rows prefer a room topic to message previews. Clear this test
+      // topic so the receiving device's live preview is observable in context.
+      await api(`/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.topic`, { token: aliceSession.accessToken, method: 'PUT', body: { topic: '' } });
+      const prefix = `Synthetic history ${randomBytes(8).toString('hex')}`;
+      const historyWireStart = wire.length;
+      const composer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
+      const sentIds = [];
+      for (let index = 0; index < 350; index++) {
+        await composer.fill(`${prefix} ${String(index).padStart(3, '0')}`);
+        const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.room.encrypted/') && response.ok());
+        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+        sentIds.push((await (await sent).json()).event_id);
+        await composer.filter({ hasText: /^$/ }).waitFor();
+      }
+      invariant(wire.slice(historyWireStart).every((event) => event.content['m.relates_to']?.rel_type !== 'm.thread'), 'history-main-conversation-events');
+      invariant(new Set(sentIds).size === 350 && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
+      // Reload removes the in-memory SDK timeline; existing keys remain on this
+      // device and online peers can still share keys, as in the reload journey.
+      await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
+      const timeline = aliceSecond.getByRole('region', { name: 'Messages', exact: true });
+      const entry = (index) => timeline.locator('.timeline-message').filter({ hasText: `${prefix} ${String(index).padStart(3, '0')}` });
+      await until(async () => await entry(349).count() > 0 || await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count() > 0, 'history-initial-view-ready');
+      if (await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count()) await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
+      await entry(349).waitFor({ timeout: 45000 });
+      invariant(await entry(0).count() === 0, 'old-history-outside-live-window');
+      for (let attempt = 0; attempt < 12 && await entry(0).count() === 0; attempt++) {
+        const older = aliceSecond.getByRole('button', { name: 'Load older messages', exact: true });
+        const firstBefore = await timeline.locator('.timeline-message').first().getAttribute('data-event-id');
+        await older.and(aliceSecond.locator(':enabled')).evaluate((button) => button.click());
+        await until(async () => await timeline.locator('.timeline-message').first().getAttribute('data-event-id') !== firstBefore, 'history-older-window-advanced');
+        await aliceSecond.getByText('Loading older messages…', { exact: true }).waitFor({ state: 'hidden' });
+        invariant(await timeline.locator('.timeline-message').count() <= 250, 'bounded-history-render');
+      }
+      await entry(0).waitFor({ state: 'attached' });
+      await entry(0).scrollIntoViewIfNeeded();
+      invariant(await entry(349).count() === 0, 'history-window-moved');
+      const previousLast = await timeline.locator('.timeline-message').last().getAttribute('data-event-id');
+      await aliceSecond.getByRole('button', { name: 'Load newer messages', exact: true }).and(aliceSecond.locator(':enabled')).evaluate((button) => button.click());
+      await until(async () => await timeline.locator('.timeline-message').last().getAttribute('data-event-id') !== previousLast, 'history-forward-navigation');
+      await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
+      await entry(349).waitFor();
+      // A fresh app navigation must use the real /context endpoint and load both
+      // sides: SDK getEventTimeline itself requests context with limit=0.
+      await aliceSecond.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(sentIds[20])}`);
+      await entry(20).waitFor({ timeout: 45000 });
+      await entry(19).waitFor(); await entry(21).waitFor();
+      invariant(await entry(349).count() === 0 && await timeline.locator('.timeline-message').count() <= 250, 'bounded-event-context');
+      const top = (await entry(20).boundingBox()).y;
+      await composer.fill(`${prefix} incoming`);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      await aliceSecond.locator('.buddy-row').filter({ hasText: roomName }).filter({ hasText: `${prefix} incoming` }).waitFor({ timeout: 45000 });
+      invariant(Math.abs((await entry(20).boundingBox()).y - top) < 2, 'history-incoming-anchor');
+      await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
+      await timeline.locator('.timeline-message').filter({ hasText: `${prefix} incoming` }).waitFor();
+      await api(`/_matrix/client/v3/rooms/${encode(roomId)}/redact/${encode(sentIds[20])}/history-redaction`, { token: aliceSession.accessToken, method: 'PUT', body: {} });
+      await aliceSecond.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(sentIds[20])}`);
+      await aliceSecond.getByText('That message was removed.', { exact: true }).waitFor({ timeout: 45000 });
+      invariant(await entry(20).count() === 0, 'redacted-context-hidden');
+    });
     await check('authenticated-encrypted-media', async () => {
+      const latest = bob.getByRole('button', { name: 'Jump to latest messages', exact: true });
+      if (await latest.count()) await latest.click();
       metrics.attachmentInputCount = await alice.getByLabel('Choose attachment', { exact: true }).count();
       const bytes = Buffer.from(`Disposable attachment ${randomBytes(24).toString('hex')}`);
       await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles({ name: 'synthetic.bin', mimeType: 'application/octet-stream', buffer: bytes });
