@@ -433,15 +433,14 @@ export class MatrixController {
   public async initialize(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
+    const loginToken = new URL(window.location.href).searchParams.get('loginToken');
+    if (loginToken) window.history.replaceState({}, '', window.location.pathname);
     const revision = ++this.lifecycleRevision;
     try {
       const session = await this.credentialOperation(() => this.platform.credentials.load());
       if (revision !== this.lifecycleRevision) return;
       if (session?.recovery) this.recoverySession = session;
-      const loginToken = new URL(window.location.href).searchParams.get('loginToken');
       if (loginToken) {
-        // Remove the credential from the URL even if exchange or local storage fails.
-        window.history.replaceState({}, '', window.location.pathname);
         this.setSnapshot({ status: 'connecting', message: 'Completing Matrix SSO…' });
         await this.completeSso(loginToken, revision);
       } else if (session?.recovery) {

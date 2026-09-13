@@ -165,6 +165,17 @@ describe('MatrixController session lifecycle', () => {
     expect(createClient).toHaveBeenCalledOnce();
   });
 
+  it('removes an SSO callback token before credential storage can fail', async () => {
+    window.history.replaceState({}, '', '/?loginToken=synthetic-callback');
+    const { controller, credentials } = controllerFixture();
+    credentials.load.mockRejectedValue(new Error('Synthetic storage rejection'));
+    const restoring = controller.initialize();
+    expect(new URL(window.location.href).searchParams.has('loginToken')).toBe(false);
+    await restoring;
+    expect(controller.getSnapshot()).toMatchObject({ status: 'error', issue: 'storage' });
+    expect(createClient).not.toHaveBeenCalled();
+  });
+
   it('classifies unavailable credential storage without discarding the stored account', async () => {
     const { controller, credentials } = controllerFixture();
     credentials.load.mockRejectedValue(new DOMException('Synthetic storage failure', 'SecurityError'));
