@@ -1331,3 +1331,11 @@
     :root:not([data-motion="full"]) *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
   }
 }
+
+/* Delivery recovery remains visible to touch and keyboard users. */
+.message-delivery { margin-block: 6px; font-size: 0.75rem; color: var(--text-soft); }
+.message-delivery--failed { padding: 9px 11px; border: 1px solid var(--text-soft); border-radius: 10px; background: var(--surface); color: var(--text); }
+.message-delivery p { margin: 5px 0; max-width: 54ch; }
+.message-delivery__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.message-delivery__actions:empty { display: none; }
+.message-delivery button { min-height: 36px; padding: 5px 12px; }

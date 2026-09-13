@@ -27,6 +27,7 @@ import {
 } from '../settings/profilePersonalization';
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { resolveHomeserver } from './discovery';
+import { MessageSendError } from './messageDelivery';
 import {
   matrixFormattedMessage,
   matrixReplyFormattedBody,
@@ -181,6 +182,7 @@ export class MatrixController {
   private profilePersonalizationLoaded = false;
   private profilePersonalizationSaveTimer?: number;
   private profilePersonalizationWrites = new WeakMap<MatrixClient, Promise<void>>();
+  private retryingMessages = new WeakSet<MatrixEvent>();
   private readonly spaceHierarchies = new Map<string, SpaceHierarchyRoomData[]>();
   private readonly spaceHierarchyRequests = new Map<string, Promise<void>>();
   private readonly lastReadReceiptByRoom = new Map<string, string>();
@@ -353,6 +355,8 @@ export class MatrixController {
   }
 
   public shutdown(): void {
+    this.retryingMessages = new WeakSet();
+    this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
     this.detachClientListeners();
     this.client?.stopClient();
@@ -2028,14 +2032,9 @@ export class MatrixController {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
-    if (!client || !sdk || !message) return;
-    if (inlineEmotes.length) {
-      const room = client.getRoom(roomId);
-      if (!room) throw new Error('Room is not available.');
-      if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
-        throw new Error('Encryption is not ready for this room.');
-      }
-    }
+    if (!message) return;
+    if (!client || !sdk) throw new MessageSendError(false);
+    const room = this.messageRoom(client, roomId);
     const quoted = target.body.split('\n').map((line) => `> <${target.senderId}> ${line}`).join('\n');
     const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
     const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
@@ -2050,7 +2049,8 @@ export class MatrixController {
         }
       : {};
 
-    if (target.threadRootId) {
+    const threadRootId = target.threadRootId;
+    if (threadRootId) {
       // Thread-scoped reply: use the 5-argument sendEvent overload so the SDK
       // routes the event to the thread timeline. We pass m.in_reply_to for the
       // explicit reply target, and the SDK's addThreadRelationIfNeeded() will
@@ -2064,9 +2064,9 @@ export class MatrixController {
       //     is_falling_back: false,  // false because we have m.in_reply_to
       //     m.in_reply_to: { event_id: <target.id> }
       //   }
-      await client.sendEvent(
+      await this.sendTrackedMessage(client, room, (txnId) => client.sendEvent(
         roomId,
-        target.threadRootId,
+        threadRootId,
         sdk.EventType.RoomMessage,
         {
           msgtype: sdk.MsgType.Text,
@@ -2075,16 +2075,17 @@ export class MatrixController {
           ...richContent,
           'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
         } as RoomMessageEventContent,
-      );
+        txnId,
+      ));
     } else {
       // Standard reply (no thread): use the 4-argument sendEvent overload.
-      await client.sendEvent(roomId, sdk.EventType.RoomMessage, {
+      await this.sendTrackedMessage(client, room, (txnId) => client.sendEvent(roomId, sdk.EventType.RoomMessage, {
         msgtype: sdk.MsgType.Text,
         body: `${quoted}\n\n${message}`,
         ...mentionContent,
         ...richContent,
         'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
-      } as RoomMessageEventContent);
+      } as RoomMessageEventContent, txnId));
     }
     this.scheduleWorkspacePublish();
   }
@@ -2131,14 +2132,9 @@ export class MatrixController {
     const client = this.client;
     const sdk = this.sdk;
     const message = body.trim();
-    if (!client || !sdk || !message) return;
-    if (inlineEmotes.length) {
-      const room = client.getRoom(roomId);
-      if (!room) throw new Error('Room is not available.');
-      if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
-        throw new Error('Encryption is not ready for this room.');
-      }
-    }
+    if (!message) return;
+    if (!client || !sdk) throw new MessageSendError(false);
+    const room = this.messageRoom(client, roomId);
     const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
     const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     const newContent = {
@@ -2151,7 +2147,7 @@ export class MatrixController {
         ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody }
         : {}),
     };
-    await client.sendEvent(roomId, sdk.EventType.RoomMessage, {
+    const content = {
       msgtype: sdk.MsgType.Text,
       body: `* ${message}`,
       ...(formatted.usedMentionUserIds.length
@@ -2162,7 +2158,12 @@ export class MatrixController {
         : {}),
       'm.new_content': newContent,
       'm.relates_to': { rel_type: sdk.RelationType.Replace, event_id: eventId },
-    } as RoomMessageEventContent);
+    } as RoomMessageEventContent;
+    const original = room.findEventById(eventId);
+    const threadRootId = original?.threadRootId;
+    await this.sendTrackedMessage(client, room, (txnId) => threadRootId && threadRootId !== eventId
+      ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, content, txnId)
+      : client.sendEvent(roomId, sdk.EventType.RoomMessage, content, txnId));
     this.scheduleWorkspacePublish();
   }
 
@@ -2203,23 +2204,108 @@ export class MatrixController {
     const message = body.trim();
     const client = this.client;
     const sdk = this.sdk;
-    if (!client || !sdk || !message) return;
-    const room = client.getRoom(roomId);
-    if (!room) throw new Error('Room is not available.');
-    if (room.hasEncryptionStateEvent() && !client.getCrypto()) {
-      throw new Error('Encryption is not ready for this room.');
-    }
+    if (!message) return;
+    if (!client || !sdk) throw new MessageSendError(false);
+    const room = this.messageRoom(client, roomId);
     const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
     const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
-    await client.sendMessage(roomId, {
+    await this.sendTrackedMessage(client, room, (txnId) => client.sendMessage(roomId, {
       msgtype: sdk.MsgType.Text,
       body: formatted.body,
       ...(formatted.usedMentionUserIds.length
         ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } }
         : {}),
       ...(formatted.formattedBody ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody } : {}),
-    } as RoomMessageEventContent);
+    } as RoomMessageEventContent, txnId));
     if (this.notificationPreferences.notificationSounds) this.playSendTone();
+    this.scheduleWorkspacePublish();
+  }
+
+  private messageRoom(client: MatrixClient, roomId: string): Room {
+    if (this.client !== client) throw new MessageSendError(false);
+    const room = client.getRoom(roomId);
+    if (!room || (room.hasEncryptionStateEvent() && !client.getCrypto())) {
+      throw new MessageSendError(false);
+    }
+    return room;
+  }
+
+  /** Track the SDK's transaction, including failures which do not carry error.event. */
+  private async sendTrackedMessage(
+    client: MatrixClient,
+    room: Room,
+    send: (txnId: string) => Promise<unknown>,
+  ): Promise<void> {
+    if (this.client !== client) throw new MessageSendError(false);
+    if (room.hasEncryptionStateEvent() && !client.getCrypto()) throw new MessageSendError(false);
+    const txnId = client.makeTxnId();
+    let localEvent: MatrixEvent | undefined;
+    try {
+      const sending = send(txnId);
+      localEvent = room.getEventForTxnId(txnId);
+      if (localEvent) this.trackLocalEvent(client, localEvent);
+      await sending;
+      if (this.client !== client) throw new MessageSendError(false);
+    } catch {
+      if (this.client !== client) throw new MessageSendError(false);
+      localEvent ??= room.getEventForTxnId(txnId);
+      // A remote echo can arrive before a failed HTTP response. It proves acceptance.
+      if (localEvent && (localEvent.status === null || localEvent.status === 'sent')) return;
+      throw new MessageSendError(Boolean(localEvent && localEvent.status !== 'cancelled'));
+    } finally {
+      if (this.client === client) {
+        if (localEvent) this.trackLocalEvent(client, localEvent);
+        this.bumpRoomVersion(room.roomId);
+        this.scheduleWorkspacePublish();
+      }
+    }
+  }
+
+  private failedMessage(roomId: string, eventId: string): { client: MatrixClient; room: Room; event: MatrixEvent } {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room) throw new Error('The conversation is not available.');
+    // SDK findEventById includes loaded thread timelines as well as the room timeline.
+    const event = room.findEventById(eventId)
+      ?? [...(this.snapshotCache.localEvents.get(roomId)?.values() ?? [])].find((candidate) => candidate.getId() === eventId);
+    if (!event || event.getRoomId() !== roomId || event.getSender() !== client.getSafeUserId()
+      || !event.getTxnId() || event.status !== 'not_sent'
+      || !['m.room.message', 'm.sticker', 'm.room.encrypted'].includes(event.getType())) {
+      throw new Error('This message is no longer available for retry or cancellation.');
+    }
+    return { client, room, event };
+  }
+
+  public async retryMessage(roomId: string, eventId: string): Promise<void> {
+    const { client, room, event } = this.failedMessage(roomId, eventId);
+    this.messageRoom(client, roomId);
+    const retries = this.retryingMessages;
+    if (retries.has(event)) throw new Error('This message is already being retried.');
+    retries.add(event);
+    try {
+      // Reuse the SDK object, transaction, relations and any existing ciphertext.
+      await client.resendEvent(event, room);
+      if (this.client !== client) throw new Error('The Matrix session changed.');
+    } catch {
+      if (this.client === client && (event.status === null || event.status === 'sent')) return;
+      throw new Error('Retry could not be confirmed. Check the message status before trying again.');
+    } finally {
+      retries.delete(event);
+      if (this.client === client) {
+        this.trackLocalEvent(client, event);
+        this.bumpRoomVersion(roomId);
+        this.scheduleWorkspacePublish();
+      }
+    }
+  }
+
+  public async cancelMessage(roomId: string, eventId: string): Promise<void> {
+    const { client, event } = this.failedMessage(roomId, eventId);
+    if (this.retryingMessages.has(event)) throw new Error('This message is being retried.');
+    // Only failed events are cancellable here: an active send may already be accepted.
+    client.cancelPendingEvent(event);
+    this.trackLocalEvent(client, event);
+    this.bumpRoomVersion(roomId);
     this.scheduleWorkspacePublish();
   }
 
@@ -2323,6 +2409,8 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    this.retryingMessages = new WeakSet();
+    this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
     if (!this.client) return;
     this.uploadAbortController?.abort();
@@ -2454,6 +2542,14 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
+    if (room && this.client?.getRoom(room.roomId) === room) {
+      const events = this.snapshotCache.localEvents.get(room.roomId);
+      for (const [txnId, localEvent] of events ?? []) {
+        const eventId = localEvent.getId();
+        if (localEvent.status === null && eventId && room.findEventById(eventId)) events?.delete(txnId);
+      }
+      if (events?.size === 0) this.snapshotCache.localEvents.delete(room.roomId);
+    }
     if (room) this.attachThreadListeners(room);
     this.bumpRoomVersion(room?.roomId ?? event.getRoomId());
     if (!toStartOfTimeline) this.scheduleWorkspacePublish();
@@ -2619,7 +2715,26 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   };
 
+  private trackLocalEvent(client: MatrixClient, event: MatrixEvent): void {
+    if (this.client !== client) return;
+    const roomId = event.getRoomId();
+    const txnId = event.getTxnId();
+    if (!roomId || !txnId) return;
+    const events = this.snapshotCache.localEvents.get(roomId) ?? new Map<string, MatrixEvent>();
+    const eventId = event.getId();
+    // SDK remote echo skips insertion when the first thread has not been created.
+    // Keep its accepted event until an SDK timeline actually takes ownership.
+    const acceptedInTimeline = event.status === null && eventId && client.getRoom(roomId)?.findEventById(eventId);
+    if (acceptedInTimeline || event.status === 'cancelled') events.delete(txnId);
+    else events.set(txnId, event);
+    if (events.size) this.snapshotCache.localEvents.set(roomId, events);
+    else this.snapshotCache.localEvents.delete(roomId);
+  }
+
   private readonly handleLocalEcho = (event: MatrixEvent, room?: Room): void => {
+    const client = this.client;
+    if (!client || (room && client.getRoom(room.roomId) !== room)) return;
+    this.trackLocalEvent(client, event);
     this.bumpRoomVersion(room?.roomId ?? event.getRoomId());
     this.scheduleWorkspacePublish();
   };

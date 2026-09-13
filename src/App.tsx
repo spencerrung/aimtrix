@@ -220,6 +220,8 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         install={platform.install}
         pushRoute={pushRoute}
         onSendMessage={(roomId, body, mentions, inlineEmojis) => controller.sendMessage(roomId, body, mentions, inlineEmojis)}
+        onRetryMessage={(roomId, eventId) => controller.retryMessage(roomId, eventId)}
+        onCancelMessage={(roomId, eventId) => controller.cancelMessage(roomId, eventId)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
         onRoomSelected={(roomId) => controller.loadRoomHistory(roomId)}

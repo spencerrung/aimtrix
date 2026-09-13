@@ -2,6 +2,7 @@ import { images, invariant } from './stack.mjs';
 export const checkNames = new Set([
   'setup', 'disposable-stack', 'application-server', 'isolated-accounts',
   'password-login-three-devices', 'encrypted-room-create-and-join',
+  'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'encrypted-send-receive-and-latency', 'authenticated-encrypted-media',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback',

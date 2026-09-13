@@ -316,3 +316,87 @@ describe('buildWorkspaceSnapshot cache', () => {
     expect(secondMessages[1]).toBe(firstMessages[1]);
   });
 });
+
+describe('message delivery snapshots', () => {
+  it('distinguishes every SDK phase, hides cancelled events, and keeps a stable transaction identity', () => {
+    const statuses = ['queued', 'encrypting', 'sending', 'not_sent', 'sent', null, 'cancelled'] as const;
+    const events = statuses.map((status, index) => Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic send' }, `$send-${index}`, '@me:test'), { status, getTxnId: () => `txn-${index}` }));
+    const messages = buildWorkspaceSnapshot(fakeClient(events), 'online').messagesByRoom['!room:test'];
+    expect(messages.map((message) => message.delivery)).toEqual(['queued', 'encrypting', 'sending', 'failed', 'accepted', 'accepted']);
+    expect(messages.map((message) => message.pending)).toEqual([true, true, true, false, false, false]);
+    expect(messages[3].transactionId).toBe('txn-3');
+    expect(messages[3].deliveryError).toContain('Retrying reuses this message');
+  });
+
+  it('refreshes a failed non-tail event and reconciles the remote echo without duplicates', () => {
+    const pending = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Earlier synthetic send' }, '$local', '@me:test'), { status: 'sending', getTxnId: () => 'stable-txn' }) as unknown as MatrixEvent;
+    const events = [pending, fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Later synthetic send' })];
+    const client = fakeClient(events);
+    const cache = createWorkspaceSnapshotCache();
+    const before = buildWorkspaceSnapshot(client, 'online', [], [], cache).messagesByRoom['!room:test'];
+    Object.assign(pending, { status: 'not_sent', error: { errcode: 'M_FORBIDDEN', message: 'private server detail' } });
+    const failed = buildWorkspaceSnapshot(client, 'online', [], [], cache).messagesByRoom['!room:test'];
+    expect(failed[0]).not.toBe(before[0]);
+    expect(failed[0].delivery).toBe('failed');
+    expect(failed[0].deliveryError).toContain('permissions');
+    expect(JSON.stringify(failed)).not.toContain('private server detail');
+    Object.assign(pending, { status: null, getId: () => '$remote' });
+    const accepted = buildWorkspaceSnapshot(client, 'online', [], [], cache).messagesByRoom['!room:test'];
+    expect(accepted).toHaveLength(2);
+    expect(accepted[0]).toMatchObject({ id: '$remote', transactionId: 'stable-txn', delivery: 'accepted' });
+  });
+
+  it('shows and reconciles SDK thread echoes missing from chronological timelines without mutating previous roots', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Thread root' }, '$root');
+    const reply = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Local reply', 'm.relates_to': { rel_type: 'm.thread', event_id: '$root' } }, '$local', '@me:test'), { status: 'not_sent', getTxnId: () => 'thread-txn' }) as unknown as MatrixEvent;
+    const threads: Array<{ id: string; length: number; events: MatrixEvent[] }> = [];
+    const client = fakeClient([root], { threads });
+    const cache = createWorkspaceSnapshotCache();
+    const before = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    cache.localEvents.set('!room:test', new Map([['thread-txn', reply]]));
+    const failed = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(failed.threadsByRoot.$root.messages).toHaveLength(1);
+    expect(failed.messagesByRoom['!room:test']).toHaveLength(1);
+    expect(failed.messagesByRoom['!room:test'][0].thread?.replyCount).toBe(1);
+    expect(before.messagesByRoom['!room:test'][0].thread).toBeUndefined();
+    threads.push({ id: '$root', length: 100, events: [] });
+    expect(buildWorkspaceSnapshot(client, 'online', [], [], cache).threadsByRoot.$root.replyCount).toBe(101);
+    threads.length = 0;
+    Object.assign(reply, { status: null, getId: () => '$remote' });
+    const acceptedWithoutTimeline = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(acceptedWithoutTimeline.threadsByRoot.$root.messages[0]).toMatchObject({ id: '$remote', delivery: 'accepted' });
+    threads.push({ id: '$root', length: 100, events: [] });
+    expect(buildWorkspaceSnapshot(client, 'online', [], [], cache).threadsByRoot.$root.replyCount).toBe(100);
+    threads.length = 0;
+    cache.localEvents.clear();
+    threads.push({ id: '$root', length: 1, events: [reply] });
+    const accepted = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(accepted.threadsByRoot.$root.messages).toEqual([expect.objectContaining({ id: '$remote', delivery: 'accepted', transactionId: 'thread-txn' })]);
+    expect(failed.threadsByRoot.$root.messages[0].delivery).toBe('failed');
+  });
+
+  it('removes cancelled chronological thread replies from the displayed count', () => {
+    const cancelled = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Cancelled', 'm.relates_to': { rel_type: 'm.thread', event_id: '$root' } }, '$cancelled', '@me:test'), { status: 'cancelled', threadRootId: '$root' }) as unknown as MatrixEvent;
+    const snapshot = buildWorkspaceSnapshot(fakeClient([], { threads: [{ id: '$root', length: 1, events: [cancelled] }] }), 'online');
+    expect(snapshot.threadsByRoot.$root).toBeUndefined();
+  });
+
+  it('keeps a failed thread edit visible when its target is outside loaded events', () => {
+    const edit = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: '* Edited reply', 'm.new_content': { msgtype: 'm.text', body: 'Edited reply' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$older-reply' } }, '$edit', '@me:test'), { status: 'not_sent', threadRootId: '$root' }) as unknown as MatrixEvent;
+    const snapshot = buildWorkspaceSnapshot(fakeClient([], { threads: [{ id: '$root', length: 1, events: [edit] }] }), 'online');
+    expect(snapshot.threadsByRoot.$root.messages).toEqual([expect.objectContaining({ id: '$edit', threadRootId: '$root', delivery: 'failed', pendingEdit: true })]);
+  });
+
+  it('keeps failed edits recoverable without applying them to the accepted message', () => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Original' }, '$original', '@me:test');
+    const edit = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: '* Edited', 'm.new_content': { msgtype: 'm.text', body: 'Edited' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' } }, '$edit', '@me:test'), { status: 'not_sent' }) as unknown as MatrixEvent;
+    const client = fakeClient([original, edit]);
+    const failed = buildWorkspaceSnapshot(client, 'online').messagesByRoom['!room:test'];
+    expect(failed.map((message) => message.body)).toEqual(['Original', '* Edited']);
+    expect(failed[1]).toMatchObject({ delivery: 'failed', pendingEdit: true });
+    Object.assign(edit, { status: null });
+    const accepted = buildWorkspaceSnapshot(client, 'online').messagesByRoom['!room:test'];
+    expect(accepted).toHaveLength(1);
+    expect(accepted[0]).toMatchObject({ body: 'Edited', edited: true });
+  });
+});

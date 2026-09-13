@@ -98,3 +98,11 @@ Local allowlisted summaries are in `matrix-test-results/`; command logs are `/tm
 ## Polish 04 extension
 
 The interaction-foundation change adds explicit confirmation clicks to kick/ban journeys and a `private-profile-save` check. The latter saves through the profile editor, waits for the acknowledgement message, verifies the authenticated Matrix account-data preset, and checks that another account cannot read it. The complete harness now has 13 checks per normal run. September 13 local working-tree validation passed 13/13 twice with cleanup; the earlier 12-check records above describe the original infrastructure revision. See [interaction evidence](accessible-interactions.md) for remaining SAS/UIA/screen-reader boundaries.
+
+## Polish 05 extension
+
+The delivery change adds `encrypted-retry-reconnect-and-cancel` and `encrypted-thread-retry`, bringing the normal harness to 15 checks. The first rejects an encrypted send while newer text is typed, reconnects, retries the exact transaction/ciphertext, accepts it on Synapse and deliberately loses the HTTP acknowledgement after the sync echo. It verifies one server event and one recipient row, then cancels a separate rejected local send. The second retries the first reply in a new encrypted thread, verifies peer decryption and the standard relation, then cancels another thread reply and checks the count.
+
+These checks exposed and now guard SDK chronological-thread gaps: unsent replies omitted from timelines, and accepted first replies missing after remote-echo reconciliation. Aimtrix retains original SDK events until a timeline owns them, with cancellation/session cleanup and immutable summary updates. See [delivery behavior and evidence](message-delivery.md). The 12/13-check records above remain historical evidence for their earlier revisions.
+
+September 13 local working-tree validation passed **15/15 twice**, including both delivery journeys and complete cleanup. The full local gate passed **274 unit tests** and **40 browser tests with 6 intentional project skips**. CI reports identify their own checkout revision.

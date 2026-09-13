@@ -1,3 +1,4 @@
+import type { MessageDelivery } from './messageDelivery';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { RoomBackground, RoomBackgroundPolicy } from './roomBackgrounds';
 
@@ -91,6 +92,10 @@ export interface MessageSummary {
   kind: 'text' | 'notice' | 'emote' | 'media' | 'sticker' | 'encrypted';
   isOwn: boolean;
   pending?: boolean;
+  transactionId?: string;
+  delivery?: MessageDelivery;
+  deliveryError?: string;
+  pendingEdit?: boolean;
   edited?: boolean;
   mentionUserIds?: string[];
   mentions?: Array<{
