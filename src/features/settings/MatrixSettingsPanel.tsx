@@ -1,3 +1,7 @@
+import { useDialogBusy } from '../../components/dialogContext';
+import { Dialog } from '../../components/Dialog';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { useAction } from '../../components/useAction';
 import {
   AlertTriangle,
   Bell,
@@ -13,7 +17,7 @@ import {
   Video,
   Volume2,
 } from 'lucide-react';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type {
   DeviceRemovalResult,
   DeviceVerificationChallenge,
@@ -24,7 +28,7 @@ import type { UserPreferences } from '../../settings/preferences';
 
 export interface MatrixSettingsActions {
   load: () => Promise<MatrixSettingsSnapshot>;
-  verifyDevice: (deviceId: string) => Promise<DeviceVerificationChallenge>;
+  verifyDevice: (deviceId: string, signal?: AbortSignal) => Promise<DeviceVerificationChallenge>;
   renameDevice: (deviceId: string, displayName: string) => Promise<void>;
   removeDevice: (deviceId: string, password?: string) => Promise<DeviceRemovalResult>;
   setIgnoredUsers: (userIds: string[]) => Promise<void>;
@@ -57,6 +61,14 @@ export function MatrixSettingsPanel({
   onPreferencesChange,
   actions,
 }: MatrixSettingsPanelProps) {
+  const { busy, run } = useAction();
+  const [verificationWaiting, setVerificationWaiting] = useState(false);
+  const verificationAbort = useRef<AbortController | null>(null);
+  useDialogBusy(busy && !verificationWaiting);
+  useEffect(() => () => verificationAbort.current?.abort(), []);
+  const [confirmDeactivation, setConfirmDeactivation] = useState(false);
+  const [confirmRemoval, setConfirmRemoval] = useState<string>();
+  const [confirmingVerification, setConfirmingVerification] = useState(false);
   const [snapshot, setSnapshot] = useState<MatrixSettingsSnapshot>();
   const [loading, setLoading] = useState(Boolean(actions));
   const [error, setError] = useState<string>();
@@ -80,6 +92,17 @@ export function MatrixSettingsPanel({
     deviceId: string;
     challenge: DeviceVerificationChallenge;
   }>();
+
+  const activeVerification = useRef(verification);
+  useLayoutEffect(() => { activeVerification.current = verification; }, [verification]);
+  useEffect(() => () => { activeVerification.current?.challenge.cancel(); }, []);
+
+  const removalPasswordInput = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (!passwordDevice || confirmRemoval) return;
+    const frame = requestAnimationFrame(() => removalPasswordInput.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [passwordDevice, confirmRemoval]);
 
   const refresh = async () => {
     if (!actions) return;
@@ -137,7 +160,7 @@ export function MatrixSettingsPanel({
     onPreferencesChange({ ...preferences, ...update });
   };
 
-  const requestNotifications = async (enabled: boolean) => {
+  const requestNotifications = (enabled: boolean) => run(async () => {
     if (!enabled) {
       if (actions?.unregisterPushNotifications) {
         try {
@@ -168,9 +191,9 @@ export function MatrixSettingsPanel({
     const permission = await Notification.requestPermission();
     updatePreferences({ desktopNotifications: permission === 'granted' });
     if (permission !== 'granted') setError('Notification permission was not granted.');
-  };
+  });
 
-  const requestMediaDevices = async () => {
+  const requestMediaDevices = () => run(async () => {
     setError(undefined);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
@@ -180,22 +203,26 @@ export function MatrixSettingsPanel({
     } catch {
       setError('Camera or microphone permission was not granted.');
     }
-  };
+  });
 
-  const verifyDevice = async (deviceId: string) => {
+  const verifyDevice = (deviceId: string) => run(async () => {
     if (!actions) return;
     setError(undefined);
+    const controller = new AbortController();
+    verificationAbort.current = controller;
+    setVerificationWaiting(true);
     setNotice('Accept verification on the other Matrix session, then compare the emoji.');
     try {
-      const challenge = await actions.verifyDevice(deviceId);
+      const challenge = await actions.verifyDevice(deviceId, controller.signal);
+      if (controller.signal.aborted) { challenge.cancel(); return; }
       setVerification({ deviceId, challenge });
       setNotice(undefined);
     } catch {
-      setError('Device verification was cancelled, timed out, or unsupported.');
-    }
-  };
+      if (!controller.signal.aborted) setError('Device verification was cancelled, timed out, or unsupported.');
+    } finally { setVerificationWaiting(false); }
+  });
 
-  const renameDevice = async (deviceId: string) => {
+  const renameDevice = (deviceId: string) => run(async () => {
     if (!actions) return;
     try {
       await actions.renameDevice(deviceId, deviceNames[deviceId] || 'Aimtrix Web');
@@ -204,15 +231,16 @@ export function MatrixSettingsPanel({
     } catch {
       setError('The session name could not be updated.');
     }
-  };
+  });
 
-  const removeDevice = async (deviceId: string, password?: string) => {
+  const removeDevice = (deviceId: string, password?: string) => run(async () => {
     if (!actions) return;
     setError(undefined);
     try {
       const result = await actions.removeDevice(deviceId, password);
       if (result === 'password-required') {
         setPasswordDevice(deviceId);
+        setNotice('Enter your Matrix password to sign out this device.');
         return;
       }
       setPasswordDevice(undefined);
@@ -220,11 +248,11 @@ export function MatrixSettingsPanel({
       setNotice('The Matrix session was signed out.');
       await refresh();
     } catch {
-      setError('The homeserver did not accept that session removal.');
+      throw new Error('The homeserver did not accept that session removal.');
     }
-  };
+  });
 
-  const addIgnoredUser = async () => {
+  const addIgnoredUser = () => run(async () => {
     if (!actions || !snapshot || !ignoredInput.trim()) return;
     const userId = ignoredInput.trim();
     if (!/^@[^:]+:.+$/.test(userId)) {
@@ -238,9 +266,9 @@ export function MatrixSettingsPanel({
     } catch {
       setError('The ignored-user list could not be updated.');
     }
-  };
+  });
 
-  const removeIgnoredUser = async (userId: string) => {
+  const removeIgnoredUser = (userId: string) => run(async () => {
     if (!actions || !snapshot) return;
     try {
       await actions.setIgnoredUsers(snapshot.ignoredUsers.filter((ignored) => ignored !== userId));
@@ -248,9 +276,9 @@ export function MatrixSettingsPanel({
     } catch {
       setError('The ignored-user list could not be updated.');
     }
-  };
+  });
 
-  const restoreRecovery = async () => {
+  const restoreRecovery = () => run(async () => {
     if (!actions || !existingRecoveryKey.trim()) return;
     setError(undefined);
     setNotice('Restoring encrypted room keys…');
@@ -262,9 +290,9 @@ export function MatrixSettingsPanel({
     } catch {
       setError('That recovery key could not unlock this account’s encrypted backup.');
     }
-  };
+  });
 
-  const setupRecovery = async () => {
+  const setupRecovery = () => run(async () => {
     if (!actions) return;
     setError(undefined);
     try {
@@ -276,7 +304,7 @@ export function MatrixSettingsPanel({
     } catch {
       setError('Recovery setup failed. Confirm your account password and try again.');
     }
-  };
+  });
 
   if (!actions) {
     return <p className="settings-demo-note">Matrix account settings require a real signed-in session.</p>;
@@ -284,6 +312,7 @@ export function MatrixSettingsPanel({
 
   return (
     <div className="matrix-settings-panel">
+      <fieldset className="interaction-fields" disabled={busy}>
       <div className="settings-section-heading settings-heading-with-action">
         <div>
           <h2>Matrix and security</h2>
@@ -293,10 +322,11 @@ export function MatrixSettingsPanel({
           <RefreshCw size={14} /> Refresh
         </button>
       </div>
-      {loading ? <p className="settings-loading">Loading homeserver settings…</p> : null}
+      {loading ? <p className="settings-loading" role="status">Loading homeserver settings…</p> : null}
       {error ? <p className="settings-error" role="alert">{error}</p> : null}
       {notice ? <p className="settings-success" role="status"><Check size={14} /> {notice}</p> : null}
 
+      {busy ? <p role="status">Working with your homeserver…</p> : null}
       {snapshot ? (
         <>
           <section className="matrix-settings-group">
@@ -318,10 +348,10 @@ export function MatrixSettingsPanel({
                 onChange={(event) => {
                   const file = event.target.files?.[0];
                   if (!file) return;
-                  void actions.uploadAvatar(file).then(() => {
+                  void run(() => actions.uploadAvatar(file).then(() => {
                     setNotice('Profile picture updated.');
                     void refresh();
-                  }).catch(() => setError('Profile picture upload failed.'));
+                  }).catch(() => setError('Profile picture upload failed.')));
                 }}
               />
             </label>
@@ -345,7 +375,7 @@ export function MatrixSettingsPanel({
               <div className="recovery-setup">
                 <p>Creating new recovery storage can replace incomplete recovery metadata. Use this only if no other verified client can restore the account.</p>
                 <input type="password" value={recoveryPassphrase} placeholder="New recovery passphrase" onChange={(event) => setRecoveryPassphrase(event.target.value)} />
-                <input type="password" value={recoveryPassword} placeholder="Current Matrix password" onChange={(event) => setRecoveryPassword(event.target.value)} />
+                <input type="password" value={recoveryPassword} aria-label="Current Matrix password" placeholder="Current Matrix password" onChange={(event) => setRecoveryPassword(event.target.value)} />
                 <button className="aqua-button" type="button" onClick={() => void setupRecovery()} disabled={!recoveryPassphrase || !recoveryPassword}>Set up recovery</button>
               </div>
             ) : null}
@@ -370,30 +400,20 @@ export function MatrixSettingsPanel({
                     <small>{device.userAgent || device.id}</small>
                     {passwordDevice === device.id ? (
                       <div className="device-password-row">
-                        <input type="password" value={accountPassword} placeholder="Matrix password" onChange={(event) => setAccountPassword(event.target.value)} />
-                        <button className="aqua-button" type="button" onClick={() => void removeDevice(device.id, accountPassword)} disabled={!accountPassword}>Confirm sign out</button>
+                        <input ref={removalPasswordInput} type="password" value={accountPassword} aria-label="Matrix password" placeholder="Matrix password" onChange={(event) => setAccountPassword(event.target.value)} />
+                        <button className="aqua-button" type="button" onClick={() => void removeDevice(device.id, accountPassword).catch(() => setError('The homeserver did not accept that session removal.'))} disabled={!accountPassword}>Confirm sign out</button>
                       </div>
                     ) : null}
                   </div>
                   <div className="device-card__actions">
                     {!device.current && !device.verified ? <button type="button" onClick={() => void verifyDevice(device.id)}><ShieldCheck size={13} /> Verify</button> : null}
                     <button type="button" onClick={() => void renameDevice(device.id)}>Save name</button>
-                    {!device.current ? <button className="is-danger" type="button" onClick={() => void removeDevice(device.id)}><Trash2 size={13} /> Sign out</button> : null}
+                    {!device.current ? <button className="is-danger" type="button" onClick={() => setConfirmRemoval(device.id)}><Trash2 size={13} /> Sign out</button> : null}
                   </div>
                 </div>
               ))}
             </div>
-            {verification ? (
-              <div className="verification-challenge" role="dialog" aria-label="Compare verification emoji">
-                <strong>Do these emoji match on both devices?</strong>
-                <p>Only confirm when the same seven emoji appear in the same order.</p>
-                <div>{verification.challenge.emoji.map(([symbol, name]) => <span key={`${symbol}-${name}`} title={name}><b>{symbol}</b><small>{name}</small></span>)}</div>
-                <footer>
-                  <button className="aqua-button" type="button" onClick={() => { verification.challenge.cancel(); setVerification(undefined); }}>They do not match</button>
-                  <button className="aqua-button aqua-button--primary" type="button" onClick={() => void verification.challenge.confirm().then(() => { setVerification(undefined); setNotice('Device verified.'); void refresh(); }).catch(() => setError('Verification did not complete.'))}>They match</button>
-                </footer>
-              </div>
-            ) : null}
+
           </section>
 
           <section className="matrix-settings-group">
@@ -433,15 +453,15 @@ export function MatrixSettingsPanel({
             <header><AlertTriangle size={17} /><div><h3>Password and account</h3><p>Security-sensitive Matrix account actions.</p></div></header>
             <form onSubmit={(event) => {
               event.preventDefault();
-              void actions.changePassword(currentPassword, newPassword, logoutOtherDevices).then(() => {
+              void run(() => actions.changePassword(currentPassword, newPassword, logoutOtherDevices).then(() => {
                 setCurrentPassword('');
                 setNewPassword('');
                 setNotice('Matrix password changed.');
-              }).catch(() => setError('The homeserver did not accept the password change.'));
+              }).catch(() => setError('The homeserver did not accept the password change.')));
             }}>
               <strong>Change password</strong>
-              <input type="password" autoComplete="current-password" value={currentPassword} placeholder="Current Matrix password" onChange={(event) => setCurrentPassword(event.target.value)} />
-              <input type="password" autoComplete="new-password" value={newPassword} placeholder="New Matrix password" onChange={(event) => setNewPassword(event.target.value)} />
+              <input type="password" autoComplete="current-password" value={currentPassword} aria-label="Current Matrix password" placeholder="Current Matrix password" onChange={(event) => setCurrentPassword(event.target.value)} />
+              <input type="password" autoComplete="new-password" value={newPassword} aria-label="New Matrix password" placeholder="New Matrix password" onChange={(event) => setNewPassword(event.target.value)} />
               <label className="settings-toggle-row"><span><strong>Sign out other devices</strong><small>Recommended after a compromised password.</small></span><input type="checkbox" checked={logoutOtherDevices} onChange={(event) => setLogoutOtherDevices(event.target.checked)} /></label>
               <button className="aqua-button" type="submit" disabled={!currentPassword || newPassword.length < 8}>Change password</button>
             </form>
@@ -449,17 +469,34 @@ export function MatrixSettingsPanel({
               <summary>Deactivate Matrix account</summary>
               <div className="deactivation-form">
                 <p>This is permanent. Aimtrix cannot reactivate the account or restore erased server data.</p>
-                <input type="password" value={deactivationPassword} placeholder="Current Matrix password" onChange={(event) => setDeactivationPassword(event.target.value)} />
-                <input value={deactivationConfirmation} placeholder="Type DEACTIVATE" onChange={(event) => setDeactivationConfirmation(event.target.value)} />
+                <input type="password" value={deactivationPassword} aria-label="Current Matrix password" placeholder="Current Matrix password" onChange={(event) => setDeactivationPassword(event.target.value)} />
+                <input value={deactivationConfirmation} aria-label="Type DEACTIVATE" placeholder="Type DEACTIVATE" onChange={(event) => setDeactivationConfirmation(event.target.value)} />
                 <label className="settings-toggle-row"><span><strong>Request erasure</strong><small>Ask the homeserver to erase account data where supported.</small></span><input type="checkbox" checked={eraseAccountData} onChange={(event) => setEraseAccountData(event.target.checked)} /></label>
                 <button className="aqua-button is-danger" type="button" disabled={!deactivationPassword || deactivationConfirmation !== 'DEACTIVATE'} onClick={() => {
-                  if (window.confirm('Permanently deactivate this Matrix account?')) void actions.deactivateAccount(deactivationPassword, eraseAccountData).catch(() => setError('Account deactivation was not accepted.'));
+                  setConfirmDeactivation(true);
                 }}>Permanently deactivate account</button>
               </div>
             </details>
           </section>
         </>
       ) : null}
+      </fieldset>
+      {verificationWaiting ? <button className="aqua-button" onClick={() => { verificationAbort.current?.abort(); setNotice('Verification cancelled.'); }}>Cancel verification</button> : null}
+            {verification ? (
+              <Dialog className="verification-challenge" aria-label="Compare verification emoji" onClose={() => { verificationAbort.current?.abort(); verification.challenge.cancel(); setConfirmingVerification(false); setVerification(undefined); }}>
+                <strong>Do these emoji match on both devices?</strong>
+                <p>Only confirm when the same seven emoji appear in the same order.</p>
+                <div>{verification.challenge.emoji.map(([symbol, name]) => <span key={`${symbol}-${name}`} title={name}><b>{symbol}</b><small>{name}</small></span>)}</div>
+                <footer>
+                  <button className="aqua-button" type="button" data-initial-focus onClick={() => { verificationAbort.current?.abort(); verification.challenge.cancel(); setConfirmingVerification(false); setVerification(undefined); }}>They do not match</button>
+                  <button className="aqua-button aqua-button--primary" type="button" disabled={confirmingVerification} onClick={() => { if (confirmingVerification) return; const controller = verificationAbort.current; setConfirmingVerification(true); void verification.challenge.confirm().then(() => { if (controller !== verificationAbort.current || controller?.signal.aborted) return; setVerification(undefined); setNotice('Device verified.'); void refresh(); }).catch(() => { if (controller === verificationAbort.current && !controller?.signal.aborted) setError('Verification did not complete.'); }).finally(() => { if (controller === verificationAbort.current) setConfirmingVerification(false); }); }}>They match</button>
+                </footer>
+                {confirmingVerification ? <p role="status">Confirming verification…</p> : null}
+                {error ? <p role="alert">{error}</p> : null}
+              </Dialog>
+            ) : null}
+      {confirmRemoval ? <ConfirmDialog title="Sign out this device?" description="This ends the selected Matrix session. Make sure its encryption keys are backed up before continuing." actionLabel="Sign out device" onClose={() => setConfirmRemoval(undefined)} onConfirm={() => removeDevice(confirmRemoval)} /> : null}
+      {confirmDeactivation ? <ConfirmDialog title="Permanently deactivate this account?" description="This cannot be undone. Aimtrix cannot reactivate the account or restore erased server data." actionLabel="Deactivate account" onClose={() => setConfirmDeactivation(false)} onConfirm={() => actions.deactivateAccount(deactivationPassword, eraseAccountData)} /> : null}
     </div>
   );
 }

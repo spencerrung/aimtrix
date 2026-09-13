@@ -1,3 +1,7 @@
+import { useDialogBusy } from '../../components/dialogContext';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+import { Popover } from '../../components/Popover';
+import { Dialog, DialogClose } from '../../components/Dialog';
 import {
   ArrowDown,
   ArrowLeft,
@@ -382,7 +386,7 @@ interface WorkspaceProps {
   profilePersonalization?: ProfilePersonalization;
   onThemeChange: (theme: ThemeName) => void;
   onPreferencesChange: (preferences: UserPreferences) => void;
-  onProfilePersonalizationChange?: (personalization: ProfilePersonalization) => void;
+  onProfilePersonalizationChange?: (personalization: ProfilePersonalization) => void | Promise<void>;
   onUploadProfileBanner?: (file: File) => Promise<string>;
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
@@ -1456,6 +1460,7 @@ function BuddyPanel({
         <button
           className="self-card__settings"
           type="button"
+          data-focus-fallback
           aria-label="Open settings"
           title="Settings"
           onClick={onOpenSettings}
@@ -1548,7 +1553,6 @@ const TimelineMessage = memo(function TimelineMessage({
   const reactionTrigger = useRef<HTMLButtonElement>(null);
   const reactionPicker = useRef<HTMLDivElement>(null);
   const mediaTrigger = useRef<HTMLButtonElement>(null);
-  const mediaViewer = useRef<HTMLElement>(null);
   const mediaSrc = useMediaSource(
     mediaRevealed ? message.mediaUrl : undefined,
     message.kind === 'sticker' ? 320 : 720,
@@ -1587,30 +1591,7 @@ const TimelineMessage = memo(function TimelineMessage({
   const closeMediaViewer = () => {
     setMediaViewerOpen(false);
     setActualSize(false);
-    requestAnimationFrame(() => mediaTrigger.current?.focus());
   };
-  useEffect(() => {
-    if (mediaViewerOpen) mediaViewer.current?.focus();
-  }, [mediaViewerOpen]);
-  useEffect(() => {
-    if (!reactionPickerOpen) return;
-    reactionPicker.current?.querySelector<HTMLButtonElement>('.reaction-picker__grid button')?.focus();
-    const dismiss = (event: globalThis.PointerEvent) => {
-      if (
-        !reactionActions.current?.contains(event.target as Node) &&
-        !reactionPicker.current?.contains(event.target as Node)
-      ) setReactionPickerOpen(false);
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') setReactionPickerOpen(false);
-    };
-    document.addEventListener('pointerdown', dismiss);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', dismiss);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [reactionPickerOpen]);
 
   useLayoutEffect(() => {
     if (!reactionPickerOpen || !reactionPicker.current || !reactionTrigger.current) return;
@@ -1722,12 +1703,10 @@ const TimelineMessage = memo(function TimelineMessage({
           </button>
         ) : null}
       </div>
-      {mediaViewerOpen ? <div className="media-viewer-backdrop" role="presentation" onMouseDown={closeMediaViewer}>
-        <section ref={mediaViewer} className="media-viewer" role="dialog" aria-modal="true" aria-label={`Viewing ${message.body}`} onMouseDown={(event) => event.stopPropagation()} onKeyDown={(event) => { if (event.key === 'Escape') closeMediaViewer(); }} tabIndex={-1}>
-          <header><strong>{message.body}</strong><span><button type="button" aria-pressed={actualSize} onClick={() => setActualSize((value) => !value)}>{actualSize ? 'Fit image' : 'Actual size'}</button><button type="button" aria-label="Close image viewer" onClick={closeMediaViewer}><X size={18} /></button></span></header>
+      {mediaViewerOpen ? <Dialog className="media-viewer" backdropClassName="media-viewer-backdrop" aria-label={`Viewing ${message.body}`} onClose={closeMediaViewer}>
+          <header><strong>{message.body}</strong><span><button type="button" aria-pressed={actualSize} onClick={() => setActualSize((value) => !value)}>{actualSize ? 'Fit image' : 'Actual size'}</button><DialogClose aria-label="Close image viewer"><X size={18} /></DialogClose></span></header>
           {viewerSource ? <img className={actualSize ? 'is-actual-size' : undefined} src={viewerSource} alt={message.body} /> : <p role="status">Loading image…</p>}
-        </section>
-      </div> : null}
+      </Dialog> : null}
       <div className="message-actions" ref={reactionActions}>
         <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
         <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
@@ -1736,7 +1715,7 @@ const TimelineMessage = memo(function TimelineMessage({
           setReactionPickerOpen((open) => !open);
           if (!reactionPickerOpen) onLoadEmojiCatalog();
         }}><SmilePlus size={14} /></button>
-        {reactionPickerOpen ? createPortal(<div ref={reactionPicker} className="reaction-picker emoji-tray" role="dialog" aria-label="Choose a reaction" style={{ top: reactionPickerPosition.top, left: reactionPickerPosition.left }}>
+        {reactionPickerOpen ? createPortal(<Popover surfaceRef={reactionPicker} trigger={reactionTrigger} onClose={() => setReactionPickerOpen(false)} className="reaction-picker emoji-tray" label="Choose a reaction" style={{ top: reactionPickerPosition.top, left: reactionPickerPosition.left }}>
           <header><strong>React</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
           <label className="emoji-search"><Search size={13} /><span className="sr-only">Search reaction emoji</span><input value={reactionQuery} placeholder="Search emoji" onChange={(event) => setReactionQuery(event.target.value)} /></label>
           {reactionEmojis.quick.length ? <>
@@ -1749,7 +1728,7 @@ const TimelineMessage = memo(function TimelineMessage({
             {reactionEmojis.matches.map((entry) => <button type="button" key={entry.id} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
           </div>
           {!reactionEmojis.quick.length && !reactionEmojis.matches.length ? <p className="reaction-picker__empty">No emoji match that search.</p> : null}
-        </div>, document.body) : null}
+        </Popover>, document.body) : null}
         {canPin ? <button type="button" aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(message)}><Pin size={14} /></button> : null}
         {message.isOwn && message.kind === 'text' ? (
           <><button type="button" aria-label="Edit message" title="Edit" onClick={() => onEdit(message)}><Pencil size={14} /></button><button type="button" aria-label="Delete message" title="Delete" onClick={() => onDelete(message)}><Trash2 size={14} /></button></>
@@ -2029,7 +2008,10 @@ function Conversation({
   const [stickerManifest, setStickerManifest] = useState(defaultStickerPack ?? stickerPacks[0]?.manifestUrl ?? '');
   useEffect(() => {
     if (!room?.id || window.matchMedia?.('(max-width: 720px)').matches) return;
-    requestAnimationFrame(() => mainComposer.current?.focus());
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement === document.body || document.activeElement?.closest('.buddy-row')) mainComposer.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
   }, [room?.id]);
   useEffect(() => {
     if (editingMessage) requestAnimationFrame(() => mainComposer.current?.focus());
@@ -2523,35 +2505,6 @@ function Conversation({
     });
   }, [onLoadMore, reportLatestRead, room?.id]);
 
-  const anyTrayOpen = gifOpen || stickerOpen || emojiOpen;
-
-  useEffect(() => {
-    if (!anyTrayOpen) return;
-    const closeTrays = () => {
-      setGifOpen(false);
-      setStickerOpen(false);
-      setEmojiOpen(false);
-    };
-    const onKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === 'Escape') closeTrays();
-    };
-    const onPointerDown = (event: globalThis.PointerEvent) => {
-      if (
-        event.target instanceof Element &&
-        event.target.closest('.emoji-tray, .sticker-tray, .gif-picker, .composer')
-      ) {
-        return;
-      }
-      closeTrays();
-    };
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('pointerdown', onPointerDown);
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.removeEventListener('pointerdown', onPointerDown);
-    };
-  }, [anyTrayOpen]);
-
   const loadEmojiCatalog = useCallback(() => {
     if (catalogRequested.current) return;
     if (!emojiPacks.length) return;
@@ -2720,7 +2673,7 @@ function Conversation({
 
   if (!room) {
     return (
-      <main className="conversation conversation--empty">
+      <main data-focus-fallback className="conversation conversation--empty">
         <BrandMark />
         <h2>Your buddy list is quiet</h2>
         <p>Join a room or start a direct conversation to begin chatting.</p>
@@ -2951,10 +2904,10 @@ function Conversation({
         </div>
       ) : null}
       {gifOpen && gifEndpoint ? (
-        <GifPicker endpoint={gifEndpoint} onSelect={(gif) => { onSendGif(gif); setGifOpen(false); }} />
+        <Popover className="gif-popover" label="GIF picker" onClose={() => setGifOpen(false)}><GifPicker endpoint={gifEndpoint} onSelect={(gif) => { onSendGif(gif); setGifOpen(false); }} /></Popover>
       ) : null}
       {stickerOpen ? (
-        <div className="sticker-tray" aria-label="Sticker picker">
+        <Popover className="sticker-tray" label="Sticker picker" onClose={() => setStickerOpen(false)}>
           <header><strong>Sticker packs</strong><select aria-label="Sticker pack" value={stickerManifest} onChange={(event) => setStickerManifest(event.target.value)}>{stickerPacks.map((pack) => <option value={pack.manifestUrl} key={pack.manifestUrl}>{pack.name}</option>)}</select></header>
           <div aria-busy={stickerStatus === 'loading'}>
             {stickerStatus === 'loading' ? <p><span className="spinner" /> Loading stickers…</p> : stickerStatus === 'error' ? <p role="alert">This sticker pack could not be loaded.</p> : stickerPack.map((sticker) => (
@@ -2969,12 +2922,12 @@ function Conversation({
               ><ResolvedStickerImage sticker={sticker} /></button>
             ))}
           </div>
-        </div>
+        </Popover>
       ) : null}
       {emojiOpen ? (
-        <div className="emoji-tray" aria-label="Emoji picker">
+        <Popover className="emoji-tray" label="Emoji picker" onClose={() => setEmojiOpen(false)}>
           <header><strong>Emoji</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
-          <label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input autoFocus value={emojiQuery} placeholder="Search emoji" onChange={(event) => setEmojiQuery(event.target.value)} /></label>
+          <label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input value={emojiQuery} placeholder="Search emoji" onChange={(event) => setEmojiQuery(event.target.value)} /></label>
           <div>
             {visibleEmojis.map((entry) => (
               <button
@@ -2996,7 +2949,7 @@ function Conversation({
               ><EmojiAsset entry={entry} /></button>
             ))}
           </div>
-        </div>
+        </Popover>
       ) : null}
       {colonResults.length ? (
         <div className="colon-complete" role="listbox" aria-label="Emoji and sticker suggestions">
@@ -3198,6 +3151,7 @@ function RoomBackgroundPanel({
   const [draft, setDraft] = useState<RoomBackground>(initialBackground);
   const [status, setStatus] = useState<string>();
   const [busy, setBusy] = useState(false);
+  useDialogBusy(busy);
   const customSource = useMediaSource(dataSaver ? undefined : draft.mxcUrl, 700);
   const canChange = personal || Boolean(targetPolicy?.canChange) || demo;
   const previewStyle = customSource
@@ -3212,7 +3166,7 @@ function RoomBackgroundPanel({
   };
 
   const save = async () => {
-    if (!onSetBackground) return;
+    if (!onSetBackground || busy) return;
     setBusy(true);
     setStatus(personal ? 'Saving your private DM backdrop…' : `Saving the shared ${targetSpace ? 'space' : 'room'} backdrop…`);
     try {
@@ -3226,7 +3180,7 @@ function RoomBackgroundPanel({
   };
 
   const upload = async (file: File) => {
-    if (!onUpload) return;
+    if (!onUpload || busy) return;
     setBusy(true);
     setStatus('Uploading backdrop to Matrix…');
     try {
@@ -3241,7 +3195,7 @@ function RoomBackgroundPanel({
   };
 
   const updatePolicy = async (permission: RoomBackgroundPermission) => {
-    if (!onSetPolicy) return;
+    if (!onSetPolicy || busy) return;
     setBusy(true);
     setStatus('Updating backdrop permissions…');
     try {
@@ -3255,7 +3209,7 @@ function RoomBackgroundPanel({
   };
 
   const updateDecorator = async (userId: string, displayName: string, enabled: boolean) => {
-    if (!onSetMemberPower) return;
+    if (!onSetMemberPower || busy) return;
     setBusy(true);
     setStatus(`${enabled ? 'Assigning' : 'Removing'} Decorator for ${displayName}…`);
     try {
@@ -3276,8 +3230,8 @@ function RoomBackgroundPanel({
       </div>
       {!personal && space ? (
         <div className="room-background-target aqua-segmented" aria-label="Backdrop scope">
-          <button type="button" className={target === 'room' ? 'is-active' : ''} aria-pressed={target === 'room'} onClick={() => chooseTarget('room')}>This room</button>
-          <button type="button" className={target === 'space' ? 'is-active' : ''} aria-pressed={target === 'space'} onClick={() => chooseTarget('space')}>{space.name} space</button>
+          <button type="button" className={target === 'room' ? 'is-active' : ''} aria-pressed={target === 'room'} disabled={busy} onClick={() => chooseTarget('room')}>This room</button>
+          <button type="button" className={target === 'space' ? 'is-active' : ''} aria-pressed={target === 'space'} disabled={busy} onClick={() => chooseTarget('space')}>{space.name} space</button>
         </div>
       ) : null}
       <p className="room-background-copy">
@@ -3409,6 +3363,9 @@ function DetailsPanel({
   onSetMemberPower?: (roomId: string, userId: string, level: number) => Promise<void>;
   onLeave?: (roomId: string) => Promise<void>;
 }) {
+  const [confirmation, setConfirmation] = useState<{ title: string; description: string; label: string; action: () => Promise<void> }>();
+  const [actionBusy, setActionBusy] = useState(false);
+  const actionRunning = useRef(false);
   const [tab, setTab] = useState<'people' | 'moments' | 'about' | 'backdrop' | 'settings'>('people');
   const [copied, setCopied] = useState(false);
   const [invitee, setInvitee] = useState('');
@@ -3430,13 +3387,17 @@ function DetailsPanel({
   const mood = room ? moodSymbols[Math.abs(room.id.charCodeAt(1) || 0) % moodSymbols.length] : '✦';
 
   const runRoomAction = async (label: string, action: () => Promise<void>) => {
+    if (actionRunning.current) return false;
+    actionRunning.current = true; setActionBusy(true);
     setActionStatus(`${label}…`);
     try {
       await action();
       setActionStatus(`${label} complete.`);
+      return true;
     } catch {
       setActionStatus(`${label} failed. Check your room permissions.`);
-    }
+      return false;
+    } finally { actionRunning.current = false; setActionBusy(false); }
   };
 
   const copyRoomId = () => {
@@ -3444,11 +3405,12 @@ function DetailsPanel({
     void navigator.clipboard.writeText(room.id).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
-    });
+    }).catch(() => setActionStatus('The room ID could not be copied. Check clipboard permission.'));
   };
 
   return (
     <aside className="details-panel buddy-drawer" aria-label="Buddy and room drawer">
+      <fieldset className="interaction-fields" disabled={actionBusy}>
       <div className="details-panel__banner">
         <Sparkles size={16} />
         <span>{room?.kind === 'direct' ? 'Buddy Card' : 'Room Lounge'}</span>
@@ -3482,32 +3444,37 @@ function DetailsPanel({
             </button>
           </div>
 
-          <div className={`drawer-tabs${workspace.mode === 'matrix' ? ' drawer-tabs--five' : ''}`} role="tablist" aria-label="Drawer sections">
+          <div className={`drawer-tabs${workspace.mode === 'matrix' ? ' drawer-tabs--five' : ''}`} role="tablist" aria-label="Drawer sections" onKeyDown={(event) => {
+            const tabs = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+            const index = tabs.indexOf(document.activeElement as HTMLButtonElement);
+            const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length : event.key === 'ArrowLeft' ? (index - 1 + tabs.length) % tabs.length : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : undefined;
+            if (next !== undefined) { event.preventDefault(); tabs[next]?.focus(); tabs[next]?.click(); }
+          }}>
             <button
               type="button"
               role="tab"
-              aria-selected={tab === 'people'}
+              aria-selected={tab === 'people'} tabIndex={tab === 'people' ? 0 : -1} id="drawer-tab-people" aria-controls="drawer-active-panel"
               className={tab === 'people' ? 'is-active' : ''}
               onClick={() => setTab('people')}
             ><Users size={14} /> People</button>
             <button
               type="button"
               role="tab"
-              aria-selected={tab === 'moments'}
+              aria-selected={tab === 'moments'} tabIndex={tab === 'moments' ? 0 : -1} id="drawer-tab-moments" aria-controls="drawer-active-panel"
               className={tab === 'moments' ? 'is-active' : ''}
               onClick={() => setTab('moments')}
             ><Images size={14} /> Moments</button>
             <button
               type="button"
               role="tab"
-              aria-selected={tab === 'about'}
+              aria-selected={tab === 'about'} tabIndex={tab === 'about' ? 0 : -1} id="drawer-tab-about" aria-controls="drawer-active-panel"
               className={tab === 'about' ? 'is-active' : ''}
               onClick={() => setTab('about')}
             ><Info size={14} /> About</button>
             <button
               type="button"
               role="tab"
-              aria-selected={tab === 'backdrop'}
+              aria-selected={tab === 'backdrop'} tabIndex={tab === 'backdrop' ? 0 : -1} id="drawer-tab-backdrop" aria-controls="drawer-active-panel"
               className={tab === 'backdrop' ? 'is-active' : ''}
               onClick={() => setTab('backdrop')}
             ><Paintbrush size={14} /> Backdrop</button>
@@ -3515,7 +3482,7 @@ function DetailsPanel({
               <button
                 type="button"
                 role="tab"
-                aria-selected={tab === 'settings'}
+                aria-selected={tab === 'settings'} tabIndex={tab === 'settings' ? 0 : -1} id="drawer-tab-settings" aria-controls="drawer-active-panel"
                 className={tab === 'settings' ? 'is-active' : ''}
                 onClick={() => setTab('settings')}
               ><Settings size={14} /> Manage</button>
@@ -3523,7 +3490,7 @@ function DetailsPanel({
           </div>
 
           {tab === 'people' ? (
-            <div className="drawer-tab-panel">
+            <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-people" className="drawer-tab-panel">
               <div className="member-heading">
                 <Users size={14} /> {onlineCount} online <span>{members.length} total</span>
               </div>
@@ -3531,7 +3498,7 @@ function DetailsPanel({
                 <form className="drawer-invite" onSubmit={(event) => {
                   event.preventDefault();
                   if (!room || !invitee.trim() || !onInvite) return;
-                  void runRoomAction('Invite', () => onInvite(room.id, invitee.trim())).then(() => setInvitee(''));
+                  void runRoomAction('Invite', () => onInvite(room.id, invitee.trim())).then((succeeded) => { if (succeeded) setInvitee(''); });
                 }}>
                   <input value={invitee} onChange={(event) => setInvitee(event.target.value)} placeholder="@buddy:server" aria-label="Matrix ID to invite" />
                   <button type="submit" aria-label="Invite to room"><UserPlus size={14} /></button>
@@ -3555,8 +3522,8 @@ function DetailsPanel({
                         ) : (
                           <>
                             {(room.ownPowerLevel ?? 0) >= 100 ? <select aria-label={`Role for ${member.displayName}`} value={(member.powerLevel ?? 0) >= 50 ? 50 : (member.powerLevel ?? 0) >= 25 ? 25 : 0} onChange={(event) => void runRoomAction('Update role', () => onSetMemberPower?.(room.id, member.id, Number(event.target.value)) ?? Promise.resolve())}><option value="0">Member</option><option value="25">Decorator</option><option value="50">Moderator</option></select> : null}
-                            {member.membership === 'join' ? <button type="button" title="Remove member" aria-label={`Remove ${member.displayName}`} onClick={() => void runRoomAction('Remove member', () => onRemoveMember?.(room.id, member.id, 'kick') ?? Promise.resolve())}><UserMinus size={12} /></button> : null}
-                            <button type="button" title="Ban member" aria-label={`Ban ${member.displayName}`} onClick={() => void runRoomAction('Ban member', () => onRemoveMember?.(room.id, member.id, 'ban') ?? Promise.resolve())}><Ban size={12} /></button>
+                            {member.membership === 'join' ? <button type="button" title="Remove member" aria-label={`Remove ${member.displayName}`} onClick={() => setConfirmation({ title: `Remove member: ${member.displayName}?`, description: 'They will need to rejoin or be invited again.', label: 'Remove member', action: () => onRemoveMember?.(room.id, member.id, 'kick') ?? Promise.resolve() })}><UserMinus size={12} /></button> : null}
+                            <button type="button" title="Ban member" aria-label={`Ban ${member.displayName}`} onClick={() => setConfirmation({ title: `Ban member: ${member.displayName}?`, description: 'They cannot rejoin until a moderator removes the ban.', label: 'Ban member', action: () => onRemoveMember?.(room.id, member.id, 'ban') ?? Promise.resolve() })}><Ban size={12} /></button>
                           </>
                         )}
                       </span>
@@ -3568,7 +3535,7 @@ function DetailsPanel({
           ) : null}
 
           {tab === 'moments' ? (
-            <div className="drawer-tab-panel drawer-moments">
+            <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-moments" className="drawer-tab-panel drawer-moments">
               <span className="eyebrow">Recent shared media</span>
               {mediaMessages.length ? mediaMessages.map((message) => (
                 <div className="drawer-moment" key={message.id}>
@@ -3586,7 +3553,7 @@ function DetailsPanel({
           ) : null}
 
           {tab === 'about' ? (
-            <div className="drawer-tab-panel drawer-about">
+            <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-about" className="drawer-tab-panel drawer-about">
               <span className="eyebrow">Room details</span>
               <dl>
                 <div><dt>Kind</dt><dd>{room.kind === 'direct' ? 'Direct message' : 'Group room'}</dd></div>
@@ -3598,7 +3565,7 @@ function DetailsPanel({
           ) : null}
 
           {tab === 'backdrop' ? (
-            <div className="drawer-tab-panel">
+            <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-backdrop" className="drawer-tab-panel">
               <RoomBackgroundPanel
                 room={room}
                 space={scopeSpace}
@@ -3614,7 +3581,7 @@ function DetailsPanel({
           ) : null}
 
           {tab === 'settings' ? (
-            <div className="drawer-tab-panel drawer-manage">
+            <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-settings" className="drawer-tab-panel drawer-manage">
               <span className="eyebrow">Room management</span>
               {room.canManage ? (
                 <form onSubmit={(event) => {
@@ -3629,18 +3596,21 @@ function DetailsPanel({
                     event.target.value = '';
                   }} /></label>
                   <button className="aqua-button aqua-button--primary" type="submit">Save room details</button>
-                  {!room.encrypted ? <button className="aqua-button" type="button" onClick={() => void runRoomAction('Enable encryption', () => onEnableEncryption?.(room.id) ?? Promise.resolve())}><Lock size={13} /> Enable encryption forever</button> : null}
+                  {!room.encrypted ? <button className="aqua-button" type="button" onClick={() => setConfirmation({ title: 'Enable encryption permanently?', description: 'Future messages will be encrypted. This cannot be turned off, and earlier messages remain as they were.', label: 'Enable encryption', action: () => onEnableEncryption?.(room.id) ?? Promise.resolve() })}><Lock size={13} /> Enable encryption forever</button> : null}
                 </form>
               ) : <p className="drawer-empty">You can view this room, but only its moderators can change room state.</p>}
               <label className="settings-toggle-row drawer-notification-toggle"><span><strong>Mute room notifications</strong><small>Saved as a Matrix push rule.</small></span><input type="checkbox" checked={Boolean(room.muted)} onChange={(event) => void runRoomAction(event.target.checked ? 'Mute room' : 'Unmute room', () => onSetMuted?.(room.id, event.target.checked) ?? Promise.resolve())} /></label>
               <button className="aqua-button drawer-leave" type="button" onClick={() => {
-                if (window.confirm(`Leave ${room.name}?`)) void runRoomAction('Leave room', () => onLeave?.(room.id) ?? Promise.resolve());
+                setConfirmation({ title: `Leave ${room.name}?`, description: 'You may need another invitation to return to this room.', label: 'Leave room', action: () => onLeave?.(room.id) ?? Promise.resolve() });
               }}><DoorOpen size={13} /> Leave room</button>
-              {actionStatus ? <p className="drawer-action-status" role="status">{actionStatus}</p> : null}
+
             </div>
           ) : null}
         </>
       ) : null}
+      </fieldset>
+      <p className="drawer-action-status" role="status" aria-atomic="true">{actionStatus || (copied ? 'Room ID copied.' : '')}</p>
+      {confirmation ? <ConfirmDialog title={confirmation.title} description={confirmation.description} actionLabel={confirmation.label} onClose={() => setConfirmation(undefined)} onConfirm={async () => { await confirmation.action(); setActionStatus(`${confirmation.label} complete.`); }} /> : null}
     </aside>
   );
 }
@@ -3727,6 +3697,7 @@ export function Workspace({
   });
   const [query, setQuery] = useState('');
   const [detailsOpen, setDetailsOpen] = useState(preferences.detailsOpenByDefault);
+  const [deleteTarget, setDeleteTarget] = useState<MessageSummary>();
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
@@ -4205,16 +4176,12 @@ export function Workspace({
   }, [workspace.mode, onTogglePinnedMessage]);
 
   const handleDeleteMessage = useCallback((message: MessageSummary) => {
-    if (workspace.mode === 'matrix' && window.confirm('Delete this message for everyone in the room?')) {
-      void onRedactMessage?.(message.roomId, message.id).catch(() =>
-        setNotice('That message could not be deleted.'),
-      );
-    }
+    if (workspace.mode === 'matrix' && onRedactMessage) setDeleteTarget(message);
   }, [workspace.mode, onRedactMessage]);
 
   const handleReact = useCallback((message: MessageSummary, key: string, ownReactionEventId?: string) => {
     if (workspace.mode === 'matrix') {
-      void onToggleReaction?.(message.roomId, message.id, key, ownReactionEventId);
+      void onToggleReaction?.(message.roomId, message.id, key, ownReactionEventId).catch(() => setNotice('That reaction could not be updated. Try again.'));
     }
   }, [workspace.mode, onToggleReaction]);
 
@@ -4637,14 +4604,14 @@ export function Workspace({
             onSearch={onSearchPublicRooms}
             onCreateDirect={onCreateDirectRoom}
             onCreate={onCreateRoom}
+            onComplete={setNotice}
             onClose={() => setRoomDialogOpen(false)}
           />
         ) : null}
 
         {backgroundDialogOpen && selectedRoomConfigured ? (
-          <div className="room-background-dialog-backdrop" role="presentation" onMouseDown={() => setBackgroundDialogOpen(false)}>
-            <section className="room-background-dialog" role="dialog" aria-modal="true" aria-labelledby="room-background-title" onMouseDown={(event) => event.stopPropagation()}>
-              <header><div><Paintbrush size={16} /><strong id="room-background-title">Decorate {selectedRoomConfigured.name}</strong></div><button type="button" aria-label="Close background decorator" onClick={() => setBackgroundDialogOpen(false)}><X size={17} /></button></header>
+          <Dialog className="room-background-dialog" backdropClassName="room-background-dialog-backdrop" aria-labelledby="room-background-title" onClose={() => setBackgroundDialogOpen(false)}>
+              <header><div><Paintbrush size={16} /><strong id="room-background-title">Decorate {selectedRoomConfigured.name}</strong></div><DialogClose aria-label="Close background decorator"><X size={17} /></DialogClose></header>
               <RoomBackgroundPanel
                 room={selectedRoomConfigured}
                 space={scopeSpace}
@@ -4656,10 +4623,10 @@ export function Workspace({
                 onSetPolicy={setConversationBackgroundPolicy}
                 onSetMemberPower={setMemberPower}
               />
-            </section>
-          </div>
+          </Dialog>
         ) : null}
 
+        {deleteTarget ? <ConfirmDialog title="Delete this message?" description="This removes the message for everyone in the room. This cannot be undone." actionLabel="Delete message" onClose={() => setDeleteTarget(undefined)} onConfirm={async () => { await onRedactMessage?.(deleteTarget.roomId, deleteTarget.id); setNotice('Message deleted.'); }} /> : null}
         {settingsOpen ? (
           <SettingsDialog
             user={workspace.user}

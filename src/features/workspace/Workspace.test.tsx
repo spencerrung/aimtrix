@@ -61,6 +61,7 @@ function setComposerText(composer: HTMLElement, text: string) {
 
 function renderWorkspace(
   overrides: {
+    onInviteToRoom?: (roomId: string, userId: string) => Promise<void>;
     onPreferencesChange?: (preferences: UserPreferences) => void;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
     profilePersonalization?: ProfilePersonalization;
@@ -105,6 +106,7 @@ function renderWorkspace(
       onThemeChange={vi.fn()}
       onPreferencesChange={onPreferencesChange}
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
+      onInviteToRoom={overrides.onInviteToRoom}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onSendMessage={overrides.onSendMessage}
       onSendReply={overrides.onSendReply}
@@ -272,9 +274,10 @@ describe('Workspace demo', () => {
     renderWorkspace({ workspace });
 
     const trigger = screen.getByRole('button', { name: 'View sunset.png full size' });
+    trigger.focus();
     fireEvent.click(trigger);
     const dialog = screen.getByRole('dialog', { name: 'Viewing sunset.png' });
-    expect(dialog).toHaveFocus();
+    expect(within(dialog).getByRole('button', { name: 'Actual size' })).toHaveFocus();
     expect(within(dialog).getByRole('img', { name: 'sunset.png' })).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Actual size' }));
     expect(within(dialog).getByRole('button', { name: 'Fit image' })).toHaveAttribute('aria-pressed', 'true');
@@ -383,7 +386,7 @@ describe('Workspace demo', () => {
     expect(onToggleReaction).not.toHaveBeenCalled();
     const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
     expect(picker.parentElement).toBe(document.body);
-    await waitFor(() => expect(within(picker).getByRole('button', { name: 'React with 👍' })).toHaveFocus());
+    await waitFor(() => expect(within(picker).getByRole('textbox', { name: 'Search reaction emoji' })).toHaveFocus());
     fireEvent.click(within(picker).getByRole('button', { name: 'React with 🎉' }));
 
     expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', '🎉', undefined);
@@ -499,7 +502,7 @@ describe('Workspace demo', () => {
     renderWorkspace();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
-    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Choose a reaction' })).not.toBeInTheDocument();
 
     fireEvent.click(screen.getAllByRole('button', { name: 'Add reaction' })[0]);
@@ -1168,6 +1171,20 @@ describe('Workspace demo', () => {
     expect(screen.getByRole('button', { name: /Mara Chen/ })).toBeInTheDocument();
   });
 
+  it('retains rejected invitations and reports feedback in People without duplicate submissions', async () => {
+    let reject!: (error: Error) => void;
+    const invite = vi.fn(() => new Promise<void>((_, fail) => { reject = fail; }));
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onInviteToRoom: invite });
+    const input = screen.getByRole('textbox', { name: 'Matrix ID to invite' });
+    fireEvent.change(input, { target: { value: '@synthetic:example.test' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Invite to room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Invite to room' }));
+    expect(invite).toHaveBeenCalledOnce();
+    reject(new Error('synthetic denial'));
+    await screen.findByText('Invite failed. Check your room permissions.');
+    expect(input).toHaveValue('@synthetic:example.test');
+  });
+
   it('filters the buddy list without removing the active conversation', () => {
     renderWorkspace();
 
@@ -1216,7 +1233,7 @@ describe('Workspace demo', () => {
     await waitFor(() => expect(container.querySelector('.conversation')).toHaveClass('room-backdrop--graphite-grid'));
   });
 
-  it('opens the profile page and saves a live decoration preview', () => {
+  it('opens the profile page and saves a live decoration preview', async () => {
     const onProfilePersonalizationChange = vi.fn();
     renderWorkspace({ onProfilePersonalizationChange });
 
@@ -1230,12 +1247,12 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Fresh leaf' }));
     fireEvent.click(screen.getByRole('button', { name: 'Save my page' }));
 
-    expect(onProfilePersonalizationChange).toHaveBeenCalledWith({
+    await waitFor(() => expect(onProfilePersonalizationChange).toHaveBeenCalledWith({
       ...defaultProfilePersonalization,
       bannerPreset: 'twilight',
       avatarFrame: 'leaf',
       bio: 'Welcome to my little corner of the web.',
-    });
+    }));
   });
 
   it('labels decoration privacy and lets users frame a custom banner', () => {
@@ -1303,7 +1320,7 @@ describe('Workspace demo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Add emoji' }));
     expect(screen.getByLabelText('Emoji picker')).toBeInTheDocument();
-    fireEvent.keyDown(document, { key: 'Escape' });
+    fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     expect(screen.queryByLabelText('Emoji picker')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Add emoji' }));

@@ -93,3 +93,8 @@ Observed send-to-recipient times in the two clean runs were **244ms / 246ms**; s
 An initial parallel lint/browser run exposed ESLint scanning Playwright's disappearing generated output directory. Generated browser and Matrix report directories are now explicitly ignored; the complete gate passed afterward. During harness development, image setup and selector/timing errors were corrected before the clean runs; none are reported as passing live evidence.
 
 Local allowlisted summaries are in `matrix-test-results/`; command logs are `/tmp/aimtrix-live-final.log`, `/tmp/aimtrix-live-probe.log`, `/tmp/aimtrix-live-check.log`, and `/tmp/aimtrix-live-e2e.log`. No source application behavior, production configuration, homeserver, Kubernetes resource, or published image was changed. CI results are tracked on the delivery PR and issue #143; this local record does not pre-claim a hosted CI run.
+
+
+## Polish 04 extension
+
+The interaction-foundation change adds explicit confirmation clicks to kick/ban journeys and a `private-profile-save` check. The latter saves through the profile editor, waits for the acknowledgement message, verifies the authenticated Matrix account-data preset, and checks that another account cannot read it. The complete harness now has 13 checks per normal run. September 13 local working-tree validation passed 13/13 twice with cleanup; the earlier 12-check records above describe the original infrastructure revision. See [interaction evidence](accessible-interactions.md) for remaining SAS/UIA/screen-reader boundaries.

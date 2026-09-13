@@ -54,7 +54,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
   const matrixSettingsActions = useMemo(
     () => ({
       load: () => controller.loadSettings(),
-      verifyDevice: (deviceId: string) => controller.verifyDevice(deviceId),
+      verifyDevice: (deviceId: string, signal?: AbortSignal) => controller.verifyDevice(deviceId, signal),
       renameDevice: (deviceId: string, displayName: string) =>
         controller.renameDevice(deviceId, displayName),
       removeDevice: (deviceId: string, password?: string) =>
@@ -147,10 +147,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
 
   useEffect(() => {
     saveProfilePersonalization(profilePersonalization);
-    if (snapshot.status === 'ready') {
-      controller.saveProfilePersonalization(profilePersonalization);
-    }
-  }, [controller, profilePersonalization, snapshot.status]);
+  }, [profilePersonalization]);
 
   useEffect(() => {
     if (snapshot.status !== 'ready') return;
@@ -216,7 +213,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         profilePersonalization={profilePersonalization}
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
-        onProfilePersonalizationChange={setProfilePersonalization}
+        onProfilePersonalizationChange={async (next) => { await controller.updateProfilePersonalization(next); setProfilePersonalization(next); }}
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
