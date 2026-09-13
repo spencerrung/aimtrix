@@ -6,6 +6,10 @@ import type {
   SyncState,
 } from 'matrix-js-sdk';
 import type { RoomMessageEventContent } from 'matrix-js-sdk/lib/@types/events.js';
+import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
+import type { ISyncStateData } from 'matrix-js-sdk/lib/sync.js';
+import { connectionIssue, connectionIssueMessage, isSessionRejected, type ConnectionIssue, type SessionRecovery } from './sessionRecovery';
+export type { ConnectionIssue, SessionRecovery } from './sessionRecovery';
 import type { IPusherRequest } from 'matrix-js-sdk/lib/@types/PushRules.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
 import {
@@ -85,11 +89,12 @@ export type PushRegistrationResult =
 
 export type MatrixControllerSnapshot =
   | { status: 'restoring'; message: string }
-  | { status: 'authenticating'; message: string }
-  | { status: 'signed-out'; error?: string }
+  | { status: 'authenticating'; message: string; recovery?: SessionRecovery }
+  | { status: 'signed-out'; error?: string; recovery?: SessionRecovery }
   | { status: 'connecting'; message: string; error?: string }
-  | { status: 'ready'; workspace: WorkspaceSnapshot }
-  | { status: 'error'; error: string; canRetry: boolean };
+  | { status: 'ready'; workspace: WorkspaceSnapshot; issue?: ConnectionIssue }
+  | { status: 'error'; error: string; canRetry: boolean; issue?: ConnectionIssue }
+  | { status: 'reauthentication-required'; recovery: SessionRecovery; error?: string };
 
 type Subscriber = () => void;
 type MatrixSdk = typeof import('matrix-js-sdk');
@@ -109,42 +114,38 @@ function friendlyError(error: unknown): string {
   if (typeof error === 'string' && /secure credential storage/i.test(error)) {
     return 'Aimtrix could not access secure credential storage on this device.';
   }
-  const candidate = error as { errcode?: unknown; message?: unknown; name?: unknown };
+  const candidate = (error && typeof error === 'object' ? error : {}) as { errcode?: unknown; message?: unknown; name?: unknown };
   if (candidate.errcode === 'M_FORBIDDEN') return 'That Matrix ID or password was not accepted.';
   if (candidate.errcode === 'M_UNKNOWN_TOKEN') return 'Your Matrix session expired. Please sign in again.';
   if (candidate.errcode === 'M_LIMIT_EXCEEDED') return 'The homeserver is busy. Wait a moment and try again.';
   if (candidate.errcode === 'M_USER_DEACTIVATED') return 'This Matrix account has been deactivated.';
   if (candidate.errcode === 'M_CONSENT_NOT_GIVEN') return 'This homeserver requires account consent. Complete it in another Matrix client or the server account page, then retry.';
   if (candidate.name === 'AbortError') return 'The connection was cancelled.';
-  if (typeof candidate.message === 'string' && /^(This homeserver|SSO )/.test(candidate.message)) {
-    return candidate.message;
-  }
-  if (typeof candidate.message === 'string' && /indexeddb|crypto|wasm/i.test(candidate.message)) {
-    return 'Aimtrix could not open encrypted local storage. Check private-browsing or storage settings.';
-  }
+  const safeMessages = [
+    'This homeserver does not advertise SSO.',
+    'SSO homeserver information is missing.',
+    'SSO returned another homeserver. Sign in to the original account.',
+    'SSO returned another account. Sign in to the original account, or forget it first.',
+  ];
+  if (typeof candidate.message === 'string' && safeMessages.includes(candidate.message)) return candidate.message;
+  if (connectionIssue(error) === 'storage') return connectionIssueMessage('storage');
   return 'Aimtrix could not connect to that homeserver. Check the address and try again.';
 }
 
-function isUnknownToken(error: unknown): boolean {
-  return (error as { errcode?: unknown }).errcode === 'M_UNKNOWN_TOKEN';
-}
-
 function deleteDatabase(name: string): Promise<void> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(name);
     request.onsuccess = () => resolve();
-    request.onerror = () => resolve();
-    request.onblocked = () => resolve();
+    request.onerror = () => reject(new Error('IndexedDB cleanup failed'));
+    request.onblocked = () => reject(new Error('IndexedDB cleanup blocked; close other Aimtrix tabs'));
   });
 }
 
 async function deleteAccountDatabases(session: StoredMatrixSession): Promise<void> {
-  const names = databaseNames(session);
-  await Promise.all([
-    deleteDatabase(names.sync),
-    deleteDatabase(`${names.crypto}::matrix-sdk-crypto`),
-    deleteDatabase(`${names.crypto}::matrix-sdk-crypto-meta`),
-  ]);
+  await Promise.all([session.deviceId, ...(session.retainedDeviceIds ?? [])].map(async (deviceId) => {
+    const names = databaseNames({ ...session, deviceId });
+    await Promise.all([deleteDatabase(names.sync), deleteDatabase(`${names.crypto}::matrix-sdk-crypto`), deleteDatabase(`${names.crypto}::matrix-sdk-crypto-meta`)]);
+  }));
 }
 
 export class MatrixController {
@@ -157,6 +158,55 @@ export class MatrixController {
   private sdk?: MatrixSdk;
   private activeSession?: StoredMatrixSession;
   private initialized = false;
+  private lifecycleRevision = 0;
+  private recoverySession?: StoredMatrixSession;
+  private credentialWork: Promise<unknown> = Promise.resolve();
+  private currentIssue?: ConnectionIssue;
+  private cleanupPending = false;
+  private clientListenerCleanup?: () => void;
+
+  private credentialOperation<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.credentialWork.then(operation, operation).catch(() => {
+      throw new Error('Secure credential storage is unavailable.');
+    });
+    this.credentialWork = result.catch(() => undefined);
+    return result;
+  }
+
+  private recoveryInfo(): SessionRecovery | undefined {
+    const session = this.recoverySession;
+    return session ? { userId: session.userId, homeserver: session.baseUrl, softLogout: session.recovery === 'soft' } : undefined;
+  }
+
+  private showConnectionError(error: unknown): void {
+    const issue = connectionIssue(error);
+    this.setSnapshot({ status: 'error', error: connectionIssueMessage(issue), canRetry: true, issue });
+  }
+
+  private expireSession(error: unknown): void {
+    const session = this.activeSession ?? this.recoverySession;
+    if (!session || this.snapshot.status === 'reauthentication-required') return;
+    ++this.lifecycleRevision;
+    const data = error && typeof error === 'object' ? (error as { data?: { soft_logout?: unknown } }).data : undefined;
+    this.recoverySession = { ...session, accessToken: '', recovery: data?.soft_logout === true ? 'soft' : 'hard' };
+    void this.stopCurrentClient();
+    this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! });
+    const recovery = this.recoverySession;
+    void this.credentialOperation(() => this.platform.credentials.save(recovery)).catch(() => {
+      if (this.recoverySession === recovery && this.snapshot.status === 'reauthentication-required') {
+        this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()!, error: 'The rejected token could not be removed from device storage. Check storage access before continuing.' });
+      }
+    });
+  }
+
+  public async reauthenticate(): Promise<void> {
+    if (!this.recoverySession) return;
+    const revision = this.lifecycleRevision;
+    const recovery = this.recoverySession;
+    await this.credentialWork;
+    if (revision !== this.lifecycleRevision || this.recoverySession !== recovery) return;
+    this.setSnapshot({ status: 'signed-out', recovery: this.recoveryInfo() });
+  }
   private publishFrame?: number;
   private connection: ConnectionState = 'connecting';
   private readonly threadListenerRooms = new Map<string, Room>();
@@ -360,15 +410,9 @@ export class MatrixController {
   }
 
   public shutdown(): void {
-    this.roomHistory.clear();
-    this.retryingMessages = new WeakSet();
-    this.snapshotCache.localEvents.clear();
-    this.resetProfilePersonalization();
-    this.detachClientListeners();
-    this.client?.stopClient();
-    this.client = undefined;
-    this.activeSession = undefined;
-    this.clearMediaCache();
+    ++this.lifecycleRevision;
+    void this.stopCurrentClient();
+    this.setSnapshot({ status: 'signed-out' });
   }
 
   public subscribe = (subscriber: Subscriber): (() => void) => {
@@ -389,39 +433,33 @@ export class MatrixController {
   public async initialize(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
-    const loginToken = new URL(window.location.href).searchParams.get('loginToken');
-    if (loginToken) {
-      this.setSnapshot({ status: 'connecting', message: 'Completing Matrix SSO…' });
-      try {
-        await this.completeSso(loginToken);
-        return;
-      } catch (error) {
-        this.setSnapshot({ status: 'signed-out', error: friendlyError(error) });
-        return;
-      }
-    }
-    const session = await this.platform.credentials.load();
-    if (!session) {
-      this.setSnapshot({ status: 'signed-out' });
-      return;
-    }
-
-    this.setSnapshot({ status: 'connecting', message: 'Restoring your encrypted Matrix session…' });
+    const revision = ++this.lifecycleRevision;
     try {
-      await this.connect(session);
+      const session = await this.credentialOperation(() => this.platform.credentials.load());
+      if (revision !== this.lifecycleRevision) return;
+      if (session?.recovery) this.recoverySession = session;
+      const loginToken = new URL(window.location.href).searchParams.get('loginToken');
+      if (loginToken) {
+        // Remove the credential from the URL even if exchange or local storage fails.
+        window.history.replaceState({}, '', window.location.pathname);
+        this.setSnapshot({ status: 'connecting', message: 'Completing Matrix SSO…' });
+        await this.completeSso(loginToken, revision);
+      } else if (session?.recovery) {
+        this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! });
+      } else if (session) {
+        this.setSnapshot({ status: 'connecting', message: 'Restoring your encrypted Matrix session…' });
+        await this.connect(session, revision);
+      } else this.setSnapshot({ status: 'signed-out' });
     } catch (error) {
-      if (isUnknownToken(error)) {
-        await deleteAccountDatabases(session);
-        await this.platform.credentials.clear();
-        this.setSnapshot({ status: 'signed-out', error: friendlyError(error) });
-      } else {
-        this.setSnapshot({ status: 'error', error: friendlyError(error), canRetry: true });
-      }
+      if (revision !== this.lifecycleRevision) return;
+      if (isSessionRejected(error)) this.expireSession(error);
+      else this.showConnectionError(error);
     }
   }
 
   public async startSso(credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>): Promise<void> {
-    this.setSnapshot({ status: 'authenticating', message: 'Checking SSO providers…' });
+    const revision = ++this.lifecycleRevision;
+    this.setSnapshot({ status: 'authenticating', message: 'Checking SSO providers…', recovery: this.recoveryInfo() });
     try {
       const target = await resolveHomeserver({
         homeserverInput: credentials.homeserver,
@@ -438,17 +476,22 @@ export class MatrixController {
           ? 'cas'
           : undefined;
       if (!loginType) throw new Error('This homeserver does not advertise SSO.');
+      if (revision !== this.lifecycleRevision) return;
+      if (this.recoverySession && target.baseUrl !== this.recoverySession.baseUrl) throw new Error('Recovery account mismatch');
       await this.platform.sso.save(target);
+      if (revision !== this.lifecycleRevision) return;
       const redirectUrl = this.platform.deepLinks.ssoRedirectUrl();
       this.platform.deepLinks.navigate(ssoClient.getSsoLoginUrl(redirectUrl, loginType));
     } catch (error) {
-      this.setSnapshot({ status: 'signed-out', error: friendlyError(error) });
+      if (revision === this.lifecycleRevision) this.setSnapshot({ status: 'signed-out', error: friendlyError(error), recovery: this.recoveryInfo() });
     }
   }
 
-  private async completeSso(loginToken: string): Promise<void> {
+  private async completeSso(loginToken: string, revision: number): Promise<void> {
     const target = await this.platform.sso.load();
     if (!target) throw new Error('SSO homeserver information is missing.');
+    if (revision !== this.lifecycleRevision) return;
+    if (this.recoverySession && target.baseUrl !== this.recoverySession.baseUrl) throw new Error('SSO returned another homeserver. Sign in to the original account.');
     const sdk = await loadMatrixSdk();
     const loginClient = sdk.createClient({ baseUrl: target.baseUrl });
     const clientLabel = this.platform.capabilities.platform === 'browser'
@@ -458,6 +501,7 @@ export class MatrixController {
         : 'Mobile';
     const response = await loginClient.login('m.login.token', {
       token: loginToken,
+      ...(this.recoverySession?.recovery === 'soft' ? { device_id: this.recoverySession.deviceId } : {}),
       initial_device_display_name: `Aimtrix ${clientLabel}`,
     });
     const session: StoredMatrixSession = {
@@ -469,17 +513,17 @@ export class MatrixController {
     };
     await this.platform.sso.clear();
     window.history.replaceState({}, '', window.location.pathname);
-    await this.platform.credentials.save(session);
-    await this.connect(session);
+    await this.acceptLogin(session, revision);
   }
 
   public async login(credentials: LoginCredentials): Promise<void> {
     if (!credentials.userId.trim() || !credentials.password) {
-      this.setSnapshot({ status: 'signed-out', error: 'Enter your Matrix ID and password.' });
+      this.setSnapshot({ status: 'signed-out', error: 'Enter your Matrix ID and password.', recovery: this.recoveryInfo() });
       return;
     }
 
-    this.setSnapshot({ status: 'authenticating', message: 'Contacting your homeserver…' });
+    const revision = ++this.lifecycleRevision;
+    this.setSnapshot({ status: 'authenticating', message: 'Contacting your homeserver…', recovery: this.recoveryInfo() });
     try {
       const target = await resolveHomeserver({
         homeserverInput: credentials.homeserver,
@@ -497,6 +541,7 @@ export class MatrixController {
       const response = await loginClient.login('m.login.password', {
         identifier: { type: 'm.id.user', user: credentials.userId.trim() },
         password: credentials.password,
+        ...(this.recoverySession?.recovery === 'soft' && target.baseUrl === this.recoverySession.baseUrl && credentials.userId.trim() === this.recoverySession.userId ? { device_id: this.recoverySession.deviceId } : {}),
         initial_device_display_name: `Aimtrix ${clientLabel}`,
       });
       const session: StoredMatrixSession = {
@@ -506,90 +551,108 @@ export class MatrixController {
         userId: response.user_id,
         deviceId: response.device_id,
       };
-      await this.platform.credentials.save(session);
-      this.setSnapshot({ status: 'connecting', message: 'Opening encrypted message storage…' });
-      await this.connect(session);
+      await this.acceptLogin(session, revision);
     } catch (error) {
-      this.setSnapshot({ status: 'signed-out', error: friendlyError(error) });
+      if (revision !== this.lifecycleRevision) return;
+      if (isSessionRejected(error) && this.activeSession) this.expireSession(error);
+      else if (this.activeSession) this.showConnectionError(error);
+      else this.setSnapshot({ status: 'signed-out', error: friendlyError(error), recovery: this.recoveryInfo() });
     }
   }
 
+  private async acceptLogin(session: StoredMatrixSession, revision: number): Promise<void> {
+    if (revision !== this.lifecycleRevision) return;
+    const previous = this.recoverySession;
+    if (previous) {
+      if (session.userId !== previous.userId || session.baseUrl !== previous.baseUrl) {
+        // Do not open another account or overwrite its recovery record after an SSO choice.
+        throw new Error('SSO returned another account. Sign in to the original account, or forget it first.');
+      }
+      session.retainedDeviceIds = [...new Set([...(previous.retainedDeviceIds ?? []), ...(session.deviceId !== previous.deviceId ? [previous.deviceId] : [])])];
+    }
+    await this.credentialOperation(async () => {
+      if (revision === this.lifecycleRevision) await this.platform.credentials.save(session);
+    });
+    if (revision !== this.lifecycleRevision) return;
+    this.recoverySession = undefined;
+    this.cleanupPending = false;
+    this.setSnapshot({ status: 'connecting', message: 'Opening encrypted message storage…' });
+    await this.connect(session, revision);
+  }
+
   public async retry(): Promise<void> {
-    const session = await this.platform.credentials.load();
-    if (!session) {
-      this.setSnapshot({ status: 'signed-out' });
+    if (this.cleanupPending) return this.endSession(false);
+    if (this.recoverySession) return this.reauthenticate();
+    if (this.client && this.snapshot.status === 'ready') {
+      this.client.retryImmediately();
       return;
     }
-    this.setSnapshot({ status: 'connecting', message: 'Trying your homeserver again…' });
+    const revision = ++this.lifecycleRevision;
     try {
-      await this.connect(session);
+      const session = await this.credentialOperation(() => this.platform.credentials.load());
+      if (revision !== this.lifecycleRevision) return;
+      if (!session) { this.setSnapshot({ status: 'signed-out' }); return; }
+      if (session.recovery) {
+        this.recoverySession = session;
+        this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! });
+        return;
+      }
+      this.setSnapshot({ status: 'connecting', message: 'Trying your homeserver again…' });
+      await this.connect(session, revision);
     } catch (error) {
-      this.setSnapshot({ status: 'error', error: friendlyError(error), canRetry: true });
+      if (revision !== this.lifecycleRevision) return;
+      if (isSessionRejected(error)) this.expireSession(error);
+      else this.showConnectionError(error);
     }
   }
 
   public async forgetSession(): Promise<void> {
-    const client = this.client;
-    const session = this.activeSession ?? (await this.platform.credentials.load());
-    try {
-      await this.unregisterPushNotifications();
-    } catch {
-      // Local credential removal must still succeed when the homeserver is unavailable.
-    }
-    this.detachClientListeners();
-    client?.stopClient();
-    this.client = undefined;
-    this.activeSession = undefined;
-    this.clearMediaCache();
-
-    if (client) {
-      try {
-        await client.clearStores({
-          cryptoDatabasePrefix: session ? databaseNames(session).crypto : undefined,
-        });
-      } catch {
-        if (session) await deleteAccountDatabases(session);
-      }
-    } else if (session) {
-      await deleteAccountDatabases(session);
-    }
-
-    await this.platform.credentials.clear();
-    this.setSnapshot({ status: 'signed-out' });
+    await this.endSession(false);
   }
 
   public async logout(): Promise<void> {
+    await this.endSession(true);
+  }
+
+  private async endSession(remoteLogout: boolean): Promise<void> {
+    const revision = ++this.lifecycleRevision;
     const client = this.client;
-    const session = this.activeSession;
-    this.setSnapshot({ status: 'connecting', message: 'Signing off…' });
+    const session = this.activeSession ?? this.recoverySession;
+    this.cleanupPending = true;
+    this.setSnapshot({ status: 'connecting', message: 'Signing off and clearing this account…' });
+    // Stop account callbacks and remove plaintext view state before any network/storage wait.
+    await this.stopCurrentClient();
     try {
-      await this.unregisterPushNotifications();
-    } catch {
-      // Local logout must still succeed when the homeserver is unavailable.
-    }
-    this.detachClientListeners();
-    this.client = undefined;
-    this.activeSession = undefined;
-    this.clearMediaCache();
-
-    if (client) {
-      try {
-        await client.logout(false);
-      } catch {
-        // Local logout must still succeed when the homeserver is unavailable.
-      }
-      client.stopClient();
-      try {
-        await client.clearStores({
-          cryptoDatabasePrefix: session ? databaseNames(session).crypto : undefined,
+      const stored = session ?? await this.credentialOperation(() => this.platform.credentials.load());
+      if (revision !== this.lifecycleRevision) return;
+      if (stored) {
+        const recovery: StoredMatrixSession = { ...stored, accessToken: '', recovery: 'hard' };
+        await this.credentialOperation(async () => {
+          if (revision === this.lifecycleRevision) await this.platform.credentials.save(recovery);
         });
-      } catch {
-        // Stale cache can be safely ignored after the access token is removed.
+        if (revision !== this.lifecycleRevision) return;
+        this.recoverySession = recovery;
       }
+      if (client && stored) await this.removePushersForDevice(client, stored.deviceId);
+      if (revision !== this.lifecycleRevision) return;
+      if (remoteLogout && client) {
+        try { await client.logout(false); } catch { /* A revoked/offline token cannot prevent local sign-out. */ }
+      }
+      if (revision !== this.lifecycleRevision) return;
+      try { await this.platform.push.unsubscribe(); } catch { /* Device provider may be offline. */ }
+      if (revision !== this.lifecycleRevision) return;
+      this.pushRegistration = undefined;
+      if (stored) await deleteAccountDatabases(stored);
+      await this.credentialOperation(async () => {
+        if (revision === this.lifecycleRevision) await this.platform.credentials.clear();
+      });
+      if (revision !== this.lifecycleRevision) return;
+      this.recoverySession = undefined;
+      this.cleanupPending = false;
+      this.setSnapshot({ status: 'signed-out' });
+    } catch (error) {
+      if (revision === this.lifecycleRevision) this.showConnectionError(error);
     }
-
-    await this.platform.credentials.clear();
-    this.setSnapshot({ status: 'signed-out' });
   }
 
   public resolveMedia = (
@@ -628,6 +691,7 @@ export class MatrixController {
     if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') return undefined;
     try {
       const response = await client.getUrlPreview(parsed.href, Date.now()) as Record<string, unknown>;
+      if (this.client !== client) return undefined;
       const string = (key: string) => typeof response[key] === 'string' ? response[key] : undefined;
       const image = string('og:image');
       return {
@@ -682,7 +746,7 @@ export class MatrixController {
     } else {
       blob = await response.blob();
     }
-    if (!blob.size || blob.size > maxBytes) return undefined;
+    if (!blob.size || blob.size > maxBytes || this.client !== client) return undefined;
     const objectUrl = URL.createObjectURL(blob);
     this.mediaObjectUrls.add(objectUrl);
     return objectUrl;
@@ -1032,6 +1096,7 @@ export class MatrixController {
       let fromToken: string | undefined;
       do {
         const response = await client.getRoomHierarchy(spaceId, 100, 20, false, fromToken);
+        if (this.client !== client) return;
         for (const room of response.rooms) {
           const children = room.children_state
             .filter((event) => {
@@ -1079,7 +1144,7 @@ export class MatrixController {
       this.spaceHierarchies.set(spaceId, [...hierarchyRooms.values()]);
       this.scheduleWorkspacePublish();
     })().finally(() => {
-      this.spaceHierarchyRequests.delete(spaceId);
+      if (this.spaceHierarchyRequests.get(spaceId) === request) this.spaceHierarchyRequests.delete(spaceId);
     });
 
     this.spaceHierarchyRequests.set(spaceId, request);
@@ -2335,10 +2400,13 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
-  private async connect(session: StoredMatrixSession): Promise<void> {
+  private async connect(session: StoredMatrixSession, revision = this.lifecycleRevision): Promise<void> {
+    if (session.recovery || !session.accessToken || revision !== this.lifecycleRevision) return;
     await this.stopCurrentClient();
+    if (revision !== this.lifecycleRevision) return;
     const names = databaseNames(session);
     const sdk = await loadMatrixSdk();
+    if (revision !== this.lifecycleRevision) return;
     const client = sdk.createClient({
       baseUrl: session.baseUrl,
       accessToken: session.accessToken,
@@ -2349,7 +2417,7 @@ export class MatrixController {
         getSecretStorageKey: async ({ keys }) => {
           const recoveryKey = this.inMemoryRecoveryKey;
           const activeClient = this.client;
-          if (!recoveryKey || !activeClient) return null;
+          if (!recoveryKey || activeClient !== client) return null;
           const defaultKeyId = await activeClient.secretStorage.getDefaultKeyId();
           const candidates = defaultKeyId && keys[defaultKeyId]
             ? [defaultKeyId]
@@ -2362,7 +2430,7 @@ export class MatrixController {
                   keys[keyId] as SecretStorageKeyDescriptionAesV1,
                 )
               ) {
-                return [keyId, recoveryKey];
+                return this.client === client ? [keyId, recoveryKey] : null;
               }
             } catch {
               // Try another active secret-storage key if the account has more than one.
@@ -2371,7 +2439,7 @@ export class MatrixController {
           return null;
         },
         cacheSecretStorageKey: (_keyId, _keyInfo, key) => {
-          this.inMemoryRecoveryKey = key;
+          if (this.client === client) this.inMemoryRecoveryKey = key;
         },
       },
     });
@@ -2387,12 +2455,14 @@ export class MatrixController {
         useIndexedDB: true,
         cryptoDatabasePrefix: names.crypto,
       });
+      if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
       await client.startClient({
         initialSyncLimit: 30,
         lazyLoadMembers: true,
         pendingEventOrdering: sdk.PendingEventOrdering.Chronological,
         threadSupport: true,
       });
+      if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
       if (this.pushRefreshPending) {
         this.pushRefreshPending = false;
         client.retryImmediately();
@@ -2404,16 +2474,18 @@ export class MatrixController {
       // debugging interoperability issues.
       try {
         const support = await client.doesServerSupportThread();
-        this.threadSupport = support.threads;
+        if (this.client === client) this.threadSupport = support.threads;
       } catch {
         // doesServerSupportThread can reject on older servers; default to None.
-        this.threadSupport = 0; // FeatureSupport.None
+        if (this.client === client) this.threadSupport = 0; // FeatureSupport.None
       }
     } catch (error) {
-      this.detachClientListeners();
-      client.stopClient();
-      this.client = undefined;
-      this.activeSession = undefined;
+      if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
+      if (isSessionRejected(error)) { this.expireSession(error); return; }
+      await this.stopCurrentClient();
+      if (revision !== this.lifecycleRevision) return;
+      // Keep session metadata for retry/explicit forget after local crypto startup failure.
+      this.activeSession = session;
       throw error;
     }
   }
@@ -2423,14 +2495,13 @@ export class MatrixController {
     this.retryingMessages = new WeakSet();
     this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
-    if (!this.client) return;
     this.uploadAbortController?.abort();
     this.activeCall?.hangup('user_hangup' as CallErrorCode, false);
     this.activeCall = undefined;
     this.callSummary = undefined;
     const client = this.client;
     this.detachClientListeners();
-    client.stopClient();
+    client?.stopClient();
     this.client = undefined;
     this.activeSession = undefined;
     this.inMemoryRecoveryKey = undefined;
@@ -2440,12 +2511,16 @@ export class MatrixController {
     this.spaceHierarchies.clear();
     this.spaceHierarchyRequests.clear();
     this.lastReadReceiptByRoom.clear();
+    this.pendingDeviceAuth.clear();
+    this.rootSpaceOrderMigrationStarted = false;
     this.rootSpaceOrderOverride = undefined;
     this.signOnTonePlayed = false;
     this.liveEncryptedMessages.clear();
     this.snapshotCache.roomVersions.clear();
     this.snapshotCache.messages.clear();
     this.snapshotCache.members.clear();
+    this.currentIssue = undefined;
+    this.threadSupport = 0;
     this.clearMediaCache();
   }
 
@@ -2477,14 +2552,16 @@ export class MatrixController {
     const callEvent = this.sdk?.CallEvent;
     if (!callEvent) return;
     call.on(callEvent.State, () => {
+      if (this.activeCall !== call) return;
       if (call.state === 'ended') this.endCallState();
       else this.updateCallSummary();
     });
-    call.on(callEvent.FeedsChanged, () => this.updateCallSummary());
+    call.on(callEvent.FeedsChanged, () => { if (this.activeCall === call) this.updateCallSummary(); });
     call.on(callEvent.Error, (error: CallError) => {
+      if (this.activeCall !== call) return;
       this.updateCallSummary(error.message);
     });
-    call.on(callEvent.Hangup, () => this.endCallState());
+    call.on(callEvent.Hangup, () => { if (this.activeCall === call) this.endCallState(); });
   }
 
   private updateCallSummary(error?: string): void {
@@ -2514,12 +2591,15 @@ export class MatrixController {
   private signOnTonePlayed = false;
   private rootSpaceOrderMigrationStarted = false;
 
-  private readonly handleSync = (syncState: SyncState): void => {
+  private readonly handleSync = (syncState: SyncState, _previous?: SyncState | null, data?: ISyncStateData): void => {
+    if (!this.client) return;
+    if (isSessionRejected(data?.error)) { this.expireSession(data?.error); return; }
     switch (syncState) {
       case 'PREPARED':
         this.roomHistory.syncCompleted();
         this.migrateLegacyRootSpaceOrder();
         this.connection = 'online';
+        this.currentIssue = undefined;
         if (!this.signOnTonePlayed) {
           this.signOnTonePlayed = true;
           if (this.notificationPreferences.notificationSounds) this.playSignOnTone();
@@ -2529,6 +2609,7 @@ export class MatrixController {
       case 'SYNCING':
         this.roomHistory.syncCompleted();
         this.connection = 'online';
+        this.currentIssue = undefined;
         if (!this.signOnTonePlayed) {
           this.signOnTonePlayed = true;
           if (this.notificationPreferences.notificationSounds) this.playSignOnTone();
@@ -2542,6 +2623,7 @@ export class MatrixController {
         break;
       case 'ERROR':
       case 'STOPPED':
+        this.currentIssue = connectionIssue(data?.error);
         this.connection = 'offline';
         this.scheduleWorkspacePublish();
         break;
@@ -2813,7 +2895,24 @@ export class MatrixController {
 
   private attachClientListeners(): void {
     if (!this.client || !this.sdk) return;
-    this.client.on(this.sdk.ClientEvent.Sync, this.handleSync);
+    const client = this.client;
+    const syncEvent = this.sdk.ClientEvent.Sync;
+    const onSync = (state: SyncState, previous: SyncState | null, data?: ISyncStateData) => {
+      if (this.client === client) this.handleSync(state, previous, data);
+    };
+    const onLogout = (error: unknown) => { if (this.client === client) this.expireSession(error); };
+    const onConsent = () => {
+      if (this.client !== client) return;
+      this.currentIssue = 'consent'; this.connection = 'offline'; this.scheduleWorkspacePublish();
+    };
+    client.on(syncEvent, onSync);
+    client.on(HttpApiEvent.SessionLoggedOut, onLogout);
+    client.on(HttpApiEvent.NoConsent, onConsent);
+    this.clientListenerCleanup = () => {
+      client.removeListener(syncEvent, onSync);
+      client.removeListener(HttpApiEvent.SessionLoggedOut, onLogout);
+      client.removeListener(HttpApiEvent.NoConsent, onConsent);
+    };
     this.client.on(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.on(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.on(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
@@ -2828,8 +2927,11 @@ export class MatrixController {
   }
 
   private detachClientListeners(): void {
+    this.clientListenerCleanup?.();
+    this.clientListenerCleanup = undefined;
+    if (this.publishFrame !== undefined) cancelAnimationFrame(this.publishFrame);
+    this.publishFrame = undefined;
     if (!this.client || !this.sdk) return;
-    this.client.removeListener(this.sdk.ClientEvent.Sync, this.handleSync);
     this.client.removeListener(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.removeListener(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.removeListener(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
@@ -2841,8 +2943,6 @@ export class MatrixController {
     this.client.removeListener(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
     this.client.removeListener('Call.incoming' as any, this.handleIncomingCall as any);
     this.detachThreadListeners();
-    if (this.publishFrame !== undefined) cancelAnimationFrame(this.publishFrame);
-    this.publishFrame = undefined;
   }
 
   private scheduleWorkspacePublish(): void {
@@ -2860,6 +2960,7 @@ export class MatrixController {
         );
         this.setSnapshot({
           status: 'ready',
+          issue: this.currentIssue,
           workspace: { ...workspace, call: this.callSummary },
         });
       } catch {

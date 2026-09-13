@@ -6,6 +6,7 @@ export const checkNames = new Set([
   'encrypted-send-receive-and-latency', 'encrypted-history-and-context', 'authenticated-encrypted-media',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback',
+  'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
   'diagnostic-failure-probe', 'cleanup',
 ]);
 export const failureCategories = ['strict mode violation', 'Timeout', 'not a file input', 'matrix-http-status', 'media-requires-authentication', 'attachment-ciphertext', 'mxc-upload', 'other'];

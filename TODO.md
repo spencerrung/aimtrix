@@ -22,8 +22,8 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 - [x] Homeserver discovery, custom/default homeserver policy, password login, and password non-retention.
 - [x] SSO/CAS discovery, redirect, token callback restoration, and callback URL cleanup.
 - [x] Per-account IndexedDB Rust/WASM crypto store with an in-memory sync store; crypto initializes before sync.
-- [x] Session restore/logout/forget, expired-token handling during restore, object URL cleanup, and account database cleanup. Active-session expiry remains a targeted reproduction/fix in [#147](https://github.com/spencerrung/aimtrix/issues/147).
-- [x] Startup/restore offline/reconnecting/unknown-token/consent/storage failure states; signed-in sync error distinctions remain under [#147](https://github.com/spencerrung/aimtrix/issues/147).
+- [x] Active/restored session rejection, token-free reauthentication, crypto retention, guarded account cleanup and explicit forget. See [session recovery](docs/session-recovery.md) for soft/hard logout and evidence boundaries.
+- [x] Startup and signed-in offline/reconnecting/consent/storage states, non-destructive SDK reconnect, and volatile same-account text draft retention through reauthentication. Durable drafts remain #153.
 - [x] E2EE enforcement in encrypted rooms with no plaintext fallback.
 
 ### Messaging, media, rooms, and spaces

@@ -1577,6 +1577,7 @@ describe('Workspace history navigation', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Could not load older messages');
     fireEvent.click(screen.getByRole('button', { name: 'Retry older messages' }));
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Load newer messages' })).toBeEnabled());
     fireEvent.click(screen.getByRole('button', { name: 'Load newer messages' }));
     await waitFor(() => expect(onLoadRoomHistory).toHaveBeenLastCalledWith('welcome', 'forward'));
     const exhausted = structuredClone(workspace);

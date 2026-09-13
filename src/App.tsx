@@ -5,6 +5,8 @@ import {
   type ThemeName,
 } from './config/runtimeConfig';
 import { demoWorkspace } from './demo/demoWorkspace';
+import { VolatileDrafts } from './features/workspace/volatileDrafts';
+import { ConnectionBanner, SessionRecoveryScreen } from './features/auth/SessionRecovery';
 import { ConnectionError } from './features/auth/ConnectionError';
 import { LoginWindow } from './features/auth/LoginWindow';
 import { InstallPrompt } from './features/pwa/InstallPrompt';
@@ -22,12 +24,14 @@ import {
   type UserPreferences,
 } from './settings/preferences';
 import {
+  defaultProfilePersonalization,
   loadProfilePersonalization,
   saveProfilePersonalization,
   type ProfilePersonalization,
 } from './settings/profilePersonalization';
 
 const THEME_KEY = 'aimtrix.theme';
+const DEMO_PROFILE_KEY = 'aimtrix.demo.profile.v1';
 
 function initialTheme(configured: ThemeName): ThemeName {
   const saved = localStorage.getItem(THEME_KEY);
@@ -48,9 +52,20 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
   );
   const [theme, setTheme] = useState<ThemeName>(() => initialTheme(config.defaultTheme));
   const [preferences, setPreferences] = useState<UserPreferences>(() => loadUserPreferences());
-  const [profilePersonalization, setProfilePersonalization] = useState<ProfilePersonalization>(
-    () => loadProfilePersonalization(),
-  );
+  const [demoPersonalization, setDemoPersonalization] = useState<ProfilePersonalization>(() => loadProfilePersonalization(localStorage, DEMO_PROFILE_KEY));
+  const [accountPersonalization, setAccountPersonalization] = useState<{ owner: string; value: ProfilePersonalization }>();
+  const profileOwner = snapshot.status === 'ready' ? snapshot.workspace.user.id : undefined;
+  const profilePersonalization = snapshot.status === 'ready' && accountPersonalization?.owner === snapshot.workspace.user.id
+    ? accountPersonalization.value : defaultProfilePersonalization;
+  const [profileRequests] = useState(() => ({ generation: 0 }));
+  useEffect(() => controller.subscribe(() => {
+    if (controller.getSnapshot().status !== 'ready') profileRequests.generation++;
+  }), [controller, profileRequests]);
+  const [draftStore] = useState(() => new VolatileDrafts());
+  const forgetSession = async () => { draftStore.clear(); await controller.forgetSession(); };
+  useEffect(() => {
+    if (snapshot.status === 'signed-out' && !snapshot.recovery) draftStore.clear();
+  }, [snapshot, draftStore]);
   const matrixSettingsActions = useMemo(
     () => ({
       load: () => controller.loadSettings(),
@@ -146,15 +161,21 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
   }, [controller, snapshot.status]);
 
   useEffect(() => {
-    saveProfilePersonalization(profilePersonalization);
-  }, [profilePersonalization]);
+    if (demo) saveProfilePersonalization(demoPersonalization, localStorage, DEMO_PROFILE_KEY);
+    else localStorage.removeItem('aimtrix.profile.v1');
+  }, [demo, demoPersonalization]);
 
   useEffect(() => {
-    if (snapshot.status !== 'ready') return;
-    const remote = controller.loadProfilePersonalization();
-    if (remote) queueMicrotask(() => setProfilePersonalization(remote));
-    else controller.saveProfilePersonalization(loadProfilePersonalization());
-  }, [controller, snapshot.status]);
+    let active = true;
+    if (snapshot.status !== 'ready') {
+      queueMicrotask(() => { if (active) setAccountPersonalization(undefined); });
+    } else {
+      const owner = profileOwner!;
+      const remote = controller.loadProfilePersonalization() ?? defaultProfilePersonalization;
+      queueMicrotask(() => { if (active) setAccountPersonalization({ owner, value: remote }); });
+    }
+    return () => { active = false; };
+  }, [controller, snapshot.status, profileOwner]);
 
   useEffect(() => {
     if (!demo) void controller.initialize();
@@ -167,10 +188,10 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         config={config}
         theme={theme}
         preferences={preferences}
-        profilePersonalization={profilePersonalization}
+        profilePersonalization={demoPersonalization}
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
-        onProfilePersonalizationChange={setProfilePersonalization}
+        onProfilePersonalizationChange={setDemoPersonalization}
         onSignOut={() => setDemo(false)}
       />
     );
@@ -180,12 +201,17 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
     return <StartupScreen message={snapshot.message} />;
   }
 
+  if (snapshot.status === 'reauthentication-required') {
+    return <SessionRecoveryScreen recovery={snapshot.recovery} error={snapshot.error} onSignIn={() => controller.reauthenticate()} onForget={forgetSession} />;
+  }
+
   if (snapshot.status === 'error') {
     return (
       <ConnectionError
         message={snapshot.error}
+        issue={snapshot.issue}
         onRetry={() => void controller.retry()}
-        onForget={() => void controller.forgetSession()}
+        onForget={forgetSession}
       />
     );
   }
@@ -193,8 +219,10 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
   if (snapshot.status === 'signed-out' || snapshot.status === 'authenticating') {
     return (
       <LoginWindow
+        key={snapshot.recovery?.userId ?? 'login'}
         config={config}
         snapshot={snapshot}
+        onForget={forgetSession}
         warnings={warnings}
         onLogin={(credentials) => controller.login(credentials)}
         onSso={(credentials) => controller.startSso(credentials)}
@@ -206,14 +234,25 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
   return (
     <MediaProvider resolver={controller.resolveMedia}>
       <Workspace
+        key={snapshot.workspace.user.id}
         workspace={snapshot.workspace}
+        draftStore={draftStore}
+        connectionNotice={snapshot.issue ? <ConnectionBanner issue={snapshot.issue} onRetry={() => controller.retry()} /> : undefined}
         config={config}
         theme={theme}
         preferences={preferences}
         profilePersonalization={profilePersonalization}
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
-        onProfilePersonalizationChange={async (next) => { await controller.updateProfilePersonalization(next); setProfilePersonalization(next); }}
+        onProfilePersonalizationChange={async (next) => {
+          const account = snapshot.workspace.user.id;
+          const generation = profileRequests.generation;
+          await controller.updateProfilePersonalization(next);
+          const current = controller.getSnapshot();
+          if (current.status === 'ready' && current.workspace.user.id === account && generation === profileRequests.generation) {
+            setAccountPersonalization({ owner: account, value: next });
+          }
+        }}
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
@@ -269,7 +308,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onRemoveRoomMember={(roomId, userId, action) => controller.removeRoomMember(roomId, userId, action)}
         onSetRoomMemberPower={(roomId, userId, level) => controller.setRoomMemberPower(roomId, userId, level)}
         onLeaveRoom={(roomId) => controller.leaveRoom(roomId)}
-        onSignOut={() => void controller.logout()}
+        onSignOut={() => { draftStore.clear(); void controller.logout(); }}
       />
     </MediaProvider>
   );

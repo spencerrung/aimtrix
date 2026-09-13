@@ -1,3 +1,4 @@
+import type { VolatileDrafts } from './volatileDrafts';
 import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
 import { useDialogBusy } from '../../components/dialogContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
@@ -384,6 +385,8 @@ function MessageText({ body, emojiCatalog, mentions }: { body: string; emojiCata
 
 interface WorkspaceProps extends MessageDeliveryActions {
   workspace: WorkspaceSnapshot;
+  draftStore?: VolatileDrafts;
+  connectionNotice?: ReactNode;
   config: RuntimeConfig;
   theme: ThemeName;
   preferences: UserPreferences;
@@ -3833,6 +3836,8 @@ function DetailsPanel({
 
 export function Workspace({
   workspace,
+  draftStore,
+  connectionNotice,
   config,
   theme,
   preferences,
@@ -3947,8 +3952,9 @@ export function Workspace({
   });
   const panelResizeStart = useRef<{ panel: 'buddies' | 'details'; x: number; width: number } | undefined>(undefined);
   const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
-  const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>(() => draftStore?.read(workspace.user.id).rooms ?? {});
+  const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>(() => draftStore?.read(workspace.user.id).threads ?? {});
+  useLayoutEffect(() => { draftStore?.write(workspace.user.id, drafts, threadDrafts); }, [draftStore, drafts, threadDrafts, workspace.user.id]);
   const draftRevisions = useRef<Record<string, number>>({});
   const threadDraftRevisions = useRef<Record<string, number>>({});
   const [draftRevision, setDraftRevision] = useState(0);
@@ -4735,7 +4741,7 @@ export function Workspace({
 
   return (
     <div ref={appStage} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}`}>
-      <section className={`aimtrix-window${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
+      <section className={`aimtrix-window${connectionNotice ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
           <div className="app-titlebar__identity">
             <BrandMark compact />
@@ -4762,6 +4768,7 @@ export function Workspace({
           {unreadTotal ? <span className="titlebar-unread">{unreadTotal} unread</span> : null}
         </header>
 
+        {connectionNotice}
         <div
           className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
           style={{
