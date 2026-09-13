@@ -192,7 +192,7 @@ export function SettingsDialog({
 
                 <div className="settings-section-heading settings-section-heading--with-action">
                   <div><h2>Profile and status note</h2><p>Standard Matrix display name and presence—visible in any client to people who share a room with you.</p></div>
-                  <button className="aqua-button profile-page-shortcut" type="button" onClick={onOpenProfilePage}><Paintbrush size={14} /> Decorate profile page</button>
+                  <DialogButton className="aqua-button profile-page-shortcut" type="button" onClick={onOpenProfilePage}><Paintbrush size={14} /> Decorate profile page</DialogButton>
                 </div>
                 {!canEditProfile ? <p className="settings-demo-note">Profile editing is disabled in demo mode.</p> : null}
                 <label className="settings-field">

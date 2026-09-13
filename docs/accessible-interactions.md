@@ -28,7 +28,7 @@ The disposable Synapse/Dex harness exercises the changed room/backdrop/moderatio
 
 September 13, 2026 local validation on the implementation working tree:
 
-- `npm run check`: lint, TypeScript, 226 tests in 31 files, production build and bundle budgets passed. The expected crypto chunk-size warning remains.
+- `npm run check`: lint, TypeScript, 227 tests in 32 files, production build and bundle budgets passed. The expected crypto chunk-size warning remains.
 - `npm run test:e2e`: 36 passed, 6 intentional project-specific skips. Desktop/mobile screenshots were inspected; the new modal checks passed Axe in all themes. The landscape test now waits for acknowledged timeline detachment before measuring resize preservation.
 - `npm run test:matrix -- --repeat=2`: two fresh runs passed 13/13 checks each; cleanup completed. The new check proves the acknowledged profile preset and rejects another user's account-data read.
 - `npm run test:matrix:privacy`: 3/3 privacy/allowlist checks passed. Diagnostics remain fixed labels and numeric metrics.
