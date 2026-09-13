@@ -130,9 +130,9 @@ export function parseProfilePersonalization(value: unknown): ProfilePersonalizat
   };
 }
 
-export function loadProfilePersonalization(storage: Storage = localStorage): ProfilePersonalization {
+export function loadProfilePersonalization(storage: Storage = localStorage, key = PROFILE_KEY): ProfilePersonalization {
   try {
-    const serialized = storage.getItem(PROFILE_KEY);
+    const serialized = storage.getItem(key);
     return serialized ? parseProfilePersonalization(JSON.parse(serialized)) : structuredClone(defaultProfilePersonalization);
   } catch {
     return structuredClone(defaultProfilePersonalization);
@@ -142,6 +142,7 @@ export function loadProfilePersonalization(storage: Storage = localStorage): Pro
 export function saveProfilePersonalization(
   personalization: ProfilePersonalization,
   storage: Storage = localStorage,
+  key = PROFILE_KEY,
 ): void {
-  storage.setItem(PROFILE_KEY, JSON.stringify(parseProfilePersonalization(personalization)));
+  storage.setItem(key, JSON.stringify(parseProfilePersonalization(personalization)));
 }

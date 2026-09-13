@@ -364,6 +364,66 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(!new URL(sso.url()).searchParams.has('loginToken'), 'sso-token-cleanup');
       invariant((await api('/_matrix/client/v3/account/whoami', { token: saved.accessToken })).user_id === saved.userId, 'sso-valid-session');
     });
+    const assertExpired = async (page) => {
+      await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });
+      invariant(await page.locator('.timeline-message, .buddy-row').count() === 0, 'expired-room-dom-cleared');
+      invariant(await page.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).count() === 0, 'expired-composer-removed');
+      // Return only a boolean, never serialized credential/recovery metadata.
+      await until(() => page.evaluate(() => {
+        const saved = JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1'));
+        return !saved?.accessToken;
+      }), 'expired-token-removed');
+    };
+    const openRecovery = async (page, previous) => {
+      await page.getByRole('button', { name: 'Sign in again', exact: true }).click();
+      const identity = page.getByRole('textbox', { name: 'Matrix ID', exact: true });
+      await identity.waitFor();
+      invariant(await identity.inputValue() === previous.userId && await identity.evaluate((input) => input.readOnly), 'recovery-account-locked');
+      const homeserver = page.getByRole('textbox', { name: 'Homeserver', exact: true });
+      if (await homeserver.count()) invariant(await homeserver.evaluate((input) => input.readOnly), 'recovery-homeserver-locked');
+    };
+    await check('revoked-active-session-and-encrypted-reauthentication', async () => {
+      // Standard logout invalidates only this disposable device. Its browser
+      // remains open, so the real SDK sync loop must detect M_UNKNOWN_TOKEN.
+      await api('/_matrix/client/v3/logout', { token: secondSession.accessToken, method: 'POST', body: {} });
+      await assertExpired(aliceSecond);
+      // A reload retains the token-free recovery choice, not the rejected token.
+      await aliceSecond.reload();
+      await assertExpired(aliceSecond);
+      await openRecovery(aliceSecond, secondSession);
+      await aliceSecond.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
+      await aliceSecond.getByRole('button', { name: 'Sign On', exact: true }).click();
+      await aliceSecond.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
+      const restored = await session(aliceSecond);
+      invariant(restored.userId === secondSession.userId && restored.deviceId !== secondSession.deviceId && restored.accessToken !== secondSession.accessToken, 'reauthenticated-new-device-same-account');
+      for (const page of [aliceSecond, bob]) {
+        await openRoom(page, roomName);
+        const latest = page.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.count()) await latest.click();
+      }
+      const marker = `Synthetic recovered session ${randomBytes(12).toString('hex')}`;
+      const sent = aliceSecond.waitForRequest((request) => request.method() === 'PUT' && new URL(request.url()).pathname.includes('/send/'));
+      await aliceSecond.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
+      await aliceSecond.getByRole('button', { name: 'Send message', exact: true }).click();
+      const request = await sent;
+      const content = request.postDataJSON();
+      invariant(new URL(request.url()).pathname.includes('/send/m.room.encrypted/') && content.algorithm === 'm.megolm.v1.aes-sha2' && !JSON.stringify(content).includes(marker), 'reauthenticated-encrypted-wire');
+      await bob.locator('.timeline-message').filter({ hasText: marker }).waitFor({ timeout: 45000 });
+      await bob.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(`Reply ${marker}`);
+      await bob.getByRole('button', { name: 'Send message', exact: true }).click();
+      await aliceSecond.locator('.timeline-message').filter({ hasText: `Reply ${marker}` }).waitFor({ timeout: 45000 });
+      // Peers stay online: this proves new-device encryption and reception,
+      // not isolated restoration of old keys or backup/verification coverage.
+    });
+    await check('revoked-stored-session-recovery', async () => {
+      // Unload the SDK before revocation, preserving the browser's stored
+      // credential. The next initial restore must reject that real old token.
+      await bob.goto('about:blank');
+      await api('/_matrix/client/v3/logout', { token: bobSession.accessToken, method: 'POST', body: {} });
+      await bob.goto(stack.origins.app);
+      await assertExpired(bob);
+      await openRecovery(bob, bobSession);
+    });
   } finally {
     for (const context of contexts) await context.close();
   }

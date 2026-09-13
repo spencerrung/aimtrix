@@ -1,0 +1,13 @@
+.login-window.session-recovery { width: min(480px, 100%); }
+.session-recovery > p { margin-inline: 18px; }
+.session-recovery__note { color: var(--text-soft); font-size: 0.8rem; }
+.session-connection-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--border-strong); background: var(--surface-raised); color: var(--text); }
+.session-connection-banner p { margin: 0; font-size: 0.8rem; }
+.session-connection-banner button { flex-shrink: 0; min-height: 40px; color: var(--text); }
+.aimtrix-window.has-connection-notice { grid-template-rows: 48px auto minmax(0, 1fr); }
+.session-recovery .aqua-button { min-height: 44px; }
+@media (max-width: 760px) {
+  .aimtrix-window.has-connection-notice { grid-template-rows: calc(48px + env(safe-area-inset-top, 0px)) auto minmax(0, 1fr); }
+  .session-connection-banner { gap: 8px; padding: 8px; }
+  .session-connection-banner p { font-size: 0.73rem; }
+}

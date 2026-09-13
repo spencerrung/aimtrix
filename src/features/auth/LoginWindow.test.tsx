@@ -44,3 +44,16 @@ describe('LoginWindow', () => {
     expect(screen.getByRole('button', { name: /explore the demo buddy list/i })).toBeEnabled();
   });
 });
+
+it('prefills and locks a retained account while allowing password and SSO recovery', () => {
+  const onSso = vi.fn();
+  render(<LoginWindow config={defaultRuntimeConfig} snapshot={{ status: 'signed-out', recovery: { userId: '@synthetic:example.test', homeserver: 'https://example.test', softLogout: true } }} warnings={[]} onLogin={vi.fn()} onSso={onSso} onDemo={vi.fn()} onForget={vi.fn()} />);
+  expect(screen.getByLabelText('Matrix ID')).toHaveValue('@synthetic:example.test');
+  expect(screen.getByLabelText('Matrix ID')).toHaveAttribute('readonly');
+  expect(screen.getByLabelText('Homeserver')).toHaveValue('https://example.test');
+  expect(screen.getByLabelText('Homeserver')).toHaveAttribute('readonly');
+  expect(screen.getByLabelText('Password')).toHaveValue('');
+  expect(screen.queryByText(/Explore the demo/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: /Sign in with homeserver SSO/ }));
+  expect(onSso).toHaveBeenCalledWith({ userId: '@synthetic:example.test', homeserver: 'https://example.test' });
+});

@@ -1,13 +1,16 @@
-import { RefreshCw, Trash2, WifiOff } from 'lucide-react';
+import { RefreshCw, WifiOff } from 'lucide-react';
+import { ForgetSessionButton } from './SessionRecovery';
+import type { ConnectionIssue } from '../../matrix/MatrixController';
 import { BrandMark } from '../../components/BrandMark';
 
 interface ConnectionErrorProps {
   message: string;
   onRetry: () => void;
-  onForget: () => void;
+  onForget: () => Promise<void>;
+  issue?: ConnectionIssue;
 }
 
-export function ConnectionError({ message, onRetry, onForget }: ConnectionErrorProps) {
+export function ConnectionError({ message, onRetry, onForget, issue }: ConnectionErrorProps) {
   return (
     <main className="login-stage">
       <section className="login-window connection-error" aria-labelledby="connection-title">
@@ -16,15 +19,13 @@ export function ConnectionError({ message, onRetry, onForget }: ConnectionErrorP
         </header>
         <BrandMark compact />
         <WifiOff size={34} aria-hidden="true" />
-        <h1 id="connection-title">Couldn’t reach your buddy list</h1>
+        <h1 id="connection-title">{issue === 'storage' ? 'Encrypted storage needs attention' : issue === 'consent' ? 'Your homeserver needs your consent' : 'Couldn’t reach your buddy list'}</h1>
         <p>{message}</p>
         <div className="connection-error__actions">
           <button className="aqua-button aqua-button--primary" type="button" onClick={onRetry}>
             <RefreshCw size={16} /> Try again
           </button>
-          <button className="aqua-button" type="button" onClick={onForget}>
-            <Trash2 size={16} /> Use another account
-          </button>
+          <ForgetSessionButton onForget={onForget} />
         </div>
       </section>
     </main>

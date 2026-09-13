@@ -76,7 +76,8 @@ function createBrowserPush(): PushService {
     provider: 'web',
     async getSubscription() {
       if (!supported) return undefined;
-      const registration = await navigator.serviceWorker.ready;
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) return undefined;
       const subscription = await registration.pushManager.getSubscription();
       return subscription ? serializePushSubscription(subscription) : undefined;
     },
@@ -95,7 +96,8 @@ function createBrowserPush(): PushService {
     },
     async unsubscribe() {
       if (!supported) return false;
-      const registration = await navigator.serviceWorker.ready;
+      const registration = await navigator.serviceWorker.getRegistration();
+      if (!registration) return false;
       const subscription = await registration.pushManager.getSubscription();
       return subscription ? subscription.unsubscribe() : false;
     },

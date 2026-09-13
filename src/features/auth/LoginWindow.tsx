@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { KeyRound, LockKeyhole, MessageCircleMore, Server, UserRound } from 'lucide-react';
 import type { RuntimeConfig } from '../../config/runtimeConfig';
 import type { LoginCredentials, MatrixControllerSnapshot } from '../../matrix/MatrixController';
+import { ForgetSessionButton } from './SessionRecovery';
 import { BrandMark } from '../../components/BrandMark';
 
 interface LoginWindowProps {
@@ -11,12 +12,14 @@ interface LoginWindowProps {
   onLogin: (credentials: LoginCredentials) => Promise<void>;
   onSso: (credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>) => Promise<void>;
   onDemo: () => void;
+  onForget?: () => Promise<void>;
 }
 
-export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo }: LoginWindowProps) {
-  const [userId, setUserId] = useState('');
+export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo, onForget }: LoginWindowProps) {
+  const recovery = 'recovery' in snapshot ? snapshot.recovery : undefined;
+  const [userId, setUserId] = useState(recovery?.userId ?? '');
   const [password, setPassword] = useState('');
-  const [homeserver, setHomeserver] = useState(config.defaultHomeserver.serverName);
+  const [homeserver, setHomeserver] = useState(recovery?.homeserver ?? config.defaultHomeserver.serverName);
   const busy = snapshot.status === 'authenticating' || snapshot.status === 'connecting';
   const error = 'error' in snapshot ? snapshot.error : undefined;
 
@@ -47,6 +50,8 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
         ) : null}
         {error ? <div className="form-error" role="alert">{error}</div> : null}
 
+        {recovery ? <p className="session-recovery__note">Sign in to the same account to reconnect. Your encryption keys are retained on this device.</p> : null}
+
         <form className="login-form" onSubmit={submit}>
           <label>
             <span>Matrix ID</span>
@@ -56,6 +61,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
                 autoComplete="username"
                 inputMode="email"
                 placeholder="@you:example.com"
+                readOnly={Boolean(recovery)}
                 value={userId}
                 onChange={(event) => setUserId(event.target.value)}
                 disabled={busy}
@@ -85,6 +91,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
                 <input
                   autoCapitalize="none"
                   spellCheck={false}
+                  readOnly={Boolean(recovery)}
                   value={homeserver}
                   onChange={(event) => setHomeserver(event.target.value)}
                   disabled={busy}
@@ -99,6 +106,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
             {busy && 'message' in snapshot ? snapshot.message : 'Sign On'}
           </button>
           <div className="sso-divider"><span>or</span></div>
+          {recovery ? <p className="session-recovery__note">Continuing through SSO leaves this page and clears unsent drafts in this tab.</p> : null}
           <button
             className="aqua-button sso-button"
             type="button"
@@ -109,7 +117,9 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
           </button>
         </form>
 
-        {config.features.demoMode ? (
+        {recovery && onForget ? <div className="demo-entry"><ForgetSessionButton onForget={onForget} disabled={busy} /></div> : null}
+
+        {config.features.demoMode && !recovery ? (
           <div className="demo-entry">
             <span>Just looking around?</span>
             <button className="text-button" type="button" onClick={onDemo} disabled={busy}>
