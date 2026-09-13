@@ -4,6 +4,8 @@ Checked items record the implemented scope described on that line, not universal
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the ordered GitHub issue queue for the next implementation program. It supplements this release/compatibility inventory; its baseline audit reconciles implementation and validation evidence without removing existing obligations.
 
+The [visual reference handoff](docs/design/interaction-rules.md) records the step 02 design decisions and browser evidence. These are implementation inputs for the linked roadmap slices; the reference does not mark their production behavior complete.
+
 ## 0.1 release gate
 
 ### Repository, runtime, deployment, and supply chain

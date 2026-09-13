@@ -12,7 +12,7 @@ Aimtrix is a working pre-1.0 client. It includes password and SSO login, encrypt
 
 The [capability baseline](docs/capability-baseline.md) records what is implemented and what has actually been verified. Remaining compatibility and scale work is tracked in [TODO.md](TODO.md), particularly group MatrixRTC/LiveKit calling, full server-side message search, richer push-rule editing, and broader live-homeserver interoperability coverage.
 
-The [polish and modern-comforts roadmap](docs/polish-plan.md) organizes the next implementation program into ordered GitHub issues with dependencies and acceptance criteria, while preserving Aimtrix's Aqua/Aero character.
+The [polish and modern-comforts roadmap](docs/polish-plan.md) organizes the next implementation program into ordered GitHub issues with dependencies and acceptance criteria, while preserving Aimtrix's Aqua/Aero character. The [visual references and interaction rules](docs/design/interaction-rules.md) make the next layout and interaction decisions reviewable through a standalone synthetic prototype.
 
 Use the login-screen demo link, or open `/?demo=1`, to explore the interface without a Matrix account.
 
