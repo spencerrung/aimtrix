@@ -1,4 +1,5 @@
 import type {
+  EventType,
   MatrixClient,
   MatrixEvent,
   NotificationCountType,
@@ -6,6 +7,8 @@ import type {
   SyncState,
 } from 'matrix-js-sdk';
 import type { RoomMessageEventContent } from 'matrix-js-sdk/lib/@types/events.js';
+import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
+import { MARKED_UNREAD_EVENT, UNREAD_RETURN_POINT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
 import type { ISyncStateData } from 'matrix-js-sdk/lib/sync.js';
 import { connectionIssue, connectionIssueMessage, isSessionRejected, type ConnectionIssue, type SessionRecovery } from './sessionRecovery';
@@ -31,6 +34,7 @@ import {
 } from '../settings/profilePersonalization';
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { resolveHomeserver } from './discovery';
+import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
 import { RoomHistory } from './RoomHistory';
 import {
@@ -247,7 +251,12 @@ export class MatrixController {
   private readonly spaceHierarchies = new Map<string, SpaceHierarchyRoomData[]>();
   private readonly spaceHierarchyRequests = new Map<string, Promise<void>>();
   private readonly lastReadReceiptByRoom = new Map<string, string>();
+  private readonly readOperations = new Map<string, Promise<void>>();
+  private readonly unreadIntent = new Map<string, number>();
+  private readonly unreadOperations = new Map<string, Promise<void>>();
+  private readonly unreadOverrides = new Map<string, ReturnType<typeof parseMarkedUnread>>();
   private rootSpaceOrderOverride?: string[];
+  private publicReadReceipts = true;
   private notificationPreferences = {
     desktopNotifications: false,
     notificationSounds: true,
@@ -271,7 +280,9 @@ export class MatrixController {
     desktopNotifications: boolean;
     notificationSounds: boolean;
     soundVolume: number;
+    sendReadReceipts?: boolean;
   }): void {
+    if (preferences.sendReadReceipts !== undefined) this.publicReadReceipts = preferences.sendReadReceipts;
     this.notificationPreferences = preferences;
   }
 
@@ -2044,64 +2055,136 @@ export class MatrixController {
     await client.sendTyping(roomId, typing, typing ? 30_000 : 0);
   }
 
-  public async markRoomRead(roomId: string): Promise<void> {
+  private latestMainEvent(room: Room): MatrixEvent | undefined {
+    return [...room.getLiveTimeline().getEvents()].reverse().find((event) =>
+      validUnreadEventId(event.getId()) && !event.status &&
+      (!this.sdk?.inMainTimelineForReceipt || this.sdk.inMainTimelineForReceipt(event)));
+  }
+
+  private readPositionCovers(room: Room, currentId: string | undefined, eventId: string): boolean {
+    if (currentId === eventId) return true;
+    const events = room.getLiveTimeline().getEvents();
+    const currentIndex = events.findIndex((event) => event.getId() === currentId);
+    const targetIndex = events.findIndex((event) => event.getId() === eventId);
+    return targetIndex >= 0 && currentIndex >= targetIndex;
+  }
+
+  private async supportsPrivateReceipts(client: MatrixClient): Promise<boolean> {
+    return await client.isVersionSupported('v1.4') ||
+      await client.doesServerSupportUnstableFeature('org.matrix.msc2285.stable');
+  }
+
+  public async markRoomRead(
+    roomId: string,
+    options: { eventId?: string; publicReceipt?: boolean; explicit?: boolean } = {},
+  ): Promise<void> {
     const client = this.client;
     const room = client?.getRoom(roomId);
-    const timelineEvents = room?.getLiveTimeline().getEvents() ?? [];
-    const inMainTimeline = this.sdk?.inMainTimelineForReceipt;
-    let lastEvent: MatrixEvent | undefined;
-    if (inMainTimeline) {
-      for (let index = timelineEvents.length - 1; index >= 0; index -= 1) {
-        const candidate = timelineEvents[index];
-        if (inMainTimeline(candidate)) {
-          lastEvent = candidate;
-          break;
-        }
+    if (!client || !room) return;
+    const marker = room.getAccountData?.(MARKED_UNREAD_EVENT) ?? room.getAccountData?.('com.famedly.marked_unread');
+    if (!options.explicit && (this.unreadOverrides.get(roomId)?.markedUnread ?? parseMarkedUnread(marker?.getContent()).markedUnread)) return;
+    const latest = this.latestMainEvent(room);
+    // The UI reports the event it actually displayed. A new arrival must remain unread.
+    const event = options.eventId
+      ? room.getLiveTimeline().getEvents().find((candidate) => candidate.getId() === options.eventId)
+      : latest;
+    const eventId = event?.getId();
+    if (!event || !validUnreadEventId(eventId) || event.status ||
+        (this.sdk?.inMainTimelineForReceipt && !this.sdk.inMainTimelineForReceipt(event))) {
+      if (options.explicit) {
+        const intent = (this.unreadIntent.get(roomId) ?? 0) + 1;
+        this.unreadIntent.set(roomId, intent);
+        await this.setMarkedUnread(client, roomId, false, undefined, intent);
       }
-    } else {
-      lastEvent = timelineEvents.at(-1);
+      return;
     }
-    const lastEventId = lastEvent?.getId() ?? null;
-    if (!client || !room || !lastEvent || !lastEventId) return;
-    const previousTotal = room.getRoomUnreadNotificationCount(
-      'total' as NotificationCountType,
-    );
-    const previousHighlight = room.getRoomUnreadNotificationCount(
-      'highlight' as NotificationCountType,
-    );
-    const currentReceiptId = room.getReadReceiptForUserId(client.getSafeUserId(), true)?.eventId;
-    const alreadyRead =
-      currentReceiptId === lastEventId || this.lastReadReceiptByRoom.get(roomId) === lastEventId;
-    if (previousTotal > 0 || previousHighlight > 0) {
-      room.setUnreadNotificationCount('total' as NotificationCountType, 0);
-      room.setUnreadNotificationCount('highlight' as NotificationCountType, 0);
+    const key = JSON.stringify([roomId, 'main']);
+    const intent = (this.unreadIntent.get(roomId) ?? 0) + (options.explicit ? 1 : 0);
+    if (options.explicit) this.unreadIntent.set(roomId, intent);
+    let pending = this.readOperations.get(key);
+    while (pending) {
+      await pending.catch(() => undefined);
+      if (this.client !== client) return;
+      pending = this.readOperations.get(key);
+    }
+    const receiptType = options.publicReceipt !== false && this.publicReadReceipts ? ReceiptType.Read : ReceiptType.ReadPrivate;
+    const scope = JSON.stringify([roomId, 'main', receiptType]);
+    const revision = this.lifecycleRevision;
+    const active = () => this.client === client && this.lifecycleRevision === revision;
+    const operation = (async () => {
+      const supported = receiptType === ReceiptType.Read || await this.supportsPrivateReceipts(client);
+      if (!active()) return;
+      const confirmed = room.getReadReceiptForUserId(client.getSafeUserId(), true, receiptType)?.eventId;
+      const alreadyRead = this.readPositionCovers(room, confirmed, eventId) ||
+        this.readPositionCovers(room, this.lastReadReceiptByRoom.get(scope), eventId);
+      if (!alreadyRead && supported) await sendConfirmedReceipt(client, event, receiptType, 'main');
+      if (!active()) return;
+      const fullyRead = room.getAccountData?.('m.fully_read')?.getContent<{ event_id?: string }>().event_id;
+      if (!this.readPositionCovers(room, fullyRead, eventId) &&
+          !this.readPositionCovers(room, this.lastReadReceiptByRoom.get(JSON.stringify([roomId, 'fully-read'])), eventId)) {
+        if (!active()) return;
+        // This endpoint maintains the private, room-level reading position. Never
+        // pass optional receipts: those would be unthreaded and clear unseen threads.
+        await client.setRoomReadMarkers(roomId, eventId);
+        if (!active()) return;
+        this.lastReadReceiptByRoom.set(JSON.stringify([roomId, 'fully-read']), eventId);
+      }
+      if (!alreadyRead) this.lastReadReceiptByRoom.set(scope, eventId);
+      if (options.explicit && this.unreadIntent.get(roomId) === intent) await this.setMarkedUnread(client, roomId, false, undefined, intent);
+      if (!active()) return;
+      // Do not roll back or overwrite newer sync counts on failed or stale sends.
+      if (this.latestMainEvent(room)?.getId() === eventId) {
+        room.setUnreadNotificationCount('total' as NotificationCountType, 0);
+        room.setUnreadNotificationCount('highlight' as NotificationCountType, 0);
+      }
       this.bumpRoomVersion(roomId);
       this.scheduleWorkspacePublish();
+    })();
+    this.readOperations.set(key, operation);
+    try { await operation; } finally {
+      if (this.readOperations.get(key) === operation) this.readOperations.delete(key);
     }
-    if (alreadyRead) return;
+  }
 
-    this.lastReadReceiptByRoom.set(roomId, lastEventId);
-    try {
-      await client.sendReadReceipt(lastEvent);
-    } catch (error) {
-      if (this.lastReadReceiptByRoom.get(roomId) === lastEventId) {
-        this.lastReadReceiptByRoom.delete(roomId);
-        const currentLastEventId = room.getLiveTimeline().getEvents().at(-1)?.getId();
-        if (currentLastEventId === lastEventId) {
-          room.setUnreadNotificationCount(
-            'total' as NotificationCountType,
-            previousTotal,
-          );
-          room.setUnreadNotificationCount(
-            'highlight' as NotificationCountType,
-            previousHighlight,
-          );
-          this.bumpRoomVersion(roomId);
-          this.scheduleWorkspacePublish();
-        }
-      }
-      throw error;
+  private async setMarkedUnread(client: MatrixClient, roomId: string, unread: boolean, eventId?: string, intent?: number): Promise<void> {
+    if (intent !== undefined && this.unreadIntent.get(roomId) !== intent) return;
+    const pending = this.unreadOperations.get(roomId);
+    if (pending) {
+      await pending.catch(() => undefined);
+      if (this.client !== client) return;
+      return this.setMarkedUnread(client, roomId, unread, eventId, intent);
     }
+    const previous = this.unreadOverrides.get(roomId);
+    const expected = { markedUnread: unread, unreadEventId: unread ? eventId : undefined };
+    this.unreadOverrides.set(roomId, expected);
+    const operation = (async () => {
+      try {
+        const content = { unread, ...(unread && eventId ? { [UNREAD_RETURN_POINT]: { event_id: eventId } } : {}) };
+        await client.setRoomAccountData(roomId, MARKED_UNREAD_EVENT as EventType.MarkedUnread, content);
+        if (this.client !== client) return;
+        this.bumpRoomVersion(roomId);
+        this.scheduleWorkspacePublish();
+      } catch (error) {
+        if (this.client === client && this.unreadOverrides.get(roomId) === expected) {
+          if (previous === undefined) this.unreadOverrides.delete(roomId);
+          else this.unreadOverrides.set(roomId, previous);
+        }
+        throw error;
+      }
+    })();
+    this.unreadOperations.set(roomId, operation);
+    try { await operation; } finally {
+      if (this.unreadOperations.get(roomId) === operation) this.unreadOperations.delete(roomId);
+    }
+  }
+
+  public async markRoomUnread(roomId: string, eventId?: string): Promise<void> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room) throw new Error('This conversation is not available.');
+    if (eventId !== undefined && !validUnreadEventId(eventId)) throw new Error('The return point is not a valid message.');
+    this.unreadIntent.set(roomId, (this.unreadIntent.get(roomId) ?? 0) + 1);
+    await this.setMarkedUnread(client, roomId, true, eventId);
   }
 
   public async sendReply(
@@ -2172,12 +2255,52 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
-  public async markThreadRead(roomId: string, rootId: string): Promise<void> {
+  public async markThreadRead(
+    roomId: string,
+    rootId: string,
+    options: { eventId?: string; publicReceipt?: boolean } = {},
+  ): Promise<void> {
     const client = this.client;
-    const thread = client?.getRoom(roomId)?.getThread(rootId);
-    const latest = thread?.events.at(-1);
-    if (!client || !latest) return;
-    await client.sendReadReceipt(latest);
+    const room = client?.getRoom(roomId);
+    const thread = room?.getThread(rootId);
+    const inThread = (event: MatrixEvent) => event.threadRootId === rootId &&
+      (!this.sdk?.inMainTimelineForReceipt || !this.sdk.inMainTimelineForReceipt(event));
+    const latest = thread ? [...thread.events].reverse().find((event) => inThread(event) && !event.status && validUnreadEventId(event.getId())) : undefined;
+    const event = options.eventId ? thread?.events.find((candidate) => candidate.getId() === options.eventId) : latest;
+    const eventId = event?.getId();
+    if (!client || !room || !event || !validUnreadEventId(eventId) || event.status || eventId === rootId ||
+        !inThread(event)) return;
+    const key = JSON.stringify([roomId, rootId]);
+    let pending = this.readOperations.get(key);
+    while (pending) {
+      await pending.catch(() => undefined);
+      if (this.client !== client) return;
+      pending = this.readOperations.get(key);
+    }
+    const receiptType = options.publicReceipt !== false && this.publicReadReceipts ? ReceiptType.Read : ReceiptType.ReadPrivate;
+    const scope = JSON.stringify([roomId, rootId, receiptType]);
+    if (this.lastReadReceiptByRoom.get(scope) === eventId) return;
+    const revision = this.lifecycleRevision;
+    const active = () => this.client === client && this.lifecycleRevision === revision;
+    const operation = (async () => {
+      if (receiptType === ReceiptType.ReadPrivate && !await this.supportsPrivateReceipts(client)) {
+        throw new Error('This homeserver does not support private thread read tracking. Public receipts remain off.');
+      }
+      if (!active()) return;
+      await sendConfirmedReceipt(client, event, receiptType, rootId);
+      if (!active()) return;
+      this.lastReadReceiptByRoom.set(scope, eventId);
+      if (thread && [...thread.events].reverse().find((candidate) => inThread(candidate) && !candidate.status)?.getId() === eventId) {
+        room.setThreadUnreadNotificationCount(rootId, 'total' as NotificationCountType, 0);
+        room.setThreadUnreadNotificationCount(rootId, 'highlight' as NotificationCountType, 0);
+      }
+      this.bumpRoomVersion(roomId);
+      this.scheduleWorkspacePublish();
+    })();
+    this.readOperations.set(key, operation);
+    try { await operation; } finally {
+      if (this.readOperations.get(key) === operation) this.readOperations.delete(key);
+    }
   }
 
   public async togglePinnedMessage(roomId: string, eventId: string, pinned: boolean): Promise<void> {
@@ -2518,6 +2641,10 @@ export class MatrixController {
     this.spaceHierarchies.clear();
     this.spaceHierarchyRequests.clear();
     this.lastReadReceiptByRoom.clear();
+    this.readOperations.clear();
+    this.unreadOverrides.clear();
+    this.unreadOperations.clear();
+    this.unreadIntent.clear();
     this.pendingDeviceAuth.clear();
     this.rootSpaceOrderMigrationStarted = false;
     this.rootSpaceOrderOverride = undefined;
@@ -2683,9 +2810,8 @@ export class MatrixController {
   private notifyForMessage(event: MatrixEvent, room: Room): void {
     if (event.getType() !== 'm.room.message') return;
     if (!this.client?.getPushActionsForEvent(event)?.notify) return;
-    const muted = this.client
-      ?.getRoomPushRule('global', room.roomId)
-      ?.actions.some((action) => action === 'dont_notify');
+    const pushRule = this.client?.getRoomPushRule('global', room.roomId);
+    const muted = pushRule?.enabled !== false && pushRule?.actions.some((action) => action === 'dont_notify');
     if (muted) return;
     if (this.notificationPreferences.notificationSounds && this.connection === 'online') {
       this.playMessageTone();
@@ -2862,7 +2988,18 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   };
 
-  private readonly handleRoomAccountData = (event: MatrixEvent): void => {
+  private readonly handleRoomAccountData = (event: MatrixEvent, room?: Room): void => {
+    const roomId = room?.roomId ?? event.getRoomId();
+    if (roomId && (event.getType() === MARKED_UNREAD_EVENT || event.getType() === 'com.famedly.marked_unread')) {
+      const actual = parseMarkedUnread(event.getContent());
+      const expected = this.unreadOverrides.get(roomId);
+      const acknowledged = expected?.markedUnread === actual.markedUnread && expected?.unreadEventId === actual.unreadEventId;
+      if (!acknowledged) this.unreadIntent.set(roomId, (this.unreadIntent.get(roomId) ?? 0) + 1);
+      // Sync is authoritative even if another device replaced our write before
+      // its echo arrived. Never retain an optimistic override indefinitely.
+      this.unreadOverrides.delete(roomId);
+    }
+    this.bumpRoomVersion(roomId);
     if (event.getType() === SPACE_ORDER_EVENT && this.rootSpaceOrderOverride) {
       const expected = createRootSpaceOrderContent(this.rootSpaceOrderOverride);
       const complete = this.rootSpaceOrderOverride.every((spaceId) => {
@@ -2964,6 +3101,7 @@ export class MatrixController {
           [...this.spaceHierarchies.values()].flat(),
           this.readRootSpaceOrder(),
           this.snapshotCache,
+          this.sdk?.inMainTimelineForReceipt,
         );
         this.setSnapshot({
           status: 'ready',

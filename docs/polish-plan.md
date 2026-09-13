@@ -117,6 +117,8 @@ Advanced administration includes aliases, history visibility, join rules/knockin
 
 Public profiles, scheduling, and integrations begin with explicit decisions rather than visible placeholders. Scheduling must define delivery when the application is closed. OIDC compatibility and independently useful expansion can proceed earlier when capacity and dependencies permit.
 
+Step 09 implementation and protocol semantics are documented in [read state and reminders](unread-state.md). Its validation boundaries remain separate from old-thread retrieval and physical-device acceptance.
+
 ## Ordered issue index
 
 Priority uses the existing GitHub labels: **P0** foundational/blocking, **P1** important daily-client or compatibility work, **P2** additive expansion. The tracker checklist is the editable execution queue.

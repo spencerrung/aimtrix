@@ -424,7 +424,7 @@ export function MatrixSettingsPanel({
             {actions?.previewMessageSound ? (
               <button className="text-button sound-preview-button" type="button" onClick={() => actions.previewMessageSound?.()}><Play size={13} /> Preview message sound</button>
             ) : null}
-            <label className="settings-toggle-row"><span><strong>Send read receipts</strong><small>Let rooms know when you have read messages.</small></span><input type="checkbox" checked={preferences.sendReadReceipts} onChange={(event) => updatePreferences({ sendReadReceipts: event.target.checked })} /></label>
+            <label className="settings-toggle-row"><span><strong>Send read receipts</strong><small>Let rooms know when you have read messages. When off, read tracking stays private. Older servers can save your conversation position but may not support private thread reads.</small></span><input type="checkbox" checked={preferences.sendReadReceipts} onChange={(event) => updatePreferences({ sendReadReceipts: event.target.checked })} /></label>
             <label className="settings-toggle-row"><span><strong>Send typing notifications</strong><small>Show other people while you are composing.</small></span><input type="checkbox" checked={preferences.sendTypingNotifications} onChange={(event) => updatePreferences({ sendTypingNotifications: event.target.checked })} /></label>
           </section>
 

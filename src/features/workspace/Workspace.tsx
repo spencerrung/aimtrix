@@ -440,8 +440,9 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string, codeLanguage?: string) => Promise<void>;
   onCancelUpload?: () => void;
   onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
-  onMarkRoomRead?: (roomId: string) => Promise<void>;
-  onThreadOpened?: (roomId: string, rootId: string) => Promise<void>;
+  onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
+  onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
+  onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
   onJoinRoom?: (roomIdOrAlias: string) => Promise<void>;
   onSearchPublicRooms?: (query: string) => Promise<PublicRoomChoice[]>;
   onCreateDirectRoom?: (userId: string) => Promise<string>;
@@ -780,6 +781,10 @@ function roomRowPropsEqual(
     left.lastMessage === right.lastMessage &&
     left.encrypted === right.encrypted &&
     left.unreadCount === right.unreadCount &&
+    left.badgeCount === right.badgeCount &&
+    left.markedUnread === right.markedUnread &&
+    left.muted === right.muted &&
+    left.highlightCount === right.highlightCount &&
     left.highlighted === right.highlighted &&
     left.membership === right.membership
   );
@@ -805,6 +810,7 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
   arrangement,
 }: BuddyRoomRowProps) {
   const style = { '--space-depth': depth } as CSSProperties;
+  const reminderOnly = room.markedUnread && !(room.muted ? room.highlightCount : room.unreadCount);
   if (room.membership === 'invite') {
     return (
       <div className="buddy-row buddy-row--invite buddy-row--nested" style={style}>
@@ -860,8 +866,8 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
       </span>
       <span className="buddy-row__meta">
         {room.encrypted ? <Lock size={10} aria-label="Encrypted" /> : null}
-        {room.unreadCount > 0 ? (
-          <b className={room.highlighted ? 'is-highlighted' : ''}>{room.unreadCount}</b>
+        {(room.badgeCount ?? room.unreadCount) > 0 ? (
+          <b aria-label={reminderOnly ? 'Marked unread' : `${room.badgeCount ?? room.unreadCount} unread notifications`} className={room.highlighted ? 'is-highlighted' : ''}>{reminderOnly ? '•' : room.badgeCount ?? room.unreadCount}</b>
         ) : null}
       </span>
     </button>
@@ -1719,6 +1725,7 @@ const TimelineMessage = memo(function TimelineMessage({
           >
             <MessageCircle size={14} />
             <strong>{message.thread.replyCount} {message.thread.replyCount === 1 ? 'reply' : 'replies'}</strong>
+            {message.thread.unreadCount ? <b aria-label={`${message.thread.unreadCount} unread thread notifications`}>{message.thread.unreadCount} unread</b> : null}
             {message.thread.latestReply ? <span>Latest from {message.thread.latestReply.senderName}</span> : null}
           </button>
         ) : null}
@@ -1861,6 +1868,9 @@ function Conversation({
   onReturnToLive,
   onDetachedChange,
   onReadLatest,
+  onReadThread,
+  onMarkUnread,
+  onMarkRead,
   gifEndpoint,
   stickerPacks,
   defaultStickerPack,
@@ -1932,7 +1942,10 @@ function Conversation({
   onOpenContext?: (eventId: string) => Promise<void>;
   onReturnToLive?: () => Promise<void>;
   onDetachedChange?: (detached: boolean) => void;
-  onReadLatest?: () => Promise<void>;
+  onReadLatest?: (eventId: string) => Promise<void>;
+  onReadThread?: (eventId: string) => Promise<void>;
+  onMarkUnread?: (eventId?: string) => Promise<void>;
+  onMarkRead?: (eventId?: string) => Promise<void>;
   gifEndpoint?: string;
   stickerPacks: Array<{ name: string; manifestUrl: string }>;
   defaultStickerPack?: string;
@@ -1946,6 +1959,16 @@ function Conversation({
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
+  const threadTimeline = useRef<HTMLDivElement>(null);
+  const reportedThreadRead = useRef<{ roomId: string; rootId: string; eventId: string } | undefined>(undefined);
+  const [threadReadError, setThreadReadError] = useState<{ roomId: string; rootId: string; eventId: string }>();
+  const readActionsTrigger = useRef<HTMLButtonElement>(null);
+  const [readActionsRoom, setReadActionsRoom] = useState<string>();
+  const [readPopoverTop, setReadPopoverTop] = useState(68);
+  const [readPopoverRight, setReadPopoverRight] = useState(12);
+  if (readActionsRoom && (readActionsRoom !== room?.id || !conversationVisible)) setReadActionsRoom(undefined);
+  const [readAction, setReadAction] = useState<{ roomId: string; pending?: boolean; error?: string; status?: string }>();
+  const readActionRequest = useRef<object | undefined>(undefined);
   const edgeScrollIntent = useRef<{ direction?: 'backward' | 'forward'; roomId?: string; until: number } | undefined>(undefined);
   const touchScrollY = useRef<number | undefined>(undefined);
   const armEdgeScroll = (direction?: 'backward' | 'forward') => { edgeScrollIntent.current = { direction, roomId: room?.id, until: Date.now() + 750 }; };
@@ -2584,20 +2607,78 @@ function Conversation({
     };
   }, [restoreTimelineViewport]);
 
-  const latestMessageId = messages.at(-1)?.id;
+  const latestMessageId = [...messages].reverse().find((message) => !message.pending && (!message.delivery || message.delivery === 'accepted'))?.id;
+  const latestThreadMessageId = [...(activeThread?.messages ?? [])].reverse().find((message) => !message.pending && (!message.delivery || message.delivery === 'accepted'))?.id;
   const activeRoomId = room?.id;
   const reportLatestRead = useCallback(() => {
-    if (!conversationVisible || !activeRoomId || !latestMessageId || !onReadLatest || historicalWindow || history?.loading || historyAction
+    if (document.visibilityState !== 'visible' || !document.hasFocus() || readActionsRoom === activeRoomId || room?.markedUnread
+      || !conversationVisible || !activeRoomId || !latestMessageId || !onReadLatest || historicalWindow || history?.loading || historyAction
       || pendingSearchEvent || searchOpen || viewportMode.current !== 'bottom' || (onReturnToLive && !history)) return;
     const element = timeline.current;
-    if (!element || element.scrollHeight - element.scrollTop - element.clientHeight > 48) return;
+    if (!element || element.closest('main')?.dataset.roomId !== activeRoomId || element.closest('[hidden], [inert]') || !element.closest('main')?.contains(document.activeElement)
+      || document.activeElement?.closest('[role=dialog], [role=menu], .context-panel')
+      || element.scrollHeight - element.scrollTop - element.clientHeight > 48) return;
     if (reportedRead.current?.roomId === activeRoomId && reportedRead.current.eventId === latestMessageId) return;
     const requested = { roomId: activeRoomId, eventId: latestMessageId };
     reportedRead.current = requested;
-    void onReadLatest().catch(() => {
-      if (reportedRead.current?.roomId === requested.roomId && reportedRead.current.eventId === requested.eventId) reportedRead.current = undefined;
+    void onReadLatest(latestMessageId).catch(() => {
+      if (reportedRead.current === requested) reportedRead.current = undefined;
     });
-  }, [conversationVisible, activeRoomId, historicalWindow, history, historyAction, latestMessageId, pendingSearchEvent, searchOpen, onReadLatest, onReturnToLive]);
+  }, [conversationVisible, activeRoomId, historicalWindow, history, historyAction, latestMessageId, pendingSearchEvent, readActionsRoom, room?.markedUnread, searchOpen, onReadLatest, onReturnToLive]);
+
+  const reportThreadRead = useCallback((retry = false) => {
+    const rootId = threadRoot?.id;
+    const element = threadTimeline.current;
+    const failedHere = threadReadError?.roomId === activeRoomId && threadReadError?.rootId === rootId;
+    const eventId = retry && failedHere ? threadReadError?.eventId : latestThreadMessageId;
+    if (!activeRoomId || !rootId || !eventId || !onReadThread || contextPanel !== 'thread' || threadCollapsed
+      || document.visibilityState !== 'visible' || !document.hasFocus() || !element || element.closest('[hidden], [inert]')
+      || element.closest('aside')?.dataset.roomId !== activeRoomId || element.closest('aside')?.dataset.threadRoot !== rootId
+      || !element.closest('aside')?.contains(document.activeElement) || document.activeElement?.closest('[role=dialog], [role=menu]')
+      || (!retry && element.scrollHeight - element.scrollTop - element.clientHeight > 48)) return;
+    if (!retry && failedHere) return;
+    const previous = reportedThreadRead.current;
+    if (previous?.roomId === activeRoomId && previous.rootId === rootId && previous.eventId === eventId) return;
+    const requested = { roomId: activeRoomId, rootId, eventId };
+    reportedThreadRead.current = requested;
+    setThreadReadError(undefined);
+    void onReadThread(eventId).catch(() => {
+      if (reportedThreadRead.current !== requested) return;
+      reportedThreadRead.current = undefined;
+      setThreadReadError({ roomId: activeRoomId, rootId, eventId });
+    });
+  }, [activeRoomId, contextPanel, latestThreadMessageId, onReadThread, threadCollapsed, threadReadError, threadRoot?.id]);
+
+  useEffect(() => {
+    const report = () => { reportLatestRead(); reportThreadRead(); };
+    report();
+    window.addEventListener('focus', report);
+    document.addEventListener('focusin', report);
+    document.addEventListener('visibilitychange', report);
+    return () => {
+      window.removeEventListener('focus', report);
+      document.removeEventListener('focusin', report);
+      document.removeEventListener('visibilitychange', report);
+    };
+  }, [reportLatestRead, reportThreadRead]);
+
+  const updateReadStatus = async (unread: boolean) => {
+    if (!activeRoomId || readAction?.roomId === activeRoomId && readAction.pending) return;
+    const operation = unread ? onMarkUnread : onMarkRead;
+    if (!operation) return;
+    const eventId = unread
+      ? (timeline.current && captureTimelineAnchor(timeline.current)?.candidates[0]?.eventId) || latestMessageId
+      : undefined;
+    const request = {};
+    readActionRequest.current = request;
+    setReadAction({ roomId: activeRoomId, pending: true });
+    try {
+      await operation(eventId);
+      if (readActionRequest.current === request) setReadAction({ roomId: activeRoomId, status: unread ? 'Marked unread. Your reminder stays until you mark this conversation read.' : 'Conversation marked read. Unseen threads keep their unread state.' });
+    } catch {
+      if (readActionRequest.current === request) setReadAction({ roomId: activeRoomId, error: `Could not mark this conversation ${unread ? 'unread' : 'read'}. Try again.` });
+    }
+  };
 
   const requestHistory = useCallback(async (direction: 'backward' | 'forward', retry = false) => {
     if (!onLoadMore || activeHistoryRequest.current !== undefined || historyLoading || (!retry && (direction === 'backward' ? !history?.canLoadOlder : !history?.canLoadNewer))) return;
@@ -2900,6 +2981,7 @@ function Conversation({
       hidden={!conversationVisible}
       className={`conversation${hasRoomBackground ? ` conversation--backdrop room-backdrop--${room.background?.preset ?? 'none'}${roomBackgroundSource ? ' has-custom-backdrop' : ''}` : ''}`}
       style={{ ...roomBackgroundStyle, '--thread-panel-width': `${threadPanelWidth}px` } as CSSProperties}
+      data-room-id={room.id}
       aria-label={`Conversation with ${room.name}`}
     >
       <header className="conversation-header">
@@ -2918,6 +3000,7 @@ function Conversation({
           <p>{room.statusMessage || (room.kind === 'direct' ? 'Direct message' : 'Matrix room')}</p>
         </div>
         <div className="conversation-header__actions">
+          {onMarkUnread || onMarkRead ? <button ref={readActionsTrigger} className="icon-button" type="button" aria-label="Read status" aria-haspopup="dialog" aria-expanded={readActionsRoom === room.id} onClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setReadPopoverTop(Math.max(12, Math.min(bounds.bottom + 8, window.innerHeight - 240))); setReadPopoverRight(Math.max(12, Math.min(window.innerWidth - bounds.right, window.innerWidth - 344))); setReadActionsRoom((current) => current === room.id ? undefined : room.id); }}><Check size={17} /></button> : null}
           <IconButton label="Search loaded messages" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
           {room.encrypted ? <span className="encrypted-pill"><ShieldCheck size={13} /> Encrypted</span> : null}
           {callsEnabled && room.kind === 'direct' ? (
@@ -2933,7 +3016,15 @@ function Conversation({
           </IconButton>
         </div>
       </header>
+      {readActionsRoom === room.id && conversationVisible ? createPortal(<Popover trigger={readActionsTrigger} className="history-context" label="Conversation read status" onClose={() => setReadActionsRoom(undefined)} style={{ position: 'fixed', zIndex: 60, top: readPopoverTop, right: readPopoverRight, width: 'min(320px, calc(100vw - 24px))', maxHeight: `calc(100dvh - ${readPopoverTop + 12}px)`, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px #0003' }}>
+        <p>{room.markedUnread ? 'Marked unread for later.' : 'Keep a reminder or update your read position.'}</p>
+        {onMarkRead ? <button type="button" className="aqua-button" disabled={readAction?.roomId === room.id && readAction.pending} onClick={() => void updateReadStatus(false)}>Mark conversation read</button> : null}
+        {onMarkUnread ? <button type="button" className="aqua-button" disabled={readAction?.roomId === room.id && readAction.pending} onClick={() => void updateReadStatus(true)}>Mark unread</button> : null}
+        {room.markedUnread && room.unreadEventId ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => { setReadActionsRoom(undefined); void openContext(room.unreadEventId!); }}>Return to saved message</button> : null}
+        {readAction?.roomId === room.id ? readAction.pending ? <p role="status">Saving read status…</p> : readAction.error ? <p role="alert">{readAction.error}</p> : readAction.status ? <p role="status">{readAction.status}</p> : null : null}
+      </Popover>, document.body) : null}
       <div className="conversation-history-controls">
+      {room.markedUnread ? <div className="history-context"><p>Marked unread for later.</p>{room.unreadEventId ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void openContext(room.unreadEventId!)}>Return to saved message</button> : null}</div> : null}
 
 
       {historyLoading ? <p className="history-progress" role="status">{historyLoading === 'backward' ? 'Loading older messages…' : historyLoading === 'forward' ? 'Loading newer messages…' : historyLoading === 'context' ? 'Opening message context…' : 'Returning to latest messages…'}</p> : null}
@@ -3039,7 +3130,7 @@ function Conversation({
       {timelineDetached || historicalWindow ? <button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button> : null}
 
       {contextHost && activeThread && threadRoot ? createPortal(
-        <aside hidden={contextPanel !== 'thread' || threadCollapsed} inert={contextPanel !== 'thread' || threadCollapsed} className="thread-panel" aria-label="Thread">
+        <aside hidden={contextPanel !== 'thread' || threadCollapsed} inert={contextPanel !== 'thread' || threadCollapsed} className="thread-panel" data-room-id={room.id} data-thread-root={threadRoot.id} aria-label="Thread">
           <div
             className="thread-panel__resize"
             role="separator"
@@ -3061,10 +3152,10 @@ function Conversation({
             }}
           />
           <header className="thread-panel__header">
-            <span><MessageCircle size={16} /><strong tabIndex={-1} data-panel-heading>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}</small></span>
+            <span><MessageCircle size={16} /><strong tabIndex={-1} data-panel-heading>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}{activeThread.unreadCount ? ` · ${activeThread.unreadCount} unread` : ''}</small></span>
             <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></span>
           </header>
-          <div className="thread-panel__timeline">
+          <div ref={threadTimeline} className="thread-panel__timeline" onScroll={() => reportThreadRead()}>
             <div className="thread-panel__root">
               <strong>{threadRoot.senderName}</strong>
               <p>{threadRoot.body}</p>
@@ -3107,6 +3198,7 @@ function Conversation({
             ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
           </div> : null}
           <form className="thread-panel__composer" onSubmit={submitThread}>
+            {threadReadError?.roomId === room.id && threadReadError.rootId === threadRoot.id ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
             {notice && (uploadInProgress || failedUploadName) ? <div className="thread-panel__composer-context" role="status"><span>{notice}</span>{uploadInProgress ? <button type="button" onClick={onCancelUpload}>Cancel upload</button> : <button type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button>}</div> : null}
             <input ref={threadFileInput} type="file" className="sr-only" aria-label="Choose thread attachment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onUploadAttachment(file, threadRoot.id); event.target.value = ''; }} />
             <button type="button" aria-label="More thread tools" aria-expanded={threadMoreOpen} onClick={() => setThreadMoreOpen((open) => !open)}><Plus size={18} /></button>
@@ -3899,7 +3991,8 @@ export function Workspace({
   onCancelUpload,
   onSendGif,
   onMarkRoomRead,
-  onThreadOpened,
+  onMarkThreadRead,
+  onMarkRoomUnread,
   onJoinRoom,
   onSearchPublicRooms,
   onCreateDirectRoom,
@@ -4246,23 +4339,22 @@ export function Workspace({
     return () => { active = false; };
   }, [effectiveRoomId, workspace.mode]);
 
-  const markEffectiveRoomRead = useCallback((): Promise<void> => {
+  const markEffectiveRoomRead = useCallback((eventId: string): Promise<void> => {
     if (
       workspace.mode !== 'matrix' ||
       !effectiveRoomId ||
       pendingRouteContext ||
       (selectedHistory && selectedHistory.mode !== 'live') ||
       selectedHistory?.loading ||
-      !preferences.sendReadReceipts ||
       !onMarkRoomRead
     ) {
       return Promise.resolve();
     }
-    return onMarkRoomRead(effectiveRoomId);
-  }, [effectiveRoomId, onMarkRoomRead, pendingRouteContext, preferences.sendReadReceipts, selectedHistory, workspace.mode]);
+    return onMarkRoomRead(effectiveRoomId, { eventId });
+  }, [effectiveRoomId, onMarkRoomRead, pendingRouteContext, selectedHistory, workspace.mode]);
 
   const unreadTotal = useMemo(
-    () => workspace.rooms.reduce((total, room) => total + room.unreadCount, 0),
+    () => workspace.rooms.reduce((total, room) => total + (room.badgeCount ?? room.unreadCount), 0),
     [workspace.rooms],
   );
   const availableStickerPacks = useMemo(
@@ -4964,11 +5056,6 @@ export function Workspace({
               setActiveThreadRootId(message.id);
               openPanel('thread', message.id);
               setThreadCollapsed(false);
-              if (workspace.mode === 'matrix') {
-                void onThreadOpened?.(message.roomId, message.id).catch(() =>
-                  setNotice('This thread could not be marked read.'),
-                );
-              }
             }}
             onCloseThread={closePanel}
             onToggleThreadCollapsed={() => { setThreadCollapsed((collapsed) => !collapsed); if (threadCollapsed) openPanel('thread', activeThreadRootId); else closePanel(); }}
@@ -5006,6 +5093,9 @@ export function Workspace({
             onReturnToLive={onReturnToLive ? returnCurrentRoomToLive : undefined}
             onDetachedChange={onHistoryDetached ? changeHistoryDetached : undefined}
             onReadLatest={pendingRouteContext ? undefined : markEffectiveRoomRead}
+            onReadThread={workspace.mode === 'matrix' && onMarkThreadRead && effectiveRoomId && activeThreadRootId ? (eventId) => onMarkThreadRead(effectiveRoomId, activeThreadRootId, { eventId }) : undefined}
+            onMarkUnread={workspace.mode === 'matrix' && onMarkRoomUnread && effectiveRoomId ? (eventId) => onMarkRoomUnread(effectiveRoomId, eventId) : undefined}
+            onMarkRead={workspace.mode === 'matrix' && onMarkRoomRead && effectiveRoomId ? (eventId) => onMarkRoomRead(effectiveRoomId, { eventId, explicit: true }) : undefined}
             onSendNudge={() => {
               if (!effectiveRoomId || !onSendNudge) return;
               if (Date.now() - lastNudgeSentAt.current < 5_000) {

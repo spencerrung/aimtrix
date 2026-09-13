@@ -22,3 +22,12 @@ test('only safe finite metrics and known metadata are retained', () => {
   const result = makeReport({ ...base, revision: 'not a revision', platform: 'a private host', metrics: { sendReceiveMs: NaN, sharedBackdropMs: Infinity, attachmentInputCount: -1 } });
   assert.equal(result.revision, 'unknown'); assert.equal(result.platform, 'other'); assert.deepEqual(result.metrics, {});
 });
+test('read-tracking evidence accepts its fixed check name but discards receipt and account data', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'private-read-tracking-and-reminders';
+  const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
+    eventId: privateValue, userId: privateValue, receipts: [privateValue], accountData: { privateValue } }],
+  });
+  assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});

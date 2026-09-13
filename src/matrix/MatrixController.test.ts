@@ -30,6 +30,7 @@ function inject(
 ) {
   const internals = controller as unknown as ControllerInternals;
   client.makeTxnId ??= () => 'synthetic-transaction';
+  client.setRoomReadMarkers ??= vi.fn().mockResolvedValue({});
   internals.client = client as MatrixClient;
   internals.sdk = sdk as typeof import('matrix-js-sdk');
 }
@@ -798,17 +799,17 @@ describe('MatrixController protocol integration', () => {
   });
 
   it('marks the latest thread event read without advancing the main timeline', async () => {
-    const latest = { getId: () => '$thread-reply:test' };
-    const sendReadReceipt = vi.fn().mockResolvedValue({});
+    const latest = { getId: () => '$thread-reply:test', getRoomId: () => '!room:test', threadRootId: '$root:test' };
+    const authedRequest = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, {
-      getRoom: () => ({ getThread: () => ({ events: [latest] }) } as unknown as import('matrix-js-sdk').Room),
-      sendReadReceipt,
+      getRoom: () => ({ hasPendingEvent: () => false, getThread: () => ({ events: [latest] }), setThreadUnreadNotificationCount: vi.fn() } as unknown as import('matrix-js-sdk').Room),
+      http: { authedRequest } as unknown as MatrixClient['http'],
     });
 
     await controller.markThreadRead('!room:test', '$root:test');
 
-    expect(sendReadReceipt).toHaveBeenCalledWith(latest);
+    expect(authedRequest).toHaveBeenCalledWith('POST', '/rooms/!room%3Atest/receipt/m.read/%24thread-reply%3Atest', undefined, { thread_id: '$root:test' });
   });
 
   it('uploads an unencrypted attachment and sends a Matrix file event', async () => {
@@ -1253,8 +1254,9 @@ describe('MatrixController protocol integration', () => {
   });
 
   it('sends a read receipt only once per latest event', async () => {
-    const lastEvent = { getId: () => '$latest:test' };
+    const lastEvent = { getId: () => '$latest:test', getRoomId: () => '!room:test' };
     const room = {
+      hasPendingEvent: () => false,
       getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue(null),
       getRoomUnreadNotificationCount: vi.fn().mockReturnValue(3),
@@ -1263,7 +1265,7 @@ describe('MatrixController protocol integration', () => {
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
       getSafeUserId: () => '@me:test',
-      sendReadReceipt: vi.fn().mockResolvedValue({}),
+      http: { authedRequest: vi.fn().mockResolvedValue({}) },
     };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, client as unknown as Partial<MatrixClient>);
@@ -1272,14 +1274,15 @@ describe('MatrixController protocol integration', () => {
     await controller.markRoomRead('!room:test');
     await controller.markRoomRead('!room:test');
 
-    expect(client.sendReadReceipt).toHaveBeenCalledTimes(1);
-    expect(client.sendReadReceipt).toHaveBeenCalledWith(lastEvent);
+    expect(client.http.authedRequest).toHaveBeenCalledTimes(1);
+    expect(client.http.authedRequest).toHaveBeenCalledWith('POST', '/rooms/!room%3Atest/receipt/m.read/%24latest%3Atest', undefined, { thread_id: 'main' });
   });
 
   it('ignores newer thread replies when advancing the main timeline receipt', async () => {
-    const mainEvent = { getId: () => '$main:test' };
+    const mainEvent = { getId: () => '$main:test', getRoomId: () => '!room:test' };
     const threadEvent = { getId: () => '$thread:test', threadRootId: '$root:test' };
     const room = {
+      hasPendingEvent: () => false,
       getLiveTimeline: () => ({ getEvents: () => [mainEvent, threadEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue(null),
       getRoomUnreadNotificationCount: vi.fn().mockReturnValue(2),
@@ -1288,7 +1291,7 @@ describe('MatrixController protocol integration', () => {
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
       getSafeUserId: () => '@me:test',
-      sendReadReceipt: vi.fn().mockResolvedValue({}),
+      http: { authedRequest: vi.fn().mockResolvedValue({}) },
     };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, client as unknown as Partial<MatrixClient>, {
@@ -1297,12 +1300,13 @@ describe('MatrixController protocol integration', () => {
 
     await controller.markRoomRead('!room:test');
 
-    expect(client.sendReadReceipt).toHaveBeenCalledWith(mainEvent);
+    expect(client.http.authedRequest).toHaveBeenCalledWith('POST', '/rooms/!room%3Atest/receipt/m.read/%24main%3Atest', undefined, { thread_id: 'main' });
   });
 
-  it('clears unread counts locally before the receipt round trip finishes', async () => {
-    const lastEvent = { getId: () => '$latest:test' };
+  it('clears main unread counts only after the receipt round trip succeeds', async () => {
+    const lastEvent = { getId: () => '$latest:test', getRoomId: () => '!room:test' };
     const room = {
+      hasPendingEvent: () => false,
       getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue(null),
       getRoomUnreadNotificationCount: vi.fn().mockReturnValue(3),
@@ -1311,21 +1315,23 @@ describe('MatrixController protocol integration', () => {
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
       getSafeUserId: () => '@me:test',
-      sendReadReceipt: vi.fn().mockResolvedValue({}),
+      http: { authedRequest: vi.fn().mockResolvedValue({}) },
     };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, client as unknown as Partial<MatrixClient>);
 
     const receipt = controller.markRoomRead('!room:test');
 
+    expect(room.setUnreadNotificationCount).not.toHaveBeenCalled();
+    await receipt;
     expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('total', 0);
     expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('highlight', 0);
-    await receipt;
   });
 
-  it('restores unread counts and allows retry when sending the receipt fails', async () => {
-    const lastEvent = { getId: () => '$latest:test' };
+  it('preserves unread counts and allows retry when sending the receipt fails', async () => {
+    const lastEvent = { getId: () => '$latest:test', getRoomId: () => '!room:test' };
     const room = {
+      hasPendingEvent: () => false,
       getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue(null),
       getRoomUnreadNotificationCount: vi.fn((type: string) => type === 'total' ? 5 : 2),
@@ -1334,24 +1340,26 @@ describe('MatrixController protocol integration', () => {
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
       getSafeUserId: () => '@me:test',
-      sendReadReceipt: vi.fn()
+      http: { authedRequest: vi.fn()
         .mockRejectedValueOnce(new Error('offline'))
-        .mockResolvedValueOnce({}),
+        .mockResolvedValueOnce({}) },
     };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, client as unknown as Partial<MatrixClient>);
 
     await expect(controller.markRoomRead('!room:test')).rejects.toThrow('offline');
+    expect(room.setUnreadNotificationCount).not.toHaveBeenCalled();
     await controller.markRoomRead('!room:test');
 
-    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('total', 5);
-    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('highlight', 2);
-    expect(client.sendReadReceipt).toHaveBeenCalledTimes(2);
+    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('total', 0);
+    expect(room.setUnreadNotificationCount).toHaveBeenCalledWith('highlight', 0);
+    expect(client.http.authedRequest).toHaveBeenCalledTimes(2);
   });
 
   it('skips the receipt when the server already has us at the latest event', async () => {
-    const lastEvent = { getId: () => '$latest:test' };
+    const lastEvent = { getId: () => '$latest:test', getRoomId: () => '!room:test' };
     const room = {
+      hasPendingEvent: () => false,
       getLiveTimeline: () => ({ getEvents: () => [lastEvent] }),
       getReadReceiptForUserId: vi.fn().mockReturnValue({ eventId: '$latest:test' }),
       getRoomUnreadNotificationCount: vi.fn().mockReturnValue(3),
@@ -1360,13 +1368,13 @@ describe('MatrixController protocol integration', () => {
     const client = {
       getRoom: vi.fn().mockReturnValue(room),
       getSafeUserId: () => '@me:test',
-      sendReadReceipt: vi.fn().mockResolvedValue({}),
+      http: { authedRequest: vi.fn().mockResolvedValue({}) },
     };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, client as unknown as Partial<MatrixClient>);
 
     await controller.markRoomRead('!room:test');
 
-    expect(client.sendReadReceipt).not.toHaveBeenCalled();
+    expect(client.http.authedRequest).not.toHaveBeenCalled();
   });
 });

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk';
+import { inMainTimelineForReceipt } from 'matrix-js-sdk';
 import {
   buildWorkspaceSnapshot,
   createWorkspaceSnapshotCache,
@@ -27,6 +28,13 @@ function fakeClient(
   options: {
     unreadCount?: number;
     timelineUnreadCount?: number;
+    highlightCount?: number;
+    timelineHighlightCount?: number;
+    threadUnreadCount?: number;
+    threadHighlightCount?: number;
+    muted?: boolean;
+    pushRuleEnabled?: boolean;
+    accountData?: Record<string, Record<string, unknown>>;
     readUpToEventId?: string;
     threads?: Array<{ id: string; length: number; events: MatrixEvent[] }>;
   } = {},
@@ -41,10 +49,12 @@ function fakeClient(
     getMember: vi.fn().mockReturnValue(undefined),
     getMembers: () => [],
     getJoinedMembers: () => [],
-    getUnreadNotificationCount: (type: string) => type === 'total' ? options.unreadCount ?? 0 : 0,
+    getUnreadNotificationCount: (type: string) => type === 'total' ? options.unreadCount ?? 0 : options.highlightCount ?? 0,
     getRoomUnreadNotificationCount: (type: string) =>
-      type === 'total' ? options.timelineUnreadCount ?? options.unreadCount ?? 0 : 0,
-    getEventReadUpTo: () => options.readUpToEventId ?? null,
+      type === 'total' ? options.timelineUnreadCount ?? options.unreadCount ?? 0 : options.timelineHighlightCount ?? 0,
+    getThreadUnreadNotificationCount: (_rootId: string, type: string) => type === 'total' ? options.threadUnreadCount ?? 0 : options.threadHighlightCount ?? 0,
+    getEventReadUpTo: vi.fn(() => options.readUpToEventId ?? null),
+    getAccountData: (type: string) => options.accountData?.[type] ? fakeEvent(type, options.accountData[type]) : undefined,
     getLastActiveTimestamp: () => 0,
     getDefaultRoomName: () => 'Sticker Room',
     getMxcAvatarUrl: () => undefined,
@@ -60,7 +70,7 @@ function fakeClient(
     getUser: () => null,
     getAccountData: () => undefined,
     getVisibleRooms: () => [room],
-    getRoomPushRule: () => undefined,
+    getRoomPushRule: () => options.muted ? { actions: ['dont_notify'], enabled: options.pushRuleEnabled } : undefined,
   } as unknown as MatrixClient;
 }
 
@@ -227,6 +237,31 @@ describe('buildWorkspaceSnapshot stickers', () => {
 });
 
 describe('buildWorkspaceSnapshot read position', () => {
+  it('falls back to the private fully-read account marker when SDK receipts cannot resolve', () => {
+    const client = fakeClient([
+      fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Earlier synthetic message' }, '$read:test'),
+      fakeEvent('m.reaction', {}, '$reaction:test'),
+      fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Newer synthetic message' }, '$unread:test'),
+    ], { unreadCount: 1, accountData: { 'm.fully_read': { event_id: '$reaction:test' } } });
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0].readUpToMessageId).toBe('$read:test');
+    expect(client.getVisibleRooms()[0].getEventReadUpTo).toHaveBeenCalledWith('@me:test', true);
+  });
+
+  it('prefers a resolved server receipt over an older fully-read marker', () => {
+    const client = fakeClient([
+      fakeEvent('m.room.message', { msgtype: 'm.text', body: 'First synthetic message' }, '$first:test'),
+      fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Second synthetic message' }, '$second:test'),
+    ], { unreadCount: 1, readUpToEventId: '$second:test', accountData: { 'm.fully_read': { event_id: '$first:test' } } });
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0].readUpToMessageId).toBe('$second:test');
+  });
+
+  it.each([42, 'invalid', '$missing:test'])('does not invent a rendered read position for marker %s', (eventId) => {
+    const client = fakeClient([fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic message' })], {
+      unreadCount: 1, accountData: { 'm.fully_read': { event_id: eventId } },
+    });
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0].readUpToMessageId).toBeUndefined();
+  });
+
   it('maps the current user receipt to the preceding rendered message', () => {
     const client = fakeClient(
       [
@@ -255,6 +290,131 @@ describe('buildWorkspaceSnapshot read position', () => {
       timelineUnreadCount: 0,
       readUpToMessageId: undefined,
     });
+  });
+});
+
+describe('buildWorkspaceSnapshot unread badges', () => {
+  it('uses the legacy reminder only when the standard event is absent', () => {
+    const accountData: Record<string, Record<string, unknown>> = { 'com.famedly.marked_unread': { unread: true } };
+    const client = fakeClient([], { accountData });
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0]).toMatchObject({ markedUnread: true, badgeCount: 1 });
+    accountData['m.marked_unread'] = { unread: false };
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0]).toMatchObject({ markedUnread: false, badgeCount: 0 });
+    accountData['m.marked_unread'] = { unread: 'malformed' };
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0]).toMatchObject({ markedUnread: false, badgeCount: 0 });
+  });
+
+  it('does not mute a room whose dont_notify push rule is disabled', () => {
+    const client = fakeClient([], { unreadCount: 8, highlightCount: 2, muted: true, pushRuleEnabled: false });
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0]).toMatchObject({ muted: false, unreadCount: 8, badgeCount: 8 });
+  });
+
+  it('clears only proven fully-read main counters, retaining thread totals and highlights without SDK mutation', () => {
+    const main = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic main' }, '$main:test');
+    const reply = Object.assign(fakeEvent('m.room.message', {
+      msgtype: 'm.text', body: 'Synthetic reply', 'm.relates_to': { rel_type: 'm.thread', event_id: '$main:test' },
+    }, '$thread:test'), { threadRootId: '$main:test', isRelation: () => true });
+    const pending = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic pending' }, '$pending:test'), { status: 'sending' });
+    const client = fakeClient([main, reply, pending], {
+      unreadCount: 7, timelineUnreadCount: 3, highlightCount: 3, timelineHighlightCount: 2,
+      threadUnreadCount: 4, threadHighlightCount: 1,
+      threads: [{ id: '$main:test', length: 4, events: [main, reply] }],
+      accountData: { 'm.fully_read': { event_id: '$main:test' } },
+    });
+    const snapshot = buildWorkspaceSnapshot(client, 'online', [], [], undefined, inMainTimelineForReceipt);
+    expect(snapshot.rooms[0]).toMatchObject({ unreadCount: 4, timelineUnreadCount: 0, highlightCount: 1, badgeCount: 4, readUpToMessageId: undefined });
+    expect(snapshot.threadsByRoot['$main:test']).toMatchObject({ unreadCount: 4, highlighted: true });
+    expect(snapshot.spaces[0].unreadCount).toBe(4);
+    expect(client.getVisibleRooms()[0].getUnreadNotificationCount('total' as never)).toBe(7);
+  });
+
+  it.each(['$earlier:test', '$unloaded:test', '$thread:test'])('does not clear main counts for an unproven fully-read boundary %s', (eventId) => {
+    const earlier = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic earlier' }, '$earlier:test');
+    const latest = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic latest' }, '$latest:test');
+    const thread = Object.assign(fakeEvent('m.room.message', {
+      msgtype: 'm.text', body: 'Synthetic thread', 'm.relates_to': { rel_type: 'm.thread', event_id: '$earlier:test' },
+    }, '$thread:test'), { threadRootId: '$earlier:test', isRelation: () => true });
+    const client = fakeClient([earlier, latest, thread], {
+      unreadCount: 3, timelineUnreadCount: 2, accountData: { 'm.fully_read': { event_id: eventId } },
+    });
+    expect(buildWorkspaceSnapshot(client, 'online', [], [], undefined, inMainTimelineForReceipt).rooms[0])
+      .toMatchObject({ unreadCount: 3, timelineUnreadCount: 2, badgeCount: 3 });
+  });
+
+  it('keeps a deliberate reminder when fully-read fallback clears main counts and does not inflate notification counts', () => {
+    const client = fakeClient([fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic latest' }, '$latest:test')], {
+      unreadCount: 2, highlightCount: 1, timelineHighlightCount: 1,
+      accountData: { 'm.fully_read': { event_id: '$latest:test' }, 'm.marked_unread': { unread: true } },
+    });
+    expect(buildWorkspaceSnapshot(client, 'online', [], [], undefined, inMainTimelineForReceipt).rooms[0])
+      .toMatchObject({ unreadCount: 0, timelineUnreadCount: 0, highlightCount: 0, badgeCount: 1, markedUnread: true });
+  });
+
+  it('uses the SDK aggregate once and exposes independent thread and main-timeline counts', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test');
+    const client = fakeClient([root], {
+      unreadCount: 7, timelineUnreadCount: 3, highlightCount: 2,
+      threadUnreadCount: 4, threadHighlightCount: 1,
+      threads: [{ id: '$root:test', length: 4, events: [root] }],
+    });
+    const snapshot = buildWorkspaceSnapshot(client, 'online');
+    expect(snapshot.rooms[0]).toMatchObject({ unreadCount: 7, timelineUnreadCount: 3, badgeCount: 7, highlightCount: 2, highlighted: true });
+    expect(snapshot.spaces.find((space) => space.id === 'home')?.unreadCount).toBe(7);
+    expect(snapshot.threadsByRoot['$root:test']).toMatchObject({ unreadCount: 4, highlighted: true });
+    expect(snapshot.messagesByRoom['!room:test'][0].thread).toMatchObject({ unreadCount: 4, highlighted: true });
+  });
+
+  it.each([
+    { highlightCount: 0, marker: false, badgeCount: 0 },
+    { highlightCount: 2, marker: false, badgeCount: 2 },
+    { highlightCount: 0, marker: true, badgeCount: 1 },
+  ])('retains muted counts but displays mentions and explicit reminders: %j', ({ highlightCount, marker, badgeCount }) => {
+    const client = fakeClient([], { unreadCount: 8, muted: true, highlightCount, accountData: { 'm.marked_unread': { unread: marker } } });
+    const snapshot = buildWorkspaceSnapshot(client, 'online');
+    expect(snapshot.rooms[0]).toMatchObject({ unreadCount: 8, badgeCount, muted: true, markedUnread: marker, highlighted: highlightCount > 0, group: badgeCount > 0 ? 'Favorites' : 'Rooms' });
+    expect(snapshot.spaces.find((space) => space.id === 'home')?.unreadCount).toBe(badgeCount);
+  });
+
+  it('keeps the standard reminder usable without an Aimtrix extension and preserves unloaded saved locations', () => {
+    const options = { accountData: { 'm.marked_unread': { unread: true } as Record<string, unknown> } };
+    const client = fakeClient([], options);
+    const first = buildWorkspaceSnapshot(client, 'online');
+    expect(first.rooms[0]).toMatchObject({ unreadCount: 0, badgeCount: 1, markedUnread: true, unreadEventId: undefined });
+    options.accountData['m.marked_unread']['dev.alucard.aimtrix.return_point'] = { event_id: '$older:test' };
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0].unreadEventId).toBe('$older:test');
+    expect(first.rooms[0].unreadEventId).toBeUndefined();
+  });
+
+  it('refreshes thread notification metadata without mutating cached messages', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test');
+    const options = { threads: [{ id: '$root:test', length: 1, events: [root] }], threadUnreadCount: 1, threadHighlightCount: 1 };
+    const client = fakeClient([root], options);
+    const cache = createWorkspaceSnapshotCache();
+    const first = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    options.threadUnreadCount = 0;
+    options.threadHighlightCount = 0;
+    const second = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(first.messagesByRoom['!room:test'][0].thread).toMatchObject({ unreadCount: 1, highlighted: true });
+    expect(second.messagesByRoom['!room:test'][0].thread).toMatchObject({ unreadCount: 0, highlighted: false });
+  });
+
+  it('counts shared child rooms once per space and applies the same badge policy to home and directs', () => {
+    const mutedClient = fakeClient([], { unreadCount: 8, highlightCount: 2, muted: true });
+    const mutedRoom = mutedClient.getVisibleRooms()[0];
+    const regularRoom = Object.assign(fakeClient([], { unreadCount: 3 }).getVisibleRooms()[0], { roomId: '!second:test' });
+    const client = {
+      ...mutedClient,
+      getVisibleRooms: () => [mutedRoom, regularRoom],
+      getAccountData: (type: string) => type === 'm.direct' ? fakeEvent(type, { '@mara:test': ['!room:test', '!second:test'] }) : undefined,
+      getRoomPushRule: (_scope: string, roomId: string) => roomId === '!room:test' ? { actions: ['dont_notify'] } : undefined,
+    } as unknown as MatrixClient;
+    const snapshot = buildWorkspaceSnapshot(client, 'online', [
+      { id: '!parent:test', name: 'Parent', roomType: 'm.space', childIds: ['!room:test', '!child:test'] },
+      { id: '!child:test', name: 'Child', roomType: 'm.space', childIds: ['!room:test', '!second:test'] },
+    ]);
+    for (const spaceId of ['home', 'directs', '!parent:test', '!child:test']) {
+      expect(snapshot.spaces.find((space) => space.id === spaceId)).toMatchObject({ unreadCount: 5, highlighted: true });
+    }
   });
 });
 
