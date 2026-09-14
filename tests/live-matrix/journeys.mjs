@@ -36,7 +36,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
   };
   const alice = await newPage(), bob = await newPage(), aliceSecond = await newPage();
   let aliceSession, bobSession, secondSession, roomId;
-  let navigationHistory;
+  let navigationHistory, threadHistory;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
   const uploads = [];
@@ -185,6 +185,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const received = bob.getByRole('complementary', { name: 'Thread', exact: true }).locator('.timeline-message').filter({ hasText: marker });
       await received.waitFor({ timeout: 45000 });
       invariant(await received.count() === 1 && await failed.count() === 1, 'single-thread-reply');
+      threadHistory = { rootId: await root.getAttribute('data-event-id'), replyId: await failed.getAttribute('data-event-id') };
       const attempts = wire.slice(start);
       invariant(attempts.length === 2 && attempts[0].path === attempts[1].path && JSON.stringify(attempts[0].content) === JSON.stringify(attempts[1].content), 'thread-retry-same-ciphertext-transaction');
       invariant(attempts[0].content['m.relates_to']?.rel_type === 'm.thread', 'standard-thread-relation');
@@ -195,7 +196,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const cancelledRow = thread.locator('.timeline-message').filter({ hasText: cancelled });
       await cancelledRow.getByRole('button', { name: 'Cancel message', exact: true }).click();
       await cancelledRow.waitFor({ state: 'hidden' });
-      await root.locator('.thread-summary').getByText('1 reply', { exact: true }).waitFor();
+      await root.locator('.thread-summary').getByText(/^1(?: reply|\+ replies)$/).waitFor();
       await alice.unroute(pattern, reject);
 
       await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
@@ -533,6 +534,105 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }, { room: roomId, firstEvent: firstId, secondEvent: secondId, aliasValue: alias }), 'navigation-history-state-opaque');
       } finally { aliceSecond.off('request', observeNavigation); }
       await composer.fill('');
+    });
+    await check('encrypted-thread-history-and-links', async () => {
+      invariant(Boolean(threadHistory?.rootId && threadHistory?.replyId), 'old-thread-identifiers');
+      const { rootId, replyId } = threadHistory;
+      const openLink = async (page, eventId) => {
+        await page.bringToFront();
+        await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+        await page.getByRole('button', { name: 'Open Matrix link', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: 'Open Matrix link', exact: true });
+        await dialog.getByRole('textbox', { name: 'Matrix link', exact: true }).fill(`https://matrix.to/#/${encode(roomId)}/${encode(eventId)}`);
+        await dialog.getByRole('button', { name: 'Open link', exact: true }).click();
+        await dialog.waitFor({ state: 'hidden' });
+        await page.getByRole('complementary', { name: 'Thread', exact: true }).waitFor();
+      };
+      await openLink(alice, rootId);
+      const senderThread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+      const sendReply = async () => {
+        await alice.bringToFront();
+        const accepted = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/'));
+        await senderThread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(`Synthetic old thread reply ${randomBytes(8).toString('hex')}`);
+        await senderThread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
+        const response = await accepted;
+        invariant(response.ok(), 'old-thread-reply-accepted');
+        return (await response.json()).event_id;
+      };
+      const start = wire.length;
+      // Exceed a relations page using real encrypted UI sends, without another
+      // large main-room history seed. All identifiers and wire content stay in memory.
+      for (let index = 0; index < 60; index += 1) await sendReply();
+      invariant(wire.slice(start).every((request) => request.path.includes('/send/m.room.encrypted/')
+        && request.content['m.relates_to']?.rel_type === 'm.thread'
+        && request.content['m.relates_to']?.event_id === rootId), 'old-thread-standard-encrypted-relations');
+      const countBeforeIncoming = Number((await senderThread.locator('.thread-panel__header').textContent()).match(/(\d+)\+? replies/)?.[1]);
+      invariant(Number.isFinite(countBeforeIncoming), 'old-thread-count-available');
+      await aliceSecond.bringToFront();
+      await aliceSecond.goto(stack.origins.app); await openRoom(aliceSecond, roomName);
+      invariant(await aliceSecond.locator(`.timeline [data-event-id=${JSON.stringify(rootId)}]`).count() === 0, 'old-root-outside-main-window');
+      await aliceSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const settings = aliceSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await settings.getByRole('checkbox', { name: /^Send read receipts/ }).uncheck();
+      await until(async () => (await api(`/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/dev.alucard.aimtrix.preferences.v1`, { token: secondSession.accessToken })).sendReadReceipts === false, 'old-thread-private-preference');
+      await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      const receipts = [];
+      const recordReceipt = (request) => {
+        if (request.method() !== 'POST') return;
+        const path = new URL(request.url()).pathname.split('/').map(decodeURIComponent);
+        const receipt = path.indexOf('receipt');
+        if (receipt >= 0 && path[receipt - 1] === roomId && request.postDataJSON()?.thread_id === rootId)
+          receipts.push({ type: path[receipt + 1], eventId: path[receipt + 2] });
+      };
+      const acceptedPrivate = new Set();
+      const recordAcceptedReceipt = (response) => {
+        const request = response.request();
+        if (!response.ok() || request.method() !== 'POST') return;
+        const path = new URL(request.url()).pathname.split('/').map(decodeURIComponent);
+        const receipt = path.indexOf('receipt');
+        if (receipt >= 0 && path[receipt - 1] === roomId && path[receipt + 1] === 'm.read.private'
+          && request.postDataJSON()?.thread_id === rootId) acceptedPrivate.add(path[receipt + 2]);
+      };
+      aliceSecond.on('request', recordReceipt);
+      aliceSecond.on('response', recordAcceptedReceipt);
+      try {
+        await openLink(aliceSecond, rootId);
+        const thread = aliceSecond.getByRole('complementary', { name: 'Thread', exact: true });
+        const timeline = thread.locator('.thread-panel__timeline');
+        const reply = timeline.locator(`[data-event-id=${JSON.stringify(replyId)}]`);
+        const composer = thread.getByRole('textbox', { name: 'Message thread', exact: true });
+        const draft = 'Synthetic draft while reading old thread replies';
+        await composer.fill(draft);
+        await thread.getByRole('button', { name: 'Load older thread replies', exact: true }).click();
+        await reply.waitFor({ timeout: 45000 });
+        invariant(await composer.inputValue() === draft && await timeline.locator('.timeline-message').count() <= 250, 'old-thread-bounded-paging-retains-draft');
+        await openLink(aliceSecond, replyId);
+        await until(() => reply.evaluate((element) => element === element.ownerDocument.activeElement), 'old-thread-link-focus');
+        invariant((await thread.locator('.thread-panel__root').textContent()).includes('Retry round trip'), 'old-thread-root-decrypted');
+        const historicalReceipts = receipts.length;
+        await composer.focus();
+        await timeline.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); });
+        const incoming = await sendReply();
+        await aliceSecond.bringToFront();
+        await composer.focus();
+        // The independently accepted live-tail marker proves a sync snapshot was
+        // published while history stayed detached. Partial counts may use '+'.
+        await until(async () => await thread.getAttribute('data-latest-reply-id') === incoming, 'old-thread-live-tail-published');
+        const currentCount = Number((await thread.locator('.thread-panel__header').textContent()).match(/(\d+)\+? replies/)?.[1]);
+        invariant(currentCount >= countBeforeIncoming, 'old-thread-count-nondecreasing');
+        invariant(receipts.length === historicalReceipts, 'historical-thread-never-acknowledged');
+        invariant(await timeline.locator(`[data-event-id=${JSON.stringify(incoming)}]`).count() === 0, 'historical-thread-not-replaced-by-live');
+        await thread.getByRole('button', { name: 'Jump to latest replies', exact: true }).click();
+        await timeline.locator(`[data-event-id=${JSON.stringify(incoming)}]`).waitFor({ timeout: 45000 });
+        await composer.focus();
+        await timeline.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); });
+        await until(() => acceptedPrivate.has(incoming), 'old-thread-private-latest-receipt');
+        invariant(receipts.every((receipt) => receipt.type === 'm.read.private'), 'old-thread-no-public-receipts');
+        await composer.fill('');
+        await thread.getByRole('button', { name: 'Close thread', exact: true }).click();
+      } finally { aliceSecond.off('request', recordReceipt); aliceSecond.off('response', recordAcceptedReceipt); }
+      await senderThread.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
     await check('authenticated-encrypted-media', async () => {
       const latest = bob.getByRole('button', { name: 'Jump to latest messages', exact: true });

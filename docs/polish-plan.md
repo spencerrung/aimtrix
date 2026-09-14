@@ -93,6 +93,8 @@ Deliver the responsive shell, quick switcher, favorites, navigation history, unr
 
 Deep links, reply links, notification routes, and activity entries must open actual event context. Rendering a search result or background panel must not silently mark its room read. Label incomplete activity coverage truthfully.
 
+Step 11 behavior and validation boundaries are documented in [thread history](thread-history.md). Thread retrieval and navigation are independent of the main room window; unified composition and Home activity remain separate packages.
+
 ### C. Composition across interruptions
 
 Unify room/thread tools and account-scoped structured drafts, including mention identities, reply/edit context, visible draft indicators, and a draft list. Define local persistence, storage-failure behavior, successful-send cleanup, account isolation, and logout deletion.

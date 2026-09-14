@@ -72,13 +72,85 @@ describe('workspace shell navigation', () => {
 
   it('keeps navigation action identities stable through transitions and rerenders', () => {
     const { result, rerender } = renderHook(() => useShellNavigation(list));
-    const actions = { navigate: result.current.navigate, back: result.current.back, forward: result.current.forward, remember: result.current.remember };
+    const actions = { navigate: result.current.navigate, back: result.current.back, forward: result.current.forward, remember: result.current.remember, rememberThread: result.current.rememberThread };
     act(() => result.current.navigate(conversation));
     rerender();
     expect(result.current.navigate).toBe(actions.navigate);
     expect(result.current.back).toBe(actions.back);
     expect(result.current.forward).toBe(actions.forward);
     expect(result.current.remember).toBe(actions.remember);
+    expect(result.current.rememberThread).toBe(actions.rememberThread);
+  });
+
+  it('keeps separate main and thread reading positions through thread and reply destination Back/Forward', async () => {
+    const { result } = renderHook(() => useShellNavigation(conversation));
+    const mainReading: ShellReadingPosition = { mode: 'history', anchor: { eventId: '$main-anchor', offset: -14 } };
+    act(() => result.current.remember(mainReading));
+    act(() => result.current.navigate(thread));
+    const firstEntry = result.current.entryId;
+    const firstReading: ShellReadingPosition = { mode: 'history', anchor: { eventId: '$first-anchor', offset: 21 } };
+    act(() => result.current.rememberThread(firstReading));
+    firstReading.anchor!.offset = 999;
+    const other = { ...thread, threadRootId: '$other-root' };
+    act(() => result.current.navigate(other));
+    expect(result.current.reading).toEqual(mainReading);
+    expect(result.current.threadReading).toBeUndefined();
+    act(() => result.current.rememberThread({ mode: 'live', atLatest: true }));
+    const target = { ...other, threadEventId: '$specific-reply' };
+    act(() => result.current.navigate(target));
+    expect(result.current.reading).toEqual(mainReading);
+    expect(result.current.route.eventId).toBeUndefined();
+    expect(result.current.threadReading).toBeUndefined();
+    act(() => result.current.rememberThread({ mode: 'context', anchor: { eventId: '$specific-reply', offset: 30 } }));
+    act(() => result.current.back());
+    await waitFor(() => expect(result.current.route).toEqual(other));
+    expect(result.current.threadReading).toMatchObject({ mode: 'live', atLatest: true });
+    act(() => result.current.back());
+    await waitFor(() => expect(result.current.entryId).toBe(firstEntry));
+    expect(result.current.threadReading?.anchor).toEqual({ eventId: '$first-anchor', offset: 21 });
+    expect(result.current.reading).toEqual(mainReading);
+    act(() => result.current.forward());
+    await waitFor(() => expect(result.current.route).toEqual(other));
+    act(() => result.current.forward());
+    await waitFor(() => expect(result.current.route).toEqual(target));
+    expect(result.current.threadReading?.anchor).toEqual({ eventId: '$specific-reply', offset: 30 });
+    expect(result.current.reading).toEqual(mainReading);
+    expect(JSON.stringify(window.history.state)).not.toMatch(/main-anchor|first-anchor|specific-reply|other-root|offset/);
+  });
+
+  it('preserves a thread reading position through ordinary contextual-tool replacements', async () => {
+    const { result } = renderHook(() => useShellNavigation(conversation));
+    act(() => result.current.navigate({ ...thread, threadEventId: '$reply' }));
+    act(() => result.current.rememberThread({ mode: 'context', anchor: { eventId: '$reply', offset: -9 } }));
+    const push = vi.spyOn(window.history, 'pushState');
+    act(() => result.current.navigate({ ...result.current.route, panel: 'details' }));
+    act(() => result.current.navigate({ ...result.current.route, panel: 'search' }));
+    act(() => result.current.navigate({ ...result.current.route, panel: 'thread' }));
+    expect(push).not.toHaveBeenCalled();
+    expect(result.current.threadReading?.anchor).toEqual({ eventId: '$reply', offset: -9 });
+    act(() => result.current.back());
+    await waitFor(() => expect(result.current.route).toEqual(conversation));
+  });
+
+  it('keeps delayed thread scroll writes on their original entry and never imports them into a new account mount', async () => {
+    const first = renderHook(() => useShellNavigation(conversation));
+    act(() => first.result.current.navigate(thread));
+    const oldEntry = first.result.current.entryId;
+    const oldPointer = window.history.state;
+    const rememberThread = first.result.current.rememberThread;
+    const next = { ...thread, threadEventId: '$new-target' };
+    act(() => first.result.current.navigate(next));
+    act(() => rememberThread({ mode: 'history', anchor: { eventId: '$old-thread-anchor', offset: 7 } }, oldEntry));
+    expect(first.result.current.threadReading).toBeUndefined();
+    act(() => first.result.current.back());
+    await waitFor(() => expect(first.result.current.entryId).toBe(oldEntry));
+    expect(first.result.current.threadReading?.anchor?.eventId).toBe('$old-thread-anchor');
+    first.unmount();
+    const second = renderHook(() => useShellNavigation(list));
+    act(() => rememberThread({ mode: 'context', anchor: { eventId: '$late-old-account', offset: 8 } }, oldEntry));
+    act(() => window.dispatchEvent(new PopStateEvent('popstate', { state: oldPointer })));
+    expect(second.result.current.route).toEqual(list);
+    expect(second.result.current.threadReading).toBeUndefined();
   });
 
   it('restores distinct same-room event destinations and their own reading positions in both directions', async () => {

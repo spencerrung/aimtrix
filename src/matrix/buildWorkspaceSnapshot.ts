@@ -1,5 +1,6 @@
 import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent } from './historyEvents';
 import type { HistoryView } from './RoomHistory';
+import type { ThreadHistoryView } from './ThreadHistory';
 import { deliveryForStatus, deliveryFailureCopy } from './messageDelivery';
 import type { EncryptedMediaInfo } from './mediaContext';
 import {
@@ -80,9 +81,21 @@ interface CachedMembers {
   value: MemberSummary[];
 }
 
+interface SnapshotThread {
+  id: string;
+  length: number;
+  events: MatrixEvent[];
+  rootEvent?: MatrixEvent;
+  replyToEvent?: MatrixEvent | null;
+  hasCurrentUserParticipated?: boolean;
+  getReadReceiptForUserId?: (memberId: string) => { eventId: string } | null;
+  timelineSet?: { relations?: { getAllChildEventsForEvent: (eventId: string) => MatrixEvent[] } };
+}
+
 export interface WorkspaceSnapshotCache {
   roomVersions: Map<string, number>;
   history: Map<string, HistoryView>;
+  threadHistory: Map<string, ThreadHistoryView>;
   localEvents: Map<string, Map<string, MatrixEvent>>;
   presenceVersion: number;
   messages: Map<string, CachedMessages>;
@@ -93,6 +106,7 @@ export function createWorkspaceSnapshotCache(): WorkspaceSnapshotCache {
   return {
     roomVersions: new Map<string, number>(),
     history: new Map(),
+    threadHistory: new Map(),
     localEvents: new Map(),
     presenceVersion: 0,
     messages: new Map<string, CachedMessages>(),
@@ -390,6 +404,7 @@ function messagesForEvents(
   pinnedIds: ReadonlySet<string>,
   events: MatrixEvent[],
   includeReadReceipts = false,
+  receiptSource: { getReadReceiptForUserId?: (memberId: string) => { eventId: string } | null } = room,
 ): MessageSummary[] {
   const eventById = new Map(
     events.flatMap((event) => (event.getId() ? [[event.getId()!, event] as const] : [])),
@@ -499,7 +514,7 @@ function messagesForEvents(
         rendered.mentionUserIds,
       ),
       nudge: rendered.nudge,
-      threadRootId: threadRootByEventId.get(eventId) ?? (pendingEdit ? event.threadRootId ?? threadRootByEventId.get(content['m.relates_to']?.event_id ?? '') : undefined),
+      threadRootId: threadRootByEventId.get(eventId) ?? (event.threadRootId !== eventId ? event.threadRootId : undefined) ?? (pendingEdit ? threadRootByEventId.get(content['m.relates_to']?.event_id ?? '') : undefined),
       isThreadRoot: threadRootIds.has(eventId),
       replyTo: replyEventId
         ? {
@@ -523,9 +538,7 @@ function messagesForEvents(
     .filter((candidate) => candidate.userId !== userId)
     .slice(0, 100);
   const memberById = new Map(joinedReaders.map((member) => [member.userId, member]));
-  const getReceipt = (room as unknown as {
-    getReadReceiptForUserId?: (memberId: string) => { eventId: string } | null;
-  }).getReadReceiptForUserId?.bind(room);
+  const getReceipt = receiptSource.getReadReceiptForUserId?.bind(receiptSource);
   if (includeReadReceipts && getReceipt) {
     const targets = resolveReadReceiptTargets(
       events.flatMap((event) => event.getId() ?? []),
@@ -728,38 +741,97 @@ export function buildWorkspaceSnapshot(
         (eventId): eventId is string => typeof eventId === 'string',
       ) ?? [],
     );
-    const threads = (room as unknown as { getThreads?: () => Array<{
-      id: string;
-      length: number;
-      events: MatrixEvent[];
-      lastEvent?: MatrixEvent;
-    }> }).getThreads?.() ?? [];
+    const threads = (room as unknown as { getThreads?: () => SnapshotThread[] }).getThreads?.() ?? [];
+    const sdkThreadIds = new Set(threads.map((thread) => thread.id));
+    const threadViews = new Map([...(cache?.threadHistory.values() ?? [])]
+      .filter((view) => view.roomId === room.roomId).map((view) => [view.rootId, view]));
     const localThreads = new Map<string, MatrixEvent[]>();
     for (const event of localEvents) {
       const relation = originalEventContent(event)['m.relates_to'];
-      const rootId = event.threadRootId ?? (relation?.rel_type === 'm.thread' ? relation.event_id : undefined);
+      const rootId = event.threadRootId ?? (['m.thread', 'io.element.thread'].includes(relation?.rel_type ?? '') ? relation?.event_id : undefined);
       if (!rootId) continue;
       localThreads.set(rootId, [...(localThreads.get(rootId) ?? []), event]);
     }
-    const allThreads = [...threads, ...[...localThreads.keys()].filter((id) => !threads.some((thread) => thread.id === id)).map((id) => ({ id, length: 0, events: [] as MatrixEvent[], lastEvent: undefined }))];
+    const allThreads: SnapshotThread[] = [...threads, ...[...new Set([...localThreads.keys(), ...threadViews.keys()])]
+      .filter((id) => !threads.some((thread) => thread.id === id)).map((id) => ({ id, length: 0, events: [] }))];
     for (const thread of allThreads) {
       const rootId = thread.id;
-      const replies = messagesForEvents(room, userId, pinnedIds, mergeEvents(thread.events, localThreads.get(rootId) ?? []))
-        .filter((message) => message.id !== rootId && message.threadRootId === rootId);
+      const view = threadViews.get(rootId);
+      const sameRoom = (event: MatrixEvent) => !event.getRoomId?.() || event.getRoomId() === room.roomId;
+      const liveEvents = thread.events.filter(sameRoom);
+      const localReplies = localThreads.get(rootId) ?? [];
+      const rootEvent = view?.root ?? thread.rootEvent ?? liveEvents.find((event) => event.getId() === rootId) ?? room.findEventById?.(rootId)
+        ?? room.getLiveTimeline().getEvents().find((event) => event.getId() === rootId);
+      const validRoot = rootEvent?.getId() === rootId && sameRoom(rootEvent) ? rootEvent : undefined;
+      const bundled = validRoot?.getServerAggregatedRelation?.<{ count?: unknown; current_user_participated?: unknown }>('m.thread')
+        ?? validRoot?.getServerAggregatedRelation?.<{ count?: unknown; current_user_participated?: unknown }>('io.element.thread');
+      const bundledCount = typeof bundled?.count === 'number' && Number.isSafeInteger(bundled.count) && bundled.count >= 0 ? bundled.count : undefined;
+      const knownRemoved = [validRoot, thread.rootEvent, room.findEventById?.(rootId)].some((event) => event?.getId() === rootId && sameRoom(event) && event.isRedacted());
+      const rootStatus = knownRemoved ? 'removed' : view?.rootStatus ?? (validRoot ? 'found' : 'unavailable');
+      const root = validRoot && rootStatus !== 'removed' && rootStatus !== 'unavailable'
+        ? messagesForEvents(room, userId, pinnedIds, [validRoot])[0] : undefined;
+      const selected = boundedTimelineEvents(mergeEvents(
+        (view?.events ?? liveEvents).filter((event) => event.getId() !== rootId && sameRoom(event)),
+        !view || view.state.mode === 'live' ? localReplies : [],
+      ));
+      // Reuse SDK relation aggregation so edits and reactions loaded outside the
+      // selected reply page still transform their original, including E2EE.
+      const selectedIds = new Set(selected.map((event) => event.getId()));
+      const supplements: MatrixEvent[] = [];
+      for (const event of [...selected, ...(validRoot ? [validRoot] : [])]) {
+        for (const source of [thread.timelineSet?.relations, room.getUnfilteredTimelineSet?.().relations]) {
+          for (const child of source?.getAllChildEventsForEvent(event.getId()!) ?? []) {
+            if (selected.length + supplements.length >= HISTORY_RAW_LIMIT) break;
+            const relation = historyRelation(child);
+            if (!selectedIds.has(child.getId()) && sameRoom(child) && !isVisibleTimelineEvent(child) && child.status !== 'cancelled' && !child.isRedacted()
+              && (relation?.rel_type === 'm.annotation' || relation?.rel_type === 'm.replace')) {
+              supplements.push(child); selectedIds.add(child.getId());
+            }
+          }
+        }
+      }
+      const transformed = messagesForEvents(room, userId, pinnedIds, [...(validRoot ? [validRoot] : []), ...selected, ...supplements], true, thread);
+      const replies = transformed.filter((message) => message.id !== rootId && message.threadRootId === rootId).map((message) =>
+        message.replyTo?.eventId === rootId && (rootStatus === 'removed' || rootStatus === 'unavailable')
+          ? { ...message, replyTo: { eventId: rootId, senderName: 'Earlier message', body: rootStatus === 'removed' ? 'This message was removed.' : 'Open the original message' } }
+          : message);
       // SDK 42 chronological threads include cancelled local replies in length.
       // Correct the view without mutating its private counters/timeline handlers.
-      const cancelledReplies = thread.events.filter((event) =>
+      const cancelledReplies = liveEvents.filter((event) =>
         event.status === 'cancelled' && event.threadRootId === rootId &&
-        event.getId() !== thread.lastEvent?.getId() &&
+        event.getId() !== thread.replyToEvent?.getId() &&
         ['m.thread', 'io.element.thread'].includes(originalEventContent(event)['m.relates_to']?.rel_type ?? ''),
       ).length;
-      const supplementalReplies = mergeEvents(thread.events, localThreads.get(rootId) ?? []).slice(thread.events.length).filter((event) => event.status !== null && event.status !== 'sent' && originalEventContent(event)['m.relates_to']?.rel_type === 'm.thread').length;
-      const replyCount = Math.max(0, thread.length - cancelledReplies + supplementalReplies, replies.filter((message) => !message.pendingEdit).length);
-      if (!replies.length && replyCount === 0) continue;
-      const latestReply = replies.at(-1);
+      const supplementalReplies = mergeEvents(liveEvents, localReplies).slice(liveEvents.length).filter((event) => event.status !== null && event.status !== 'sent' && ['m.thread', 'io.element.thread'].includes(originalEventContent(event)['m.relates_to']?.rel_type ?? '')).length;
+      const viewCount = typeof view?.replyCount === 'number' && Number.isSafeInteger(view.replyCount) && view.replyCount >= 0 ? view.replyCount : undefined;
+      const totalCount = viewCount ?? (sdkThreadIds.has(rootId) ? thread.length - cancelledReplies : bundledCount);
+      const replyCount = Math.max(0, (totalCount ?? 0) + supplementalReplies, replies.filter((message) => !message.pendingEdit).length);
+      const replyCountIsLowerBound = viewCount !== undefined ? view?.replyCountIsLowerBound === true
+        : totalCount === undefined && (!view || rootStatus === 'loading' || rootStatus === 'unavailable' || Boolean(view.state.loading || view.state.error || view.state.canLoadOlder || view.state.canLoadNewer));
+      if (!replies.length && replyCount === 0 && !view) continue;
+      const liveSelection = boundedTimelineEvents(mergeEvents(mergeEvents(liveEvents, view?.state.mode === 'live' ? view.events.filter(sameRoom) : []), localReplies));
+      const cachedLatest = view?.latestEvent;
+      const latestRelation = cachedLatest && historyRelation(cachedLatest);
+      const validCachedLatest = cachedLatest && cachedLatest.getRoomId?.() === room.roomId && cachedLatest.getId() !== rootId && !cachedLatest.status && !cachedLatest.isRedacted()
+        && (['m.thread', 'io.element.thread'].includes(latestRelation?.rel_type ?? '') && latestRelation?.event_id === rootId || cachedLatest.getType() === 'm.room.encrypted' && cachedLatest.threadRootId === rootId)
+        ? cachedLatest : undefined;
+      const latestEvent = validCachedLatest ?? thread.replyToEvent;
+      const latestMessages = messagesForEvents(room, userId, pinnedIds, mergeEvents(liveSelection, latestEvent && sameRoom(latestEvent) ? [latestEvent] : []))
+        .filter((message) => message.id !== rootId && message.threadRootId === rootId && !message.pendingEdit);
+      const latestReply = latestMessages.at(-1) ?? (!view || view.state.mode === 'live' ? replies.filter((message) => !message.pendingEdit).at(-1) : undefined);
+      const participated = view?.participated ?? thread.hasCurrentUserParticipated ?? (typeof bundled?.current_user_participated === 'boolean' ? bundled.current_user_participated : undefined)
+        ?? (validRoot?.getSender() === userId || [...latestMessages, ...replies].some((message) => message.isOwn && message.delivery === 'accepted') ? true : undefined);
       const summary: ThreadSummary = {
         rootId,
+        roomId: room.roomId,
+        root: root ? transformed.find((message) => message.id === rootId) ?? root : undefined,
+        rootStatus: rootStatus === 'found' && !root ? 'unavailable' : rootStatus,
+        history: view ? { ...view.state } : undefined,
+        participated,
+        latestActivity: Math.max(validRoot?.getTs() ?? 0, latestReply?.timestamp ?? 0),
+        latestReplyEventId: validCachedLatest?.getId() ?? latestMessages.filter((message) => !message.isOwn || message.delivery === 'accepted').at(-1)?.id,
         replyCount,
+        replyCountIsLowerBound: replyCountIsLowerBound || undefined,
         unreadCount: room.getThreadUnreadNotificationCount?.(rootId, 'total' as NotificationCountType) ?? 0,
         highlighted: (room.getThreadUnreadNotificationCount?.(rootId, 'highlight' as NotificationCountType) ?? 0) > 0,
         messages: replies,
@@ -777,7 +849,7 @@ export function buildWorkspaceSnapshot(
     if (messages.some((message) => threadsByRoot[message.id])) {
       messagesByRoom[room.roomId] = messages.map((message) => {
         const thread = threadsByRoot[message.id];
-        return thread ? { ...message, isThreadRoot: true, thread: { replyCount: thread.replyCount, unreadCount: thread.unreadCount, highlighted: thread.highlighted, latestReply: thread.latestReply } } : message;
+        return thread ? { ...message, isThreadRoot: true, thread: { replyCount: thread.replyCount, replyCountIsLowerBound: thread.replyCountIsLowerBound, unreadCount: thread.unreadCount, highlighted: thread.highlighted, latestReply: thread.latestReply } } : message;
       });
     }
     const cachedMembers = cache?.members.get(room.roomId);

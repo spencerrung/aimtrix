@@ -8,6 +8,7 @@ export interface ShellRoute {
   roomId?: string;
   spaceId?: string;
   threadRootId?: string;
+  threadEventId?: string;
   eventId?: string;
 }
 
@@ -23,6 +24,7 @@ const entryLimit = 100;
 interface Entry {
   route: ShellRoute;
   reading?: ShellReadingPosition;
+  threadReading?: ShellReadingPosition;
   previous?: number;
   next?: number;
 }
@@ -33,7 +35,12 @@ function sameDestination(left: ShellRoute, right: ShellRoute) {
 
 function sameRoute(left: ShellRoute, right: ShellRoute) {
   return sameDestination(left, right) && left.surface === right.surface &&
-    left.panel === right.panel && left.threadRootId === right.threadRootId;
+    left.panel === right.panel && left.threadRootId === right.threadRootId && left.threadEventId === right.threadEventId;
+}
+
+function sameThreadDestination(left: ShellRoute, right: ShellRoute) {
+  return Boolean(left.threadRootId) && left.roomId === right.roomId &&
+    left.threadRootId === right.threadRootId && left.threadEventId === right.threadEventId;
 }
 
 function copyReading(reading?: ShellReadingPosition): ShellReadingPosition | undefined {
@@ -58,6 +65,7 @@ function stateRecord(value: unknown): Record<string, unknown> {
 export function useShellNavigation(initialRoute: ShellRoute) {
   const [view, setView] = useState(() => ({
     route: initialRoute, entryId: 0, reading: undefined as ShellReadingPosition | undefined,
+    threadReading: undefined as ShellReadingPosition | undefined,
     canGoBack: initialRoute.surface !== 'list', canGoForward: false,
   }));
   const [session] = useState(() => `shell-${Date.now()}-${Math.random().toString(36).slice(2)}`);
@@ -78,6 +86,7 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     const entry = navigation.entries.get(navigation.current)!;
     setView({
       route: entry.route, entryId: navigation.current, reading: copyReading(entry.reading),
+      threadReading: copyReading(entry.threadReading),
       canGoBack: !navigation.traversing && (entry.previous !== undefined || entry.route.surface !== 'list'),
       canGoForward: !navigation.traversing && entry.next !== undefined,
     });
@@ -117,10 +126,11 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     if (sameRoute(current.route, next)) return;
     if (!historyMatchesCurrent()) navigation.browserUsable = false;
     const enteringContext = next.surface === 'context' && current.route.surface !== 'context';
+    const changingThread = current.route.panel === 'thread' && next.panel === 'thread' && !sameThreadDestination(current.route, next);
     // Contextual tools replace one another; different rooms/message links are
     // destinations even when both happen to be displayed in contextual routes.
     const replace = !enteringContext && (options.replace ??
-      (current.route.surface === 'context' && next.surface === 'context' && sameDestination(current.route, next)));
+      (current.route.surface === 'context' && next.surface === 'context' && sameDestination(current.route, next) && !changingThread));
     if (!replace) {
       let future = current.next;
       while (future !== undefined) {
@@ -156,6 +166,7 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     navigation.entries.set(entry, {
       route: { ...next },
       reading: sameDestination(current.route, next) ? copyReading(current.reading) : undefined,
+      threadReading: sameThreadDestination(current.route, next) ? copyReading(current.threadReading) : undefined,
       previous: parent, next: following,
     });
     if (parent !== undefined) navigation.entries.get(parent)!.next = entry;
@@ -258,5 +269,12 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     if (entry) entry.reading = copyReading(reading);
   }, []);
 
-  return { ...view, navigate, back, forward, remember };
+  const rememberThread = useCallback((reading?: ShellReadingPosition, entryId?: number) => {
+    const navigation = navigationRef.current;
+    if (!navigation.mounted) return;
+    const entry = navigation.entries.get(entryId ?? navigation.current);
+    if (entry?.route.threadRootId) entry.threadReading = copyReading(reading);
+  }, []);
+
+  return { ...view, navigate, back, forward, remember, rememberThread };
 }

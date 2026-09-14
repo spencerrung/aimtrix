@@ -77,13 +77,14 @@ function renderWorkspace(
     profilePersonalization?: ProfilePersonalization;
     pushRoute?: PushRoute;
     onRoomSelected?: (roomId: string) => Promise<void>;
+    onThreadSelected?: (roomId: string, rootId: string, eventId?: string) => Promise<void>;
     onLoadRoomHistory?: (roomId: string, direction: 'backward' | 'forward') => Promise<void>;
     onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
     onReturnToLive?: (roomId: string) => Promise<void>;
     onHistoryDetached?: (roomId: string, detached: boolean) => void;
     onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
     onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
-    onResolveNavigationTarget?: (target: import('../../matrix/matrixLinks').MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
+    onResolveNavigationTarget?: (target: import('../../matrix/matrixLinks').MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string; threadRootId?: string }>;
     onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
     onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
     onSendMessage?: (
@@ -130,6 +131,7 @@ function renderWorkspace(
       onInviteToRoom={overrides.onInviteToRoom}
       pushRoute={overrides.pushRoute}
       onRoomSelected={overrides.onRoomSelected}
+      onThreadSelected={overrides.onThreadSelected}
       onLoadRoomHistory={overrides.onLoadRoomHistory}
       onOpenEventContext={overrides.onOpenEventContext}
       onReturnToLive={overrides.onReturnToLive}
@@ -1737,18 +1739,21 @@ describe('Workspace history navigation', () => {
     expect(onMarkRoomRead).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps a usable Back action and thread draft when a routed thread root leaves the loaded window', async () => {
+  it('keeps the independent thread root and draft when the root leaves the room window', async () => {
     vi.stubGlobal('innerWidth', 1024);
     const workspace = historyWorkspace('live');
     const { rerenderWorkspace } = renderWorkspace({ workspace });
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Synthetic retained thread draft' } });
     const removed = structuredClone(workspace);
+    removed.threadsByRoot.m2.root = workspace.messagesByRoom.welcome.find((message) => message.id === 'm2');
+    removed.threadsByRoot.m2.rootStatus = 'found';
     removed.messagesByRoom.welcome = removed.messagesByRoom.welcome.filter((message) => message.id !== 'm2');
     removed.historyByRoom!.welcome.revision++;
     rerenderWorkspace(removed);
     const fallback = screen.getByRole('complementary', { name: 'Thread' });
-    expect(within(fallback).getByRole('status')).toHaveTextContent('This thread is no longer in the loaded conversation');
+    expect(fallback.querySelector('.thread-panel__root')).toHaveTextContent(removed.threadsByRoot.m2.root!.body);
+    expect(within(fallback).getByLabelText('Message thread')).toHaveValue('Synthetic retained thread draft');
     expect(within(fallback).getByRole('button', { name: 'Close thread' })).toBeVisible();
     fireEvent.click(within(fallback).getByRole('button', { name: 'Close thread' }));
     await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
@@ -2316,6 +2321,32 @@ describe('Workspace read bookkeeping', () => {
 describe('Workspace quick navigation', () => {
   beforeEach(() => { localStorage.clear(); vi.stubGlobal('innerWidth', 1280); });
   afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it('opens an unloaded thread from a message link before any thread summary exists', async () => {
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix'; workspace.threadsByRoot = {};
+    const pending = pendingSend();
+    const onThreadSelected = vi.fn().mockReturnValue(pending.promise);
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    const onResolveNavigationTarget = vi.fn().mockResolvedValue({ roomId: 'welcome', threadRootId: '$unloaded-root', eventId: '$unloaded-reply' });
+    renderWorkspace({ workspace, pushRoute: { roomId: 'welcome', eventId: '$unloaded-reply' }, onThreadSelected, onOpenEventContext, onResolveNavigationTarget });
+    await waitFor(() => expect(onThreadSelected).toHaveBeenCalledWith('welcome', '$unloaded-root', '$unloaded-reply'));
+    expect(screen.getByRole('complementary', { name: 'Thread' })).toBeVisible();
+    expect(onOpenEventContext).not.toHaveBeenCalled();
+    await act(async () => pending.resolve());
+  });
+
+  it.each(['removed', 'unavailable'] as const)('honors a %s thread root even when an older main-window copy remains loaded', async (rootStatus) => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.threadsByRoot.m2.rootStatus = rootStatus;
+    workspace.threadsByRoot.m2.root = undefined;
+    const oldBody = workspace.messagesByRoom.welcome.find((message) => message.id === 'm2')!.body;
+    renderWorkspace({ workspace });
+    fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const panel = screen.getByRole('complementary', { name: 'Thread' });
+    expect(within(panel).queryByText(oldBody)).not.toBeInTheDocument();
+    expect(within(panel).getByText(new RegExp(`original message.*${rootStatus}`, 'i'))).toBeVisible();
+    await act(async () => {});
+  });
 
   it.each([
     ['matrix:roomid/synthetic:example.org/e/opaque.!', '$opaque.!'],

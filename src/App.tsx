@@ -273,6 +273,12 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
         onRoomSelected={(roomId) => controller.openRoomHistory(roomId)}
+        onThreadSelected={(roomId, rootId, eventId) => controller.openThreadHistory(roomId, rootId, eventId)}
+        onLoadThreadHistory={(roomId, rootId, direction) => controller.loadThreadHistory(roomId, rootId, direction)}
+        onReturnThreadToLive={(roomId, rootId) => controller.returnThreadToLive(roomId, rootId)}
+        onThreadHistoryDetached={(roomId, rootId, detached) => controller.setThreadHistoryDetached(roomId, rootId, detached)}
+        onCloseThreadHistory={() => controller.closeThreadHistory()}
+        onSendThreadMessage={(roomId, rootId, body, mentions) => controller.sendThreadMessage(roomId, rootId, body, mentions)}
         onLoadRoomHistory={(roomId, direction) => controller.loadRoomHistory(roomId, direction)}
         onOpenEventContext={(roomId, eventId) => controller.openEventContext(roomId, eventId)}
         onReturnToLive={(roomId) => controller.returnToLive(roomId)}

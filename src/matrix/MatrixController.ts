@@ -38,6 +38,8 @@ import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
 import { isMatrixNavigationTarget, type MatrixNavigationTarget } from './matrixLinks';
 import { RoomHistory } from './RoomHistory';
+import { ThreadHistory } from './ThreadHistory';
+import { historyRelation, isVisibleTimelineEvent } from './historyEvents';
 import {
   matrixFormattedMessage,
   matrixReplyFormattedBody,
@@ -225,6 +227,10 @@ export class MatrixController {
   private threadSupport = 0;
   private readonly snapshotCache = createWorkspaceSnapshotCache();
   private readonly roomHistory = new RoomHistory(() => this.client, this.snapshotCache.history, (roomId) => {
+    this.bumpRoomVersion(roomId);
+    this.scheduleWorkspacePublish();
+  });
+  private readonly threadHistory = new ThreadHistory(() => this.client, this.snapshotCache.threadHistory, (roomId) => {
     this.bumpRoomVersion(roomId);
     this.scheduleWorkspacePublish();
   });
@@ -1418,7 +1424,13 @@ export class MatrixController {
     }
   }
 
-  public openRoomHistory(roomId: string): Promise<void> { return this.roomHistory.open(roomId); }
+  public openRoomHistory(roomId: string): Promise<void> { this.threadHistory.roomSelected(roomId); return this.roomHistory.open(roomId); }
+
+  public openThreadHistory(roomId: string, rootId: string, eventId?: string): Promise<void> { return this.threadHistory.open(roomId, rootId, eventId); }
+  public loadThreadHistory(roomId: string, rootId: string, direction: 'backward' | 'forward' = 'backward'): Promise<void> { return this.threadHistory.load(roomId, rootId, direction); }
+  public returnThreadToLive(roomId: string, rootId: string): Promise<void> { return this.threadHistory.latest(roomId, rootId); }
+  public setThreadHistoryDetached(roomId: string, rootId: string, detached: boolean): void { this.threadHistory.detach(roomId, rootId, detached); }
+  public closeThreadHistory(): void { this.threadHistory.close(); }
 
   public loadRoomHistory(roomId: string, direction: 'backward' | 'forward' = 'backward'): Promise<void> {
     return this.roomHistory.load(roomId, direction);
@@ -1756,7 +1768,7 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
-  public async resolveNavigationTarget(target: MatrixNavigationTarget): Promise<{ roomId: string; eventId?: string }> {
+  public async resolveNavigationTarget(target: MatrixNavigationTarget): Promise<{ roomId: string; eventId?: string; threadRootId?: string }> {
     if (!isMatrixNavigationTarget(target)) throw new Error('That Matrix link is not supported.');
     const client = this.client;
     const revision = this.lifecycleRevision;
@@ -1782,7 +1794,26 @@ export class MatrixController {
     if (!room || room.getMyMembership() !== 'join' || room.getType() === 'm.space') {
       throw new Error('Join this conversation before opening its Matrix link.');
     }
-    return { roomId: room.roomId, ...(eventId ? { eventId } : {}) };
+    let threadRootId: string | undefined;
+    if (eventId) {
+      try {
+        let event = room.findEventById(eventId);
+        if (!event) {
+          const raw = await client.fetchRoomEvent(room.roomId, eventId);
+          if (raw.event_id === eventId && (!raw.room_id || raw.room_id === room.roomId)) event = client.getEventMapper()({ ...raw, room_id: room.roomId });
+        }
+        if (event) {
+          await client.decryptEventIfNeeded(event).catch(() => undefined);
+          if (event.getRoomId() === room.roomId && !event.status) {
+            const relation = historyRelation(event);
+            if (relation?.rel_type === 'm.thread' && validUnreadEventId(relation.event_id)) threadRootId = relation.event_id;
+            else if (room.getThread(eventId) || event.isThreadRoot) threadRootId = eventId;
+          }
+        }
+      } catch { /* Ordinary context exposes unavailable events without disclosing server details. */ }
+      if (this.client !== client || this.lifecycleRevision !== revision || client.getRoom(room.roomId) !== room || room.getMyMembership() !== 'join') throw new Error('The Matrix session or conversation changed. Try again.');
+    }
+    return { roomId: room.roomId, ...(eventId ? { eventId } : {}), ...(threadRootId ? { threadRootId } : {}) };
   }
 
   public async setRoomFavorite(roomId: string, favorite: boolean): Promise<void> {
@@ -1942,7 +1973,7 @@ export class MatrixController {
         onProgress?.(progress.loaded, progress.total || file.size),
     };
     const sendAttachment = (content: RoomMessageEventContent) => threadRootId
-      ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, content)
+      ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, { ...content, ...this.threadMessageRelation(roomId, threadRootId) } as RoomMessageEventContent)
       : client.sendMessage(roomId, content);
 
     try {
@@ -2246,6 +2277,36 @@ export class MatrixController {
     await this.setMarkedUnread(client, roomId, true, eventId);
   }
 
+  private threadMessageRelation(roomId: string, rootId: string) {
+    const view = this.snapshotCache.threadHistory.get(rootId);
+    const cached = view?.roomId === roomId ? view.latestEvent : undefined;
+    const sdkEvents = this.client?.getRoom(roomId)?.getThread(rootId)?.events ?? [];
+    const accepted = (event: MatrixEvent) => !event.status && !event.isRedacted() && event.getRoomId() === roomId
+      && historyRelation(event)?.rel_type === 'm.thread' && historyRelation(event)?.event_id === rootId;
+    const latest = cached && accepted(cached) ? cached : [...sdkEvents].reverse().find(accepted);
+    const fallback = latest?.getId();
+    return { 'm.relates_to': { rel_type: 'm.thread' as const, event_id: rootId, is_falling_back: true,
+      'm.in_reply_to': { event_id: validUnreadEventId(fallback) ? fallback : rootId } } };
+  }
+
+  public async sendThreadMessage(roomId: string, rootId: string, body: string, mentions: MatrixMessageMention[] = []): Promise<void> {
+    const message = body.trim();
+    if (!message) return;
+    const client = this.client;
+    const sdk = this.sdk;
+    if (!client || !sdk || !validUnreadEventId(rootId)) throw new MessageSendError(false);
+    const room = this.messageRoom(client, roomId);
+    if (room.getMyMembership() !== 'join' || room.hasPendingEvent(rootId)) throw new MessageSendError(false);
+    const formatted = matrixFormattedMessage(message, mentions, []);
+    await this.sendTrackedMessage(client, room, (txnId) => client.sendEvent(roomId, rootId, sdk.EventType.RoomMessage, {
+      msgtype: sdk.MsgType.Text, body: formatted.body,
+      ...this.threadMessageRelation(roomId, rootId),
+      ...(formatted.usedMentionUserIds.length ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } } : {}),
+      ...(formatted.formattedBody ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody } : {}),
+    } as RoomMessageEventContent, txnId));
+    this.scheduleWorkspacePublish();
+  }
+
   public async sendReply(
     roomId: string,
     body: string,
@@ -2322,10 +2383,13 @@ export class MatrixController {
     const client = this.client;
     const room = client?.getRoom(roomId);
     const thread = room?.getThread(rootId);
+    const history = this.snapshotCache.threadHistory.get(rootId);
+    if (history && (history.roomId !== roomId || history.state.mode !== 'live' || history.state.loading)) return;
     const inThread = (event: MatrixEvent) => event.threadRootId === rootId &&
       (!this.sdk?.inMainTimelineForReceipt || !this.sdk.inMainTimelineForReceipt(event));
-    const latest = thread ? [...thread.events].reverse().find((event) => inThread(event) && !event.status && validUnreadEventId(event.getId())) : undefined;
-    const event = options.eventId ? thread?.events.find((candidate) => candidate.getId() === options.eventId) : latest;
+    const events = history?.events ?? thread?.events ?? [];
+    const latest = [...events].reverse().find((event) => inThread(event) && !event.status && validUnreadEventId(event.getId()) && isVisibleTimelineEvent(event));
+    const event = options.eventId ? events.find((candidate) => candidate.getId() === options.eventId) : latest;
     const eventId = event?.getId();
     if (!client || !room || !event || !validUnreadEventId(eventId) || event.status || eventId === rootId ||
         !inThread(event)) return;
@@ -2349,7 +2413,10 @@ export class MatrixController {
       await sendConfirmedReceipt(client, event, receiptType, rootId);
       if (!active()) return;
       this.lastReadReceiptByRoom.set(scope, eventId);
-      if (thread && [...thread.events].reverse().find((candidate) => inThread(candidate) && !candidate.status)?.getId() === eventId) {
+      const currentHistory = this.snapshotCache.threadHistory.get(rootId);
+      const currentEvents = currentHistory?.events ?? thread?.events ?? [];
+      const currentLatest = currentHistory?.latestEvent ?? [...currentEvents].reverse().find((candidate) => inThread(candidate) && !candidate.status && isVisibleTimelineEvent(candidate));
+      if ((!currentHistory || currentHistory.state.mode === 'live' && !currentHistory.state.loading) && currentLatest?.getId() === eventId) {
         room.setThreadUnreadNotificationCount(rootId, 'total' as NotificationCountType, 0);
         room.setThreadUnreadNotificationCount(rootId, 'highlight' as NotificationCountType, 0);
       }
@@ -2681,6 +2748,7 @@ export class MatrixController {
 
   private async stopCurrentClient(): Promise<void> {
     this.roomHistory.clear();
+    this.threadHistory.clear();
     this.retryingMessages = new WeakSet();
     this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
@@ -2826,6 +2894,7 @@ export class MatrixController {
   private readonly handleTimelineReset = (room: Room | undefined): void => {
     if (!room) return;
     this.roomHistory.refresh(room);
+    this.threadHistory.refresh(room);
     this.bumpRoomVersion(room.roomId);
     this.scheduleWorkspacePublish();
   };
@@ -2837,7 +2906,7 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
-    if (room) this.roomHistory.refresh(room);
+    if (room) { this.roomHistory.refresh(room); this.threadHistory.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); }
     if (room && this.client?.getRoom(room.roomId) === room) {
       const events = this.snapshotCache.localEvents.get(room.roomId);
       for (const [txnId, localEvent] of events ?? []) {
@@ -2993,12 +3062,18 @@ export class MatrixController {
     this.playMessageTone();
   }
 
+  private readonly handleThreadSyncEvent = (event: MatrixEvent): void => {
+    const room = this.client?.getRoom(event.getRoomId());
+    if (room) this.threadHistory.observe(event, room, true);
+  };
+
   private readonly handleDecrypted = (event: MatrixEvent): void => {
     const roomId = event.getRoomId();
     const eventId = event.getId();
     const room = roomId && eventId ? this.client?.getRoom(roomId) : undefined;
-    if (!eventId || !room?.findEventById(eventId)) return;
+    if (!eventId || !room || (!room.findEventById(eventId) && !this.threadHistory.hasEvent(room.roomId, eventId))) return;
     this.roomHistory.refresh(room);
+    this.threadHistory.observe(event, room);
     this.bumpRoomVersion(roomId);
     this.scheduleWorkspacePublish();
     if (eventId && roomId && this.liveEncryptedMessages.delete(eventId)) {
@@ -3044,7 +3119,7 @@ export class MatrixController {
   private readonly handleRoomState = (event: MatrixEvent): void => {
     const roomId = event.getRoomId();
     const room = roomId ? this.client?.getRoom(roomId) : undefined;
-    if (room) this.roomHistory.refresh(room);
+    if (room) { this.roomHistory.refresh(room); this.threadHistory.refresh(room); }
     this.bumpRoomVersion(event.getRoomId());
     this.scheduleWorkspacePublish();
   };
@@ -3078,6 +3153,7 @@ export class MatrixController {
   };
 
   private readonly handleThreadUpdate = (thread: { room: Room }): void => {
+    this.threadHistory.refresh(thread.room);
     this.bumpRoomVersion(thread.room.roomId);
     this.scheduleWorkspacePublish();
   };
@@ -3132,6 +3208,7 @@ export class MatrixController {
     this.client.on(this.sdk.RoomStateEvent.Events, this.handleRoomState);
     this.client.on(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.on(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
+    if (this.sdk.ClientEvent) this.client.on(this.sdk.ClientEvent.Event, this.handleThreadSyncEvent);
     this.client.on('Call.incoming' as any, this.handleIncomingCall as any);
     this.client.getRooms().forEach((room) => this.attachThreadListeners(room));
   }
@@ -3152,6 +3229,7 @@ export class MatrixController {
     this.client.removeListener(this.sdk.RoomStateEvent.Events, this.handleRoomState);
     this.client.removeListener(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.removeListener(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
+    if (this.sdk.ClientEvent) this.client.removeListener(this.sdk.ClientEvent.Event, this.handleThreadSyncEvent);
     this.client.removeListener('Call.incoming' as any, this.handleIncomingCall as any);
     this.detachThreadListeners();
   }

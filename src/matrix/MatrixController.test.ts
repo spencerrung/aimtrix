@@ -799,7 +799,7 @@ describe('MatrixController protocol integration', () => {
   });
 
   it('marks the latest thread event read without advancing the main timeline', async () => {
-    const latest = { getId: () => '$thread-reply:test', getRoomId: () => '!room:test', threadRootId: '$root:test' };
+    const latest = new MatrixEvent({ event_id: '$thread-reply:test', room_id: '!room:test', sender: '@peer:test', type: 'm.room.message', content: { msgtype: 'm.text', body: 'Synthetic reply', 'm.relates_to': { rel_type: 'm.thread', event_id: '$root:test' } } });
     const authedRequest = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, {
