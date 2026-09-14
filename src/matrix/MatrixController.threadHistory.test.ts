@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MatrixClient, Room } from 'matrix-js-sdk';
-import { MatrixEvent } from 'matrix-js-sdk/lib/models/event.js';
+import { MatrixEvent, type IEvent } from 'matrix-js-sdk/lib/models/event.js';
+import { createClient, Room as SDKRoom } from 'matrix-js-sdk';
+import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
 import { MatrixController } from './MatrixController';
 import type { ThreadHistoryView } from './ThreadHistory';
+import { buildWorkspaceSnapshot, type WorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 
 const roomId = '!thread:test';
 const rootId = '$root';
@@ -116,6 +119,56 @@ describe('MatrixController thread history integration', () => {
     resolve({}); await reading;
     expect(test.client.http.authedRequest).toHaveBeenCalledWith('POST', '/rooms/!thread%3Atest/receipt/m.read/%24reply', undefined, { thread_id: rootId });
     expect(test.room.setThreadUnreadNotificationCount).not.toHaveBeenCalled();
+  });
+
+  it('keeps one accepted retry in the snapshot after SDK ownership while the first relations page is pending', async () => {
+    const userId = '@self:test';
+    const client = createClient({ baseUrl: 'https://matrix.example.test', userId, timelineSupport: true });
+    const room = new SDKRoom(roomId, client, userId, { timelineSupport: true });
+    vi.spyOn(client, 'getRoomPushRule').mockReturnValue(undefined);
+    vi.spyOn(room, 'getType').mockReturnValue(undefined);
+    client.store.storeRoom(room);
+    room.updateMyMembership('join' as Parameters<typeof room.updateMyMembership>[0]);
+    const root = new MatrixEvent({ event_id: rootId, room_id: roomId, sender: userId, type: 'm.room.message', content: { msgtype: 'm.text', body: 'Synthetic root' } });
+    room.getUnfilteredTimelineSet().addLiveEvent(root, { addToState: false });
+    const reply = new MatrixEvent({ event_id: '~local', room_id: roomId, sender: userId, type: 'm.room.message',
+      content: { msgtype: 'm.text', body: 'Synthetic retry', 'm.relates_to': { rel_type: 'm.thread', event_id: rootId } } });
+    reply.setTxnId('synthetic-retry'); reply.setStatus(EventStatus.NOT_SENT);
+    let resolvePage!: (value: Awaited<ReturnType<MatrixClient['fetchRelations']>>) => void;
+    const page = new Promise<Awaited<ReturnType<MatrixClient['fetchRelations']>>>((resolve) => { resolvePage = resolve; });
+    vi.spyOn(client, 'fetchRelations').mockReturnValue(page);
+    vi.spyOn(client, 'decryptEventIfNeeded').mockResolvedValue(undefined);
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const internal = controller as unknown as {
+      client: MatrixClient; sdk: unknown; snapshotCache: WorkspaceSnapshotCache;
+      scheduleWorkspacePublish: () => void; handleLocalEcho: (event: MatrixEvent, room: SDKRoom) => void;
+    };
+    internal.client = client;
+    internal.sdk = { EventType: { RoomMessage: 'm.room.message' }, MsgType: { Text: 'm.text' } };
+    internal.scheduleWorkspacePublish = vi.fn();
+    internal.handleLocalEcho(reply, room);
+    const messages = () => buildWorkspaceSnapshot(client, 'online', [], [], internal.snapshotCache).threadsByRoot[rootId].messages;
+    const opening = controller.openThreadHistory(roomId, rootId);
+    await vi.waitFor(() => expect(client.fetchRelations).toHaveBeenCalled());
+    expect(messages()).toEqual([expect.objectContaining({ delivery: 'failed' })]);
+    vi.spyOn(client, 'resendEvent').mockImplementation(async () => {
+      reply.handleRemoteEcho({ ...reply.event, event_id: '$accepted-retry' });
+      // SDK remote echo transfers ownership before emitting LocalEchoUpdated.
+      vi.spyOn(room, 'findEventById').mockImplementation((id) => id === rootId ? root : id === reply.getId() ? reply : undefined);
+      internal.handleLocalEcho(reply, room);
+      return { event_id: reply.getId()! };
+    });
+    await controller.retryMessage(roomId, reply.getId()!);
+    expect(internal.snapshotCache.localEvents.size).toBe(0);
+    expect(messages()).toEqual([expect.objectContaining({ id: '$accepted-retry', delivery: 'accepted' })]);
+    expect(internal.snapshotCache.threadHistory.get(rootId)?.state.loading).toBe('latest');
+    const receipt = vi.spyOn(client.http, 'authedRequest');
+    await controller.markThreadRead(roomId, rootId, { eventId: '$accepted-retry' });
+    expect(receipt).not.toHaveBeenCalled();
+    resolvePage({ chunk: [reply.event as IEvent] });
+    await opening;
+    expect(messages()).toEqual([expect.objectContaining({ id: '$accepted-retry', delivery: 'accepted' })]);
+    expect(internal.snapshotCache.threadHistory.get(rootId)?.state.loading).toBeUndefined();
   });
 
 });

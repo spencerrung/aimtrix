@@ -30,6 +30,7 @@ interface Navigation {
   rootId: string;
   thread?: SDKThread;
   prepared: boolean;
+  hasLivePage: boolean;
   seenReplyIds: Set<string>;
   liveRevision: number;
   operationLiveRevision: number;
@@ -107,7 +108,7 @@ export class ThreadHistory {
     let entry = this.navigation.get(rootId);
     if (!entry || entry.client !== client || entry.room !== room) {
       const timeline = new ThreadPage([], rootId);
-      entry = { client, room, rootId, prepared: false, seenReplyIds: new Set(), liveRevision: 0, operationLiveRevision: 0, arrivals: [], live: timeline, pages: new Set([timeline]), older: cursorAt(timeline, 0), newer: cursorAt(timeline, 0), generation: 0, exhausted: new WeakMap() };
+      entry = { client, room, rootId, prepared: false, hasLivePage: false, seenReplyIds: new Set(), liveRevision: 0, operationLiveRevision: 0, arrivals: [], live: timeline, pages: new Set([timeline]), older: cursorAt(timeline, 0), newer: cursorAt(timeline, 0), generation: 0, exhausted: new WeakMap() };
       this.navigation.set(rootId, entry);
       this.views.delete(rootId);
       this.update(entry, {});
@@ -130,7 +131,9 @@ export class ThreadHistory {
 
   private begin(entry: Navigation, loading: Loading): number {
     entry.generation += 1;
-    entry.operationLiveRevision = entry.liveRevision;
+    // Until the first server page exists, retries still own every accepted
+    // arrival collected during initial root preparation.
+    entry.operationLiveRevision = entry.hasLivePage ? entry.liveRevision : 0;
     this.update(entry, { loading, error: undefined, errorDirection: undefined });
     return entry.generation;
   }
@@ -154,8 +157,8 @@ export class ThreadHistory {
     const count = typeof bundled?.count === 'number' && Number.isSafeInteger(bundled.count) && bundled.count >= 0 ? bundled.count : undefined;
     if (!this.current(entry, generation)) return false;
     entry.prepared = true;
-    this.update(entry, {}, undefined, { root, rootStatus: root.isRedacted() ? 'removed' : 'found', latestEvent,
-      ...(count !== undefined ? { replyCount: Math.max(count, entry.seenReplyIds.size), replyCountIsLowerBound: entry.seenReplyIds.size > count } : {}),
+    this.update(entry, {}, undefined, { root, rootStatus: root.isRedacted() ? 'removed' : 'found', latestEvent: entry.arrivals.length ? this.views.get(entry.rootId)?.latestEvent ?? latestEvent : latestEvent,
+      ...(count !== undefined ? { replyCount: Math.max(count, entry.seenReplyIds.size), replyCountIsLowerBound: entry.seenReplyIds.size > count || entry.liveRevision > entry.operationLiveRevision } : {}),
       ...(bundled?.current_user_participated === true ? { participated: true } : bundled?.current_user_participated === false && this.views.get(entry.rootId)?.participated !== true ? { participated: false } : {}),
     });
     return true;
@@ -165,7 +168,7 @@ export class ThreadHistory {
     const entry = this.select(roomId, rootId);
     const view = this.views.get(rootId)!;
     if (view.state.loading && (!eventId || eventId === view.state.targetEventId || (eventId === rootId && view.state.loading === 'latest'))) return;
-    if (entry.prepared && !eventId && !view.state.error) { this.refresh(entry.room); return; }
+    if (entry.prepared && (entry.hasLivePage || view.state.mode !== 'live') && !eventId && !view.state.error) { this.refresh(entry.room); return; }
     const generation = this.begin(entry, eventId && eventId !== rootId ? 'context' : 'latest');
     if (eventId && eventId !== rootId) this.update(entry, { mode: 'context', targetEventId: eventId, targetStatus: undefined });
     try {
@@ -230,7 +233,7 @@ export class ThreadHistory {
     if (!page || !this.current(entry, generation)) return;
     const arrivals = entry.arrivals.filter((arrival) => arrival.revision > revision).map((arrival) => arrival.event);
     page.events = [...new Map([...page.events, ...arrivals].map((event) => [event.getId(), event])).values()];
-    entry.pages.clear(); entry.pages.add(page); entry.live = page;
+    entry.pages.clear(); entry.pages.add(page); entry.live = page; entry.hasLivePage = true;
     const loaded = await this.collect(entry, generation, cursorAt(page, page.events.length), 'backward', PAGE_MESSAGES, { requests: 1, raw: 0, tokens: new Set() });
     if (!this.current(entry, generation)) return;
     const previousLatest = this.views.get(entry.rootId)?.latestEvent;
@@ -410,7 +413,7 @@ export class ThreadHistory {
       if (!page || !this.current(entry, generation)) return;
       budget.requests += 1;
       page.events = [...new Map([...page.events, ...entry.arrivals.filter((arrival) => arrival.revision > revision).map((arrival) => arrival.event)].map((event) => [event.getId(), event])).values()];
-      entry.live = page; this.retainPage(entry, page);
+      entry.live = page; entry.hasLivePage = true; this.retainPage(entry, page);
       const seen = new Set<string>();
       while (budget.requests < REQUEST_LIMIT) {
         if (page.events.some((event) => event.getId() === eventId)) { timeline = page; break; }
@@ -469,7 +472,7 @@ export class ThreadHistory {
   public observe(event: MatrixEvent, room: Room, live = false): void {
     if (this.getClient()?.getRoom(room.roomId) !== room || event.getRoomId() !== room.roomId || event.status) return;
     for (const entry of this.navigation.values()) {
-      if (entry.room !== room || !entry.prepared) continue;
+      if (entry.room !== room || entry.client !== this.getClient() || room.getMyMembership() !== 'join') continue;
       const view = this.views.get(entry.rootId);
       if (!view) continue;
       const candidates = [view.root, view.latestEvent, ...[...entry.pages].flatMap((page) => page.events)].filter((candidate): candidate is MatrixEvent => Boolean(candidate));
@@ -493,10 +496,15 @@ export class ThreadHistory {
       if (live && relation?.rel_type === 'm.thread' && relation.event_id === entry.rootId
         && !entry.live.events.some((candidate) => candidate.getId() === event.getId())) {
         entry.live.events.push(event);
+        if (entry.live.events.length > HISTORY_RAW_LIMIT) entry.live.events.splice(0, entry.live.events.length - HISTORY_RAW_LIMIT);
         entry.arrivals.push({ revision: ++entry.liveRevision, event });
         if (entry.arrivals.length > HISTORY_MESSAGE_LIMIT) entry.arrivals.shift();
         this.recordReplies(entry, [event], true);
-        this.update(entry, {}, undefined, { latestEvent: isVisibleTimelineEvent(event) ? event : view.latestEvent });
+        // A remote echo can take SDK ownership while the first HTTP page is
+        // pending. Keep the accepted row visible without releasing its read gate.
+        this.update(entry, {}, view.state.mode === 'live' && (view.state.loading || !entry.prepared)
+          ? boundedTimelineEvents([...view.events, event]) : undefined,
+        { latestEvent: isVisibleTimelineEvent(event) ? event : view.latestEvent });
       }
     }
     this.refresh(room);

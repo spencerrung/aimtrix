@@ -18,6 +18,8 @@ Opening or paging a thread sends no read receipts. Automatic thread reads requir
 
 Normal thread replies use the SDK’s standard threaded send path and the existing encrypted delivery queue. Removed roots do not require inventing quoted text or sender mentions. Sending from history returns to the latest replies; editing preserves the historical position. Failed sends retain the draft or the retryable local echo, and errors appear inside the thread surface. Unified rich room/thread composition and durable drafts remain [#153](https://github.com/spencerrung/aimtrix/issues/153).
 
+Accepted replies remain visible exactly once when SDK synchronization takes ownership during initial history loading. Replies arriving during root lookup, failed lookup or reopening survive the first server page, while loading continues to block read receipts. Historical windows retain their selected replies.
+
 ## Evidence boundaries
 
 Focused controller, snapshot, shell and viewport tests cover unloaded roots, bounded paging, decryption, redaction, relation updates, lifecycle cancellation, exact thread receipt scope and separate navigation positions. Synthetic browser journeys cover old-root and reply links, paging anchors, drafts, retries, hidden/history receipts, Back/Forward, three themes, accessibility, desktop, mobile and short landscape layouts.
@@ -28,7 +30,7 @@ Disposable Synapse interoperability evidence is recorded with the live Matrix su
 
 September 14, 2026, Linux amd64:
 
-- `npm run check`: 734 tests across 53 files, ESLint, TypeScript, production build and bundle budgets passed. Main JS is 658.22 kB; CSS is 107.40 kB.
+- `npm run check`: 742 tests across 53 files, ESLint, TypeScript, production build and bundle budgets passed.
 - `npm run test:e2e`: 93 passed, 7 intentional desktop/mobile project skips. Thread-specific coverage contributes 18 passing scenarios; desktop, mobile, three-theme and short-landscape screenshots were inspected.
 - `npm run test:matrix:privacy`: 6 passed. The disposable Synapse/Dex run passed 22/22 checks with cleanup complete, including real encrypted old-root/reply retrieval, pagination and confirmed private thread receipts.
 - A real SDK regression test loads an old self-authored encrypted reply and verifies that unread highlights remain unchanged, no SDK Thread is constructed or paginated, and no receipt is sent.

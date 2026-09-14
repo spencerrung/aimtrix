@@ -2909,9 +2909,9 @@ export class MatrixController {
     if (room) { this.roomHistory.refresh(room); this.threadHistory.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); }
     if (room && this.client?.getRoom(room.roomId) === room) {
       const events = this.snapshotCache.localEvents.get(room.roomId);
-      for (const [txnId, localEvent] of events ?? []) {
+      for (const localEvent of events?.values() ?? []) {
         const eventId = localEvent.getId();
-        if (localEvent.status === null && eventId && room.findEventById(eventId)) events?.delete(txnId);
+        if (localEvent.status === null && eventId && room.findEventById(eventId)) this.trackLocalEvent(this.client, localEvent);
       }
       if (events?.size === 0) this.snapshotCache.localEvents.delete(room.roomId);
     }
@@ -3101,7 +3101,11 @@ export class MatrixController {
     const eventId = event.getId();
     // SDK remote echo skips insertion when the first thread has not been created.
     // Keep its accepted event until an SDK timeline actually takes ownership.
-    const acceptedInTimeline = event.status === null && eventId && client.getRoom(roomId)?.findEventById(eventId);
+    const room = client.getRoom(roomId);
+    const acceptedInTimeline = event.status === null && eventId && room?.findEventById(eventId);
+    // Transfer this proven local acceptance into a private thread view before
+    // removing its supplemental echo, including while initial history loads.
+    if (acceptedInTimeline && room) this.threadHistory.observe(event, room, true);
     if (acceptedInTimeline || event.status === 'cancelled') events.delete(txnId);
     else events.set(txnId, event);
     if (events.size) this.snapshotCache.localEvents.set(roomId, events);

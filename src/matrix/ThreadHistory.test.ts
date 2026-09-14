@@ -310,6 +310,91 @@ describe('ThreadHistory', () => {
     expect(test.view().latestEvent?.getId()).toBe('$reply-350');
   });
 
+  it.each(['root', 'relations'] as const)('shows accepted live arrivals while initial %s loading remains gated', async (stage) => {
+    const test = fixture([]);
+    const heldRoot = deferred<MatrixEvent['event']>();
+    const heldPage = deferred<Awaited<ReturnType<typeof test.client.fetchRelations>>>();
+    if (stage === 'root') test.client.fetchRoomEvent.mockReturnValueOnce(heldRoot.promise);
+    test.client.fetchRelations.mockReturnValueOnce(heldPage.promise);
+    const opening = test.history.open(roomId, rootId);
+    if (stage === 'relations') await vi.waitFor(() => expect(test.client.fetchRelations).toHaveBeenCalled());
+    const revision = test.state().revision;
+    test.history.observe(message(350), test.room, true);
+    test.history.observe(message(350), test.room, true);
+    expect(test.ids()).toEqual(['$reply-350']);
+    expect(test.state()).toMatchObject({ mode: 'live', loading: 'latest' });
+    expect(test.state().revision).toBeGreaterThan(revision);
+    if (stage === 'root') {
+      heldRoot.resolve({ ...test.root.event, unsigned: { 'm.relations': { 'm.thread': { count: 350, latest_event: message(349).event } } } });
+      await vi.waitFor(() => expect(test.client.fetchRelations).toHaveBeenCalled());
+      expect(test.view()).toMatchObject({ replyCount: 350, replyCountIsLowerBound: true });
+    }
+    expect(test.view().latestEvent?.getId()).toBe('$reply-350');
+    heldPage.resolve({ chunk: [], next_batch: undefined });
+    await opening;
+    expect(test.ids()).toEqual(['$reply-350']);
+    expect(test.state().loading).toBeUndefined();
+    expect(test.view().latestEvent?.getId()).toBe('$reply-350');
+  });
+
+  it('keeps an initial context window unchanged when live acceptance arrives before preparation', async () => {
+    const test = fixture([message(10)]);
+    const heldRoot = deferred<MatrixEvent['event']>();
+    test.client.fetchRoomEvent.mockReturnValueOnce(heldRoot.promise);
+    const opening = test.history.open(roomId, rootId, '$reply-10');
+    test.history.observe(message(350), test.room, true);
+    expect(test.ids()).toEqual([]);
+    expect(test.state()).toMatchObject({ mode: 'context', loading: 'context', targetEventId: '$reply-10' });
+    heldRoot.resolve(test.root.event);
+    await opening;
+    expect(test.state()).toMatchObject({ mode: 'context', targetEventId: '$reply-10', targetStatus: 'found' });
+    expect(test.view().latestEvent?.getId()).toBe('$reply-350');
+  });
+
+  it.each(['failure', 'close'] as const)('keeps initial accepted arrivals through root %s and retry against a stale page', async (reason) => {
+    const test = fixture([]);
+    const root = deferred<MatrixEvent['event']>();
+    test.client.fetchRoomEvent.mockReturnValueOnce(root.promise);
+    const opening = test.history.open(roomId, rootId);
+    test.history.observe(message(350), test.room, true);
+    if (reason === 'failure') root.reject(new Error('Synthetic root failure'));
+    else { test.history.close(); root.resolve(test.root.event); }
+    await opening;
+    expect(test.ids()).toEqual(['$reply-350']);
+    await test.history.open(roomId, rootId);
+    expect(test.ids()).toEqual(['$reply-350']);
+    expect(test.state()).toMatchObject({ mode: 'live', loading: undefined, error: undefined });
+  });
+
+  it('requests the first server page again after closing during initial relations loading', async () => {
+    const test = fixture([message(349)]);
+    const held = deferred<Awaited<ReturnType<typeof test.client.fetchRelations>>>();
+    test.client.fetchRelations.mockReturnValueOnce(held.promise);
+    const opening = test.history.open(roomId, rootId);
+    await vi.waitFor(() => expect(test.client.fetchRelations).toHaveBeenCalledTimes(1));
+    test.history.observe(message(350), test.room, true);
+    test.history.close();
+    await test.history.open(roomId, rootId);
+    expect(test.client.fetchRelations).toHaveBeenCalledTimes(2);
+    expect(test.ids()).toEqual(['$reply-349', '$reply-350']);
+    held.resolve({ chunk: [], next_batch: undefined });
+    await opening;
+    expect(test.ids()).toEqual(['$reply-349', '$reply-350']);
+  });
+
+  it('shows acceptance after root failure without clearing its error or claiming root recovery', async () => {
+    const test = fixture([]);
+    test.client.fetchRoomEvent.mockRejectedValueOnce(new Error('Synthetic root failure'));
+    await test.history.open(roomId, rootId);
+    const error = test.state().error;
+    test.history.observe(message(350), test.room, true);
+    expect(test.ids()).toEqual(['$reply-350']);
+    expect(test.view()).toMatchObject({ rootStatus: 'unavailable', state: { mode: 'live', loading: undefined, error } });
+    await test.history.open(roomId, rootId);
+    expect(test.ids()).toEqual(['$reply-350']);
+    expect(test.view()).toMatchObject({ rootStatus: 'found', state: { error: undefined } });
+  });
+
   it('redacts all owned instances of a reply and deduplicates count changes', async () => {
     SDKThread.hasServerSideFwdPaginationSupport = 2;
     const test = fixture();
