@@ -26,6 +26,8 @@ Back and Forward retain up to 100 in-memory destination entries, including disti
 
 ## Evidence boundaries
 
+Exact validation results and revision references are recorded in [PR #187](https://github.com/spencerrung/aimtrix/pull/187).
+
 Protocol/parser/controller tests cover standard tags, lifecycle, invalid targets, membership, and alias/direct resolution. Component tests cover ranking, IME/platform shortcuts, filter ownership, failure feedback, and stale asynchronous navigation. Chromium fixtures exercise keyboard/touch controls, themes/accessibility, draft retention, old-event context, and Back/Forward reading offsets. The disposable Synapse harness includes favorite sync/reload/isolation and old encrypted event links through a real room alias; see [live Matrix tests](live-matrix-tests.md).
 
 Physical desktop/mobile deep-link dispatch, OS Back behavior, software keyboards, and cross-client favorite UI ordering remain separate device/interoperability checks. Protocol mocks and browser emulation do not establish those boundaries. Full directory search, durable drafts, unloaded thread navigation, and broad search remain separate roadmap work.
