@@ -1305,7 +1305,7 @@
 .history-feedback p, .history-context p { flex: 1 1 260px; margin: 0; }
 .history-edge { display: flex; justify-content: center; padding: 10px 0; color: var(--text-soft); font-size: 0.75rem; }
 .history-edge p { margin: 0; }
-.history-edge button, .history-feedback button, .history-context button { min-height: 40px; padding: 6px 12px; }
+.history-edge button, .history-feedback button, .history-context button { min-height: 44px; padding: 6px 12px; }
 .timeline-message--target { border-radius: 12px; outline: 2px solid var(--focus); outline-offset: 4px; background: var(--surface-soft); }
 .timeline-message:focus-visible, .history-context:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; }
 button.message-reply-context { display: block; max-width: 100%; text-align: start; font: inherit; cursor: pointer; }

@@ -86,7 +86,18 @@ export interface ReadReceiptSummary {
 
 export interface ThreadSummary {
   rootId: string;
+  roomId?: string;
+  /** Independent of the room's current bounded timeline window. */
+  root?: MessageSummary;
+  rootStatus?: 'loading' | 'found' | 'removed' | 'unavailable';
+  history?: HistorySummary;
+  participated?: boolean;
+  latestActivity?: number;
+  /** Latest accepted live reply, independently of the currently selected page. */
+  latestReplyEventId?: string;
   replyCount: number;
+  /** The known loaded count is a lower bound when no authoritative total exists. */
+  replyCountIsLowerBound?: boolean;
   unreadCount?: number;
   highlighted?: boolean;
   messages: MessageSummary[];
@@ -136,7 +147,7 @@ export interface MessageSummary {
   readBy?: ReadReceiptSummary[];
   threadRootId?: string;
   isThreadRoot?: boolean;
-  thread?: Omit<ThreadSummary, 'rootId' | 'messages'>;
+  thread?: Pick<ThreadSummary, 'replyCount' | 'replyCountIsLowerBound' | 'unreadCount' | 'highlighted' | 'latestReply'>;
 }
 
 export interface MemberSummary {

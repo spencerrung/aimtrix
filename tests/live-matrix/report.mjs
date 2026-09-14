@@ -3,7 +3,7 @@ export const checkNames = new Set([
   'setup', 'disposable-stack', 'application-server', 'isolated-accounts',
   'password-login-three-devices', 'encrypted-room-create-and-join',
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
-  'private-read-tracking-and-reminders',
+  'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
   'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
   'encrypted-send-receive-and-latency', 'encrypted-history-and-context', 'authenticated-encrypted-media',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
@@ -11,7 +11,7 @@ export const checkNames = new Set([
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
   'diagnostic-failure-probe', 'cleanup',
 ]);
-export const failureCategories = ['strict mode violation', 'Timeout', 'not a file input', 'matrix-http-status', 'media-requires-authentication', 'attachment-ciphertext', 'mxc-upload', 'other'];
+export const failureCategories = ['strict mode violation', 'Timeout', 'not a file input', 'matrix-http-status', 'media-requires-authentication', 'attachment-ciphertext', 'mxc-upload', 'single-thread-reply', 'thread-retry-same-ciphertext-transaction', 'standard-thread-relation', 'other'];
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

@@ -1,5 +1,6 @@
 import { MemberActions } from './MemberActions';
 import { useShellNavigation, type ShellReadingPosition } from './useShellNavigation';
+import { useThreadViewport } from './useThreadViewport';
 import { QuickSwitcher } from './QuickSwitcher';
 import { NavigationDialogs } from './NavigationDialogs';
 import { getNavigationShortcut, type NavigationTarget } from './quickNavigation';
@@ -414,6 +415,12 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
   onReturnToLive?: (roomId: string) => Promise<void>;
   onHistoryDetached?: (roomId: string, detached: boolean) => void;
+  onThreadSelected?: (roomId: string, rootId: string, eventId?: string) => Promise<void>;
+  onLoadThreadHistory?: (roomId: string, rootId: string, direction: 'backward' | 'forward') => Promise<void>;
+  onReturnThreadToLive?: (roomId: string, rootId: string) => Promise<void>;
+  onThreadHistoryDetached?: (roomId: string, rootId: string, detached: boolean) => void;
+  onCloseThreadHistory?: () => void;
+  onSendThreadMessage?: (roomId: string, rootId: string, body: string, mentions?: ComposerMention[]) => Promise<void>;
   onSpaceSelected?: (spaceId: string) => Promise<void>;
   onReorganizeSpaceChildren?: (update: {
     childId: string;
@@ -449,7 +456,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
   onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
   onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
-  onResolveNavigationTarget?: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
+  onResolveNavigationTarget?: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string; threadRootId?: string }>;
   onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
   onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
   onJoinRoom?: (roomIdOrAlias: string) => Promise<void>;
@@ -1739,7 +1746,7 @@ const TimelineMessage = memo(function TimelineMessage({
             onClick={() => onOpenThread(message)}
           >
             <MessageCircle size={14} />
-            <strong>{message.thread.replyCount} {message.thread.replyCount === 1 ? 'reply' : 'replies'}</strong>
+            <strong>{message.thread.replyCount}{message.thread.replyCountIsLowerBound ? '+' : ''} {message.thread.replyCount === 1 && !message.thread.replyCountIsLowerBound ? 'reply' : 'replies'}</strong>
             {message.thread.unreadCount ? <b aria-label={`${message.thread.unreadCount} unread thread notifications`}>{message.thread.unreadCount} unread</b> : null}
             {message.thread.latestReply ? <span>Latest from {message.thread.latestReply.senderName}</span> : null}
           </button>
@@ -1885,6 +1892,8 @@ function Conversation({
   onDetachedChange,
   onReadLatest,
   onReadThread,
+  threadEntry, threadReading, threadEventId, threadRequestId, onRememberThreadReading,
+  onOpenThreadHistory, onPageThreadHistory, onLatestThread, onThreadDetached, onCloseThreadHistory, onThreadContext,
   onMarkUnread,
   onMarkRead,
   onToggleFavorite,
@@ -1967,6 +1976,17 @@ function Conversation({
   onDetachedChange?: (detached: boolean) => void;
   onReadLatest?: (eventId: string) => Promise<void>;
   onReadThread?: (eventId: string) => Promise<void>;
+  threadEntry: number;
+  threadReading?: ShellReadingPosition;
+  threadEventId?: string;
+  threadRequestId: number;
+  onRememberThreadReading: (reading: ShellReadingPosition, entryId: number) => void;
+  onOpenThreadHistory?: (eventId?: string) => Promise<void>;
+  onPageThreadHistory?: (direction: 'backward' | 'forward') => Promise<void>;
+  onLatestThread?: () => Promise<void>;
+  onThreadDetached?: (detached: boolean) => void;
+  onCloseThreadHistory?: () => void;
+  onThreadContext: (eventId: string) => void;
   onMarkUnread?: (eventId?: string) => Promise<void>;
   onMarkRead?: (eventId?: string) => Promise<void>;
   onToggleFavorite?: () => void;
@@ -1988,7 +2008,13 @@ function Conversation({
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
-  const threadTimeline = useRef<HTMLDivElement>(null);
+  const { viewport: threadTimeline, capture: captureThread, restore: restoreThread, load: loadThread, latest: latestThread, retry: retryThread, error: threadHistoryError, busy: threadHistoryBusy, canRead: canReadThread } = useThreadViewport({
+    roomId: room?.id, thread: activeThread, active: contextPanel === 'thread' && !threadCollapsed,
+    entryId: threadEntry, eventId: threadEventId, requestId: threadRequestId, reading: threadReading,
+    remember: onRememberThreadReading, open: onOpenThreadHistory, load: onPageThreadHistory,
+    latest: onLatestThread, detached: onThreadDetached, close: onCloseThreadHistory,
+  });
+  const threadReadRetryHold = useRef(false);
   const reportedThreadRead = useRef<{ roomId: string; rootId: string; eventId: string } | undefined>(undefined);
   const [threadReadError, setThreadReadError] = useState<{ roomId: string; rootId: string; eventId: string }>();
   const readActionsTrigger = useRef<HTMLButtonElement>(null);
@@ -2043,7 +2069,7 @@ function Conversation({
   const [codeLanguage, setCodeLanguage] = useState('text');
   const [codeDraftMode, setCodeDraftMode] = useState(false);
   const composerNavigation = useRef(0);
-  useLayoutEffect(() => { composerNavigation.current += 1; }, [room?.id, threadRoot?.id, contextPanel, conversationVisible]);
+  useLayoutEffect(() => { composerNavigation.current += 1; }, [room?.id, activeThread?.rootId, contextPanel, conversationVisible]);
   const currentComposition = useRef({ draftRevision, threadDraftRevision, codeLanguage, codeDraftMode });
   useLayoutEffect(() => { currentComposition.current = { draftRevision, threadDraftRevision, codeLanguage, codeDraftMode }; });
   const [mentionsByRoom, setMentionsByRoom] = useState<Record<string, ComposerMention[]>>({});
@@ -2082,13 +2108,13 @@ function Conversation({
     setMentionIndex(0);
   }
   const [threadMentionsByRoot, setThreadMentionsByRoot] = useState<Record<string, ComposerMention[]>>({});
-  const selectedThreadMentions = threadRoot?.id ? threadMentionsByRoot[threadRoot.id] ?? [] : [];
+  const selectedThreadMentions = activeThread?.rootId ? threadMentionsByRoot[activeThread.rootId] ?? [] : [];
   const threadMentionsBeforeEdit = useRef<ComposerMention[]>([]);
   const setSelectedThreadMentions = (update: ComposerMention[] | ((current: ComposerMention[]) => ComposerMention[])) => {
-    if (!threadRoot?.id) return;
+    if (!activeThread?.rootId) return;
     setThreadMentionsByRoot((current) => {
-      const next = typeof update === 'function' ? update(current[threadRoot.id] ?? []) : update;
-      return { ...current, [threadRoot.id]: next };
+      const next = typeof update === 'function' ? update(current[activeThread.rootId] ?? []) : update;
+      return { ...current, [activeThread.rootId]: next };
     });
   };
   const threadMentionQuery = threadDraft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
@@ -2345,6 +2371,7 @@ function Conversation({
       );
     void onThreadSubmit(activeMentions).then((result) => {
       if (result) setSelectedThreadMentions([]);
+      if (isCurrent() && onLatestThread && activeThread?.history && activeThread.history.mode !== 'live' && (result === 'sent' || result === 'retained')) latestThread();
     }).finally(() => {
       if (isCurrent()) requestAnimationFrame(() => { if (isCurrent()) threadComposer.current?.focus(); });
     });
@@ -2693,12 +2720,14 @@ function Conversation({
     });
   }, [conversationVisible, activeRoomId, historicalWindow, history, historyAction, latestMessageId, pendingSearchEvent, readActionsRoom, room?.markedUnread, searchOpen, onReadLatest, onReturnToLive]);
 
-  const reportThreadRead = useCallback((retry = false) => {
-    const rootId = threadRoot?.id;
+  const reportThreadRead = useCallback((retry = false, observed = false) => {
+    if (observed) threadReadRetryHold.current = false;
+    if (!retry && threadReadRetryHold.current) return;
+    const rootId = activeThread?.rootId;
     const element = threadTimeline.current;
     const failedHere = threadReadError?.roomId === activeRoomId && threadReadError?.rootId === rootId;
     const eventId = retry && failedHere ? threadReadError?.eventId : latestThreadMessageId;
-    if (!activeRoomId || !rootId || !eventId || !onReadThread || contextPanel !== 'thread' || threadCollapsed
+    if (!canReadThread() || (!retry && activeThread?.latestReplyEventId && eventId !== activeThread.latestReplyEventId) || !activeRoomId || !rootId || !eventId || !onReadThread || contextPanel !== 'thread' || threadCollapsed
       || document.visibilityState !== 'visible' || !document.hasFocus() || !element || element.closest('[hidden], [inert]')
       || element.closest('aside')?.dataset.roomId !== activeRoomId || element.closest('aside')?.dataset.threadRoot !== rootId
       || !element.closest('aside')?.contains(document.activeElement) || document.activeElement?.closest('[role=dialog], [role=menu]')
@@ -2706,6 +2735,7 @@ function Conversation({
     if (!retry && failedHere) return;
     const previous = reportedThreadRead.current;
     if (previous?.roomId === activeRoomId && previous.rootId === rootId && previous.eventId === eventId) return;
+    if (retry) threadReadRetryHold.current = true;
     const requested = { roomId: activeRoomId, rootId, eventId };
     reportedThreadRead.current = requested;
     setThreadReadError(undefined);
@@ -2714,10 +2744,10 @@ function Conversation({
       reportedThreadRead.current = undefined;
       setThreadReadError({ roomId: activeRoomId, rootId, eventId });
     });
-  }, [activeRoomId, contextPanel, latestThreadMessageId, onReadThread, threadCollapsed, threadReadError, threadRoot?.id]);
+  }, [activeRoomId, contextPanel, latestThreadMessageId, onReadThread, threadCollapsed, threadReadError, activeThread, canReadThread, threadTimeline]);
 
   useEffect(() => {
-    const report = () => { reportLatestRead(); reportThreadRead(); };
+    const report = (event?: Event) => { reportLatestRead(); reportThreadRead(false, Boolean(event)); };
     report();
     window.addEventListener('focus', report);
     document.addEventListener('focusin', report);
@@ -3202,8 +3232,8 @@ function Conversation({
       </section>
       {timelineDetached || historicalWindow ? <button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button> : null}
 
-      {contextHost && activeThread && threadRoot ? createPortal(
-        <aside hidden={contextPanel !== 'thread' || threadCollapsed} inert={contextPanel !== 'thread' || threadCollapsed} className="thread-panel" data-room-id={room.id} data-thread-root={threadRoot.id} aria-label="Thread">
+      {contextHost && activeThread ? createPortal(
+        <aside hidden={contextPanel !== 'thread' || threadCollapsed} inert={contextPanel !== 'thread' || threadCollapsed} className="thread-panel" data-room-id={room.id} data-thread-root={activeThread.rootId} data-latest-reply-id={activeThread.latestReplyEventId} aria-label="Thread">
           <div
             className="thread-panel__resize"
             role="separator"
@@ -3225,13 +3255,16 @@ function Conversation({
             }}
           />
           <header className="thread-panel__header">
-            <span><MessageCircle size={16} /><strong tabIndex={-1} data-panel-heading>Thread</strong><small>{activeThread.replyCount} {activeThread.replyCount === 1 ? 'reply' : 'replies'}{activeThread.unreadCount ? ` · ${activeThread.unreadCount} unread` : ''}</small></span>
+            <span><MessageCircle size={16} /><strong tabIndex={-1} data-panel-heading>Thread</strong><small>{activeThread.replyCount}{activeThread.replyCountIsLowerBound ? '+' : ''} {activeThread.replyCount === 1 && !activeThread.replyCountIsLowerBound ? 'reply' : 'replies'}{activeThread.unreadCount ? ` · ${activeThread.unreadCount} unread` : ''}</small></span>
             <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></span>
           </header>
-          <div ref={threadTimeline} className="thread-panel__timeline" onScroll={() => reportThreadRead()}>
+          <div ref={threadTimeline} className="thread-panel__timeline" tabIndex={0} aria-label="Thread replies" aria-busy={threadHistoryBusy} onScroll={() => { captureThread(); reportThreadRead(false, true); }}>
             <div className="thread-panel__root">
-              <strong>{threadRoot.senderName}</strong>
-              <p>{threadRoot.body}</p>
+              {threadRoot && activeThread.rootStatus !== 'removed' ? <><strong>{threadRoot.senderName}</strong><p>{threadRoot.body}</p></> : <p role="status">{activeThread.rootStatus === 'removed' ? 'The original message was removed. Replies are still available.' : activeThread.rootStatus === 'unavailable' ? 'The original message is unavailable. Check your access and connection.' : 'Loading the original message…'}</p>}
+            </div>
+            {threadHistoryError || activeThread.history?.error || activeThread.rootStatus === 'unavailable' || activeThread.history?.targetStatus === 'unavailable' ? <div className="history-feedback"><p role="status">{activeThread.history?.error ?? (activeThread.history?.targetStatus === 'unavailable' ? 'This reply is unavailable. You can still browse the thread.' : 'Thread history could not load.')}</p><button type="button" disabled={threadHistoryBusy} onClick={retryThread}>Retry loading thread replies</button></div> : null}
+            {onPageThreadHistory && activeThread.history?.canLoadOlder ? <div className="history-edge"><button type="button" className="aqua-button" disabled={threadHistoryBusy} onClick={() => loadThread('backward')}>Load older thread replies</button></div> : null}
+            <div hidden={!threadHistoryBusy} className="history-feedback" role="status">Loading thread replies…
             </div>
             {activeThread.messages.map((message) => (
               <TimelineMessage
@@ -3253,11 +3286,12 @@ function Conversation({
                 recentEmojis={recentEmojis}
                 onLoadEmojiCatalog={loadEmojiCatalog}
                 onEmojiUsed={rememberEmoji}
-                onMediaLoad={handleMediaLoad}
-                onJumpToEvent={(eventId) => void openContext(eventId)}
+                onMediaLoad={restoreThread}
+                onJumpToEvent={onThreadContext}
                 onLoadLinkPreview={onLoadLinkPreview}
               />
             ))}
+            {onPageThreadHistory && activeThread.history?.canLoadNewer ? <div className="history-edge"><button type="button" className="aqua-button" disabled={threadHistoryBusy} onClick={() => loadThread('forward')}>Load newer thread replies</button></div> : null}
           </div>
           {threadMentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a thread member">
             {threadMentionMatches.map((member, index) => <button
@@ -3271,9 +3305,10 @@ function Conversation({
             ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
           </div> : null}
           <form className="thread-panel__composer" onSubmit={submitThread}>
-            {threadReadError?.roomId === room.id && threadReadError.rootId === threadRoot.id ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
-            {notice && (uploadInProgress || failedUploadName) ? <div className="thread-panel__composer-context" role="status"><span>{notice}</span>{uploadInProgress ? <button type="button" onClick={onCancelUpload}>Cancel upload</button> : <button type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button>}</div> : null}
-            <input ref={threadFileInput} type="file" className="sr-only" aria-label="Choose thread attachment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onUploadAttachment(file, threadRoot.id); event.target.value = ''; }} />
+            {onLatestThread && activeThread.history?.mode !== 'live' ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><button type="button" disabled={threadHistoryBusy} onClick={latestThread}>Jump to latest replies</button></div> : null}
+            {threadReadError?.roomId === room.id && threadReadError.rootId === activeThread.rootId ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" disabled={threadHistoryBusy || Boolean(activeThread.history && activeThread.history.mode !== 'live')} title={activeThread.history && activeThread.history.mode !== 'live' ? 'Jump to latest replies to retry this observed read status' : undefined} onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
+            {notice ? <div className="thread-panel__composer-context" role="status"><span>{notice}</span>{uploadInProgress ? <button type="button" onClick={onCancelUpload}>Cancel upload</button> : failedUploadName ? <button type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button> : null}</div> : null}
+            <input ref={threadFileInput} type="file" className="sr-only" aria-label="Choose thread attachment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onUploadAttachment(file, activeThread.rootId); event.target.value = ''; }} />
             <button type="button" aria-label="More thread tools" aria-expanded={threadMoreOpen} onClick={() => setThreadMoreOpen((open) => !open)}><Plus size={18} /></button>
             {threadMoreOpen && contextPanel === 'thread' ? <Popover className="thread-tools" label="Thread tools" onClose={() => setThreadMoreOpen(false)}><button type="button" onClick={() => { threadFileInput.current?.click(); setThreadMoreOpen(false); }}>Attach a file</button></Popover> : null}
             {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={cancelThreadEdit}><X size={14} /></button></div> : null}
@@ -3289,7 +3324,7 @@ function Conversation({
                   onThreadDraftChange(nextDraft);
                 }}
                 onKeyDown={handleThreadComposerKeyDown}
-                onPaste={(event) => uploadPastedImage(event, threadRoot.id)}
+                onPaste={(event) => uploadPastedImage(event, activeThread.rootId)}
                 placeholder="Reply in thread"
                 rows={2}
               />
@@ -3300,7 +3335,7 @@ function Conversation({
           </form>
         </aside>, contextHost
       ) : null}
-      {contextHost && contextPanel === 'thread' && (!activeThread || !threadRoot) ? createPortal(<aside className="search-panel" aria-label="Thread">
+      {contextHost && contextPanel === 'thread' && !activeThread ? createPortal(<aside className="search-panel" aria-label="Thread">
         <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Thread</strong><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></header>
         <p className="search-scope" role="status">This thread is no longer in the loaded conversation. Return to the conversation to find its available context. Your draft is kept for this session.</p>
       </aside>, contextHost) : null}
@@ -3310,7 +3345,7 @@ function Conversation({
         <p className="search-scope">Search covers messages loaded in this conversation.</p>
         <div className="search-results">{messageQuery.trim() ? <><p role="status">{searchResults.length} found</p>{searchResults.map((message) => <button key={message.id} type="button" onClick={() => void openContext(message.id)}><strong>{message.senderName}</strong><span>{message.body}</span></button>)}</> : <p>Enter a name or phrase to find a message.</p>}</div>
       </aside>, contextHost) : null}
-      {activeThread && threadRoot && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
+      {activeThread && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
 
       <div className="typing-strip" aria-live="polite">
         {notice ? <>{notice}{uploadInProgress ? <button className="cancel-upload" type="button" onClick={onCancelUpload}>Cancel</button> : failedUploadName ? <button className="cancel-upload" type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button> : null}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
@@ -4048,6 +4083,7 @@ export function Workspace({
   onOpenEventContext,
   onReturnToLive,
   onHistoryDetached,
+  onThreadSelected, onLoadThreadHistory, onReturnThreadToLive, onThreadHistoryDetached, onCloseThreadHistory, onSendThreadMessage,
   onSpaceSelected,
   onReorganizeSpaceChildren,
   onReorderRootSpaces,
@@ -4122,7 +4158,7 @@ export function Workspace({
   const [favoritePending, setFavoritePending] = useState<Set<string>>(() => new Set());
   const navigationIntent = useRef(0);
   useEffect(() => () => { navigationIntent.current += 1; }, []);
-  const { route: shellRoute, entryId: shellEntry, reading: shellReading, remember: rememberReading, navigate: navigateShell, back: shellBack, forward: shellForward, canGoBack, canGoForward } = useShellNavigation({
+  const { route: shellRoute, entryId: shellEntry, reading: shellReading, remember: rememberReading, threadReading: shellThreadReading, rememberThread: rememberThreadReading, navigate: navigateShell, back: shellBack, forward: shellForward, canGoBack, canGoForward } = useShellNavigation({
     surface: 'list', roomId: selectedRoomId, spaceId: activeSpace,
     panel: preferences.detailsOpenByDefault ? 'details' : null,
   });
@@ -4136,9 +4172,11 @@ export function Workspace({
   const contextOpener = useRef<HTMLElement | null>(null);
   const suppressContextReturnFocus = useRef(false);
   const previousFocusRoute = useRef({ panel: contextPanel, surface: shellRoute.surface, roomId: selectedRoomId });
-  const openPanel = useCallback((panel: 'thread' | 'details' | 'search', threadRootId?: string) => {
+  const [threadRequestId, setThreadRequestId] = useState(0);
+  const openPanel = useCallback((panel: 'thread' | 'details' | 'search', threadRootId?: string, threadEventId?: string) => {
+    if (panel === 'thread' && threadEventId) setThreadRequestId((value) => value + 1);
     if (!shellRoute.panel || shellRoute.surface !== 'context') contextOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    navigateShell({ ...shellRoute, surface: 'context', roomId: selectedRoomId, spaceId: activeSpace, panel, threadRootId: threadRootId ?? shellRoute.threadRootId });
+    navigateShell({ ...shellRoute, surface: 'context', roomId: selectedRoomId, spaceId: activeSpace, panel, threadRootId: threadRootId ?? shellRoute.threadRootId, threadEventId });
   }, [activeSpace, navigateShell, selectedRoomId, shellRoute]);
   const closePanel = useCallback(() => {
     if (shellRoute.surface === 'context') shellBack();
@@ -4377,9 +4415,9 @@ export function Workspace({
         replyCount: activeThreadBase.replyCount + (demoThreadMessages[activeThreadRootId]?.length ?? 0),
       }
     : undefined;
-  const activeThreadRoot = activeThreadRootId
+  const activeThreadRoot = activeThreadBase?.root ?? (!activeThreadBase?.rootStatus && activeThreadRootId
     ? messages.find((message) => message.id === activeThreadRootId)
-    : undefined;
+    : undefined);
   const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
   const threadDraft = activeThreadRootId ? threadDrafts[activeThreadRootId] ?? '' : '';
   useLayoutEffect(() => { composerNavigation.current += 1; }, [effectiveRoomId, activeThreadRootId, contextPanel, conversationVisible]);
@@ -4516,37 +4554,6 @@ export function Workspace({
     setActiveThreadRootId(undefined);
   }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
-  useEffect(() => {
-    if (!pushRoute || pushRoute.roomAlias || pushRoute.userId || handledPushRoute.current === pushRoute) return;
-    const eventRoomId = pushRoute.eventId && !pushRoute.roomId
-      ? Object.entries(workspace.messagesByRoom).find(([, roomMessages]) => roomMessages.some((message) => message.id === pushRoute.eventId))?.[0]
-        ?? Object.values(workspace.threadsByRoot).flatMap((thread) => thread.messages).find((message) => message.id === pushRoute.eventId)?.roomId
-      : undefined;
-    const roomId = pushRoute.roomId ?? eventRoomId;
-    if (!roomId) {
-      handledPushRoute.current = pushRoute;
-      queueMicrotask(() => { setSettledIncomingRoute(pushRoute); setNotice('This notification does not include a room, and its message is not loaded. Open the conversation to find it.'); });
-      return;
-    }
-    if (!workspace.rooms.some((room) => room.id === roomId)) {
-      if (missingPushRoom.current !== pushRoute) {
-        missingPushRoom.current = pushRoute;
-        queueMicrotask(() => setNotice('The notification’s room is not available in this account yet.'));
-      }
-      return;
-    }
-    handledPushRoute.current = pushRoute;
-    const targetSpace = workspace.spaces.find((space) => space.roomIds.includes(roomId));
-    queueMicrotask(() => {
-      if (handledPushRoute.current !== pushRoute) return;
-      if (targetSpace && targetSpace.id !== activeSpace) {
-        setActiveSpace(targetSpace.id);
-      }
-      selectRoom(roomId, targetSpace?.id ?? activeSpace, pushRoute.eventId);
-      setSettledIncomingRoute(pushRoute);
-
-    });
-  }, [activeSpace, onSpaceSelected, pushRoute, selectRoom, workspace.messagesByRoom, workspace.rooms, workspace.spaces, workspace.threadsByRoot]);
 
   useEffect(() => {
     try {
@@ -4623,20 +4630,66 @@ export function Workspace({
   }, [goUnread]);
   const openMatrixTarget = useCallback(async (target: MatrixNavigationTarget) => {
     const intent = ++navigationIntent.current;
-    const result = onResolveNavigationTarget ? await onResolveNavigationTarget(target) : (() => {
+    const result: { roomId: string; eventId?: string; threadRootId?: string } = onResolveNavigationTarget ? await onResolveNavigationTarget(target) : (() => {
       const room = workspace.rooms.find((candidate) => candidate.membership === 'join' && (target.roomId === candidate.id || target.roomAlias && target.roomAlias === candidate.canonicalAlias || target.userId && target.userId === candidate.directUserId));
       if (!room) throw new Error('This destination is not available in your joined conversations. Join the room or start a conversation first.');
       return { roomId: room.id, eventId: target.eventId };
     })();
     if (intent !== navigationIntent.current) return;
+    if (result.threadRootId) {
+      setThreadRequestId((value) => value + 1);
+      const spaceId = workspace.spaces.find((space) => space.roomIds.includes(result.roomId))?.id ?? activeSpace;
+      setActiveThreadRootId(result.threadRootId);
+      setThreadCollapsed(false);
+      navigateShell({ surface: 'context', panel: 'thread', roomId: result.roomId, spaceId,
+        eventId: result.roomId === effectiveRoomId ? shellRoute.eventId : undefined,
+        threadRootId: result.threadRootId, threadEventId: result.eventId });
+      return;
+    }
     if (result.roomId === effectiveRoomId && result.eventId && result.eventId === shellRoute.eventId) {
       await historyHandlers.current.onOpenEventContext?.(result.roomId, result.eventId);
       return;
     }
     selectRoom(result.roomId, workspace.spaces.find((space) => space.roomIds.includes(result.roomId))?.id ?? activeSpace, result.eventId);
-  }, [activeSpace, effectiveRoomId, onResolveNavigationTarget, selectRoom, shellRoute.eventId, workspace.rooms, workspace.spaces]);
+  }, [activeSpace, effectiveRoomId, onResolveNavigationTarget, navigateShell, selectRoom, shellRoute.eventId, workspace.rooms, workspace.spaces]);
   const matrixTargetHandler = useRef(openMatrixTarget);
   useLayoutEffect(() => { matrixTargetHandler.current = openMatrixTarget; });
+  useEffect(() => {
+    if (!pushRoute || pushRoute.roomAlias || pushRoute.userId || handledPushRoute.current === pushRoute) return;
+    const eventRoomId = pushRoute.eventId && !pushRoute.roomId
+      ? Object.entries(workspace.messagesByRoom).find(([, roomMessages]) => roomMessages.some((message) => message.id === pushRoute.eventId))?.[0]
+        ?? Object.values(workspace.threadsByRoot).flatMap((thread) => thread.messages).find((message) => message.id === pushRoute.eventId)?.roomId
+      : undefined;
+    const roomId = pushRoute.roomId ?? eventRoomId;
+    if (!roomId) {
+      handledPushRoute.current = pushRoute;
+      queueMicrotask(() => { setSettledIncomingRoute(pushRoute); setNotice('This notification does not include a room, and its message is not loaded. Open the conversation to find it.'); });
+      return;
+    }
+    if (!workspace.rooms.some((room) => room.id === roomId)) {
+      if (missingPushRoom.current !== pushRoute) {
+        missingPushRoom.current = pushRoute;
+        queueMicrotask(() => setNotice('The notification’s room is not available in this account yet.'));
+      }
+      return;
+    }
+    handledPushRoute.current = pushRoute;
+    const targetSpace = workspace.spaces.find((space) => space.roomIds.includes(roomId));
+    queueMicrotask(() => {
+      if (handledPushRoute.current !== pushRoute) return;
+      if (targetSpace && targetSpace.id !== activeSpace) {
+        setActiveSpace(targetSpace.id);
+      }
+      if (pushRoute.eventId && onResolveNavigationTarget) {
+        void matrixTargetHandler.current({ ...pushRoute, roomId }).catch(() => setNotice('This Matrix message is unavailable.')).finally(() => setSettledIncomingRoute(pushRoute));
+      } else {
+        selectRoom(roomId, targetSpace?.id ?? activeSpace, pushRoute.eventId);
+        setSettledIncomingRoute(pushRoute);
+      }
+
+    });
+  }, [activeSpace, onSpaceSelected, onResolveNavigationTarget, pushRoute, selectRoom, workspace.messagesByRoom, workspace.rooms, workspace.spaces, workspace.threadsByRoot]);
+
   useEffect(() => {
     if (!pushRoute || (!pushRoute.roomAlias && !pushRoute.userId) || handledPushRoute.current === pushRoute) return;
     let active = true;
@@ -5017,9 +5070,9 @@ export function Workspace({
   };
 
   const submitThreadMessage = async (mentions: ComposerMention[] = []): Promise<ComposerSubmitResult> => {
-    if (!effectiveRoomId || !activeThreadRoot || !threadDraft.trim() || threadSendInFlight.current) return false;
+    if (!effectiveRoomId || !activeThreadRootId || !threadDraft.trim() || threadSendInFlight.current) return false;
     threadSendInFlight.current = true;
-    const rootId = activeThreadRoot.id;
+    const rootId = activeThreadRootId;
     const revision = threadDraftRevisions.current[rootId] ?? 0;
     const navigation = composerNavigation.current;
     const unchanged = () => (threadDraftRevisions.current[rootId] ?? 0) === revision;
@@ -5027,15 +5080,16 @@ export function Workspace({
     const clearSubmittedDraft = () => setThreadDrafts((draftValues) => unchanged() ? { ...draftValues, [rootId]: '' } : draftValues);
     const body = threadDraft.trim();
     setThreadSending(true);
+    setNotice(undefined);
     try {
-      if (workspace.mode === 'matrix' && (editingThreadMessage ? !onEditMessage : !onSendReply)) {
+      if (workspace.mode === 'matrix' && (editingThreadMessage ? !onEditMessage : (!onSendThreadMessage && (!onSendReply || !activeThreadRoot)))) {
         throw new Error('This thread action is unavailable.');
       }
       if (editingThreadMessage) {
         if (workspace.mode === 'demo') {
           setDemoThreadMessages((current) => ({
             ...current,
-            [activeThreadRoot.id]: (current[activeThreadRoot.id] ?? []).map((message) =>
+            [rootId]: (current[rootId] ?? []).map((message) =>
               message.id === editingThreadMessage.message.id ? { ...message, body, edited: true } : message,
             ),
           }));
@@ -5053,20 +5107,22 @@ export function Workspace({
           timestamp: Date.now(),
           kind: 'text',
           isOwn: true,
-          threadRootId: activeThreadRoot.id,
+          threadRootId: rootId,
           mentionUserIds: mentions.map((mention) => mention.userId),
           mentions,
         };
         setDemoThreadMessages((current) => ({
           ...current,
-          [activeThreadRoot.id]: [...(current[activeThreadRoot.id] ?? []), message],
+          [rootId]: [...(current[rootId] ?? []), message],
         }));
-      } else if (onSendReply) {
+      } else if (onSendThreadMessage) {
+        await onSendThreadMessage(effectiveRoomId, rootId, body, mentions);
+      } else if (onSendReply && activeThreadRoot) {
         await onSendReply(effectiveRoomId, body, {
-          id: activeThreadRoot.id,
+          id: rootId,
           senderId: activeThreadRoot.senderId,
           body: activeThreadRoot.body,
-          threadRootId: activeThreadRoot.id,
+          threadRootId: rootId,
         }, mentions);
       }
       clearSubmittedDraft();
@@ -5263,8 +5319,19 @@ export function Workspace({
             favoritePending={Boolean(effectiveRoomId && favoritePending.has(effectiveRoomId))}
             members={effectiveMembersByRoom[effectiveRoomId ?? ''] ?? []}
             messages={messages}
-            activeThread={activeThread}
+            activeThread={activeThread ?? (activeThreadRootId ? { rootId: activeThreadRootId, roomId: effectiveRoomId, rootStatus: 'loading', replyCount: 0, messages: [] } : undefined)}
             threadRoot={activeThreadRoot}
+            threadEntry={shellEntry}
+            threadReading={shellThreadReading}
+            threadEventId={shellRoute.threadEventId}
+            threadRequestId={threadRequestId}
+            onRememberThreadReading={rememberThreadReading}
+            onOpenThreadHistory={onThreadSelected && effectiveRoomId && activeThreadRootId ? (eventId) => onThreadSelected(effectiveRoomId, activeThreadRootId, eventId) : undefined}
+            onPageThreadHistory={onLoadThreadHistory && effectiveRoomId && activeThreadRootId ? (direction) => onLoadThreadHistory(effectiveRoomId, activeThreadRootId, direction) : undefined}
+            onLatestThread={onReturnThreadToLive && effectiveRoomId && activeThreadRootId ? () => onReturnThreadToLive(effectiveRoomId, activeThreadRootId) : undefined}
+            onThreadDetached={onThreadHistoryDetached && effectiveRoomId && activeThreadRootId ? (detached) => onThreadHistoryDetached(effectiveRoomId, activeThreadRootId, detached) : undefined}
+            onCloseThreadHistory={onCloseThreadHistory}
+            onThreadContext={(eventId) => openPanel('thread', activeThreadRootId, eventId)}
             threadCollapsed={threadCollapsed}
             draft={draft}
             threadDraft={threadDraft}
@@ -5310,8 +5377,8 @@ export function Workspace({
             onStartReply={handleStartReply}
             onStartThread={handleStartThread}
             onOpenThread={(message) => {
-              setActiveThreadRootId(message.id);
-              openPanel('thread', message.id);
+              setActiveThreadRootId(message.threadRootId ?? message.id);
+              openPanel('thread', message.threadRootId ?? message.id);
               setThreadCollapsed(false);
             }}
             onCloseThread={closePanel}

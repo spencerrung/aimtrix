@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk';
 import { inMainTimelineForReceipt } from 'matrix-js-sdk';
+import { HISTORY_MESSAGE_LIMIT } from './historyEvents';
 import {
   buildWorkspaceSnapshot,
   createWorkspaceSnapshotCache,
@@ -39,7 +40,12 @@ function fakeClient(
     tags?: Record<string, Record<string, unknown>>;
     canonicalAlias?: string;
     directUserId?: string;
-    threads?: Array<{ id: string; length: number; events: MatrixEvent[] }>;
+    threads?: Array<{
+      id: string; length: number; events: MatrixEvent[]; rootEvent?: MatrixEvent;
+      replyToEvent?: MatrixEvent; hasCurrentUserParticipated?: boolean;
+      getReadReceiptForUserId?: (userId: string) => { eventId: string } | null;
+      timelineSet?: { relations: { getAllChildEventsForEvent: (eventId: string) => MatrixEvent[] } };
+    }>;
   } = {},
 ): MatrixClient {
   const room = {
@@ -470,6 +476,153 @@ describe('buildWorkspaceSnapshot unread badges', () => {
 });
 
 describe('buildWorkspaceSnapshot threads', () => {
+  const replyEvent = (id: string, body = 'Synthetic reply', rootId = '$root:test', sender = '@mara:test') =>
+    fakeEvent('m.room.message', { msgtype: 'm.text', body, 'm.relates_to': { rel_type: 'm.thread', event_id: rootId } }, id, sender);
+
+  it('keeps a durable SDK root when the room window has moved on and bounds live replies', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic old root' }, '$root:test');
+    const replies = Array.from({ length: 400 }, (_, index) => Object.assign(replyEvent(`$reply-${index}`), { getTs: () => index + 2000 }));
+    const snapshot = buildWorkspaceSnapshot(fakeClient([], {
+      threads: [{ id: '$root:test', length: 400, rootEvent: root, events: replies, hasCurrentUserParticipated: true }],
+    }), 'online');
+    expect(snapshot.messagesByRoom['!room:test']).toEqual([]);
+    expect(snapshot.threadsByRoot['$root:test']).toMatchObject({
+      roomId: '!room:test', rootStatus: 'found', root: { id: '$root:test', body: 'Synthetic old root' },
+      replyCount: 400, participated: true, latestActivity: 2399, latestReplyEventId: '$reply-399',
+    });
+    expect(snapshot.threadsByRoot['$root:test'].messages).toHaveLength(HISTORY_MESSAGE_LIMIT);
+    expect(snapshot.threadsByRoot['$root:test'].messages[0].id).toBe('$reply-150');
+  });
+
+  it('uses the selected historical thread page while live metadata and accepted-tail proof stay current', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Independent root' }, '$root:test');
+    const old = replyEvent('$old');
+    const latest = Object.assign(replyEvent('$latest', 'Latest accepted reply'), { getTs: () => 9000 });
+    const pending = Object.assign(replyEvent('$pending', 'Pending reply', '$root:test', '@me:test'), { status: 'not_sent', getTxnId: () => 'synthetic-pending', getTs: () => 10000 });
+    const cache = createWorkspaceSnapshotCache();
+    cache.threadHistory.set('$root:test', { roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found', events: [old], state: { mode: 'history', revision: 7, canLoadOlder: true, canLoadNewer: true } });
+    cache.localEvents.set('!room:test', new Map([['synthetic-pending', pending]]));
+    const client = fakeClient([], { threads: [{ id: '$root:test', length: 20, events: [latest], replyToEvent: pending }] });
+    const snapshot = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    const thread = snapshot.threadsByRoot['$root:test'];
+    expect(thread.messages.map((message) => message.id)).toEqual(['$old']);
+    expect(thread).toMatchObject({ root: { body: 'Independent root' }, history: { mode: 'history', revision: 7 }, replyCount: 21, latestReplyEventId: '$latest', latestActivity: 10000 });
+    expect(thread.participated).toBeUndefined();
+    cache.threadHistory.get('$root:test')!.state.revision = 8;
+    expect(thread.history?.revision).toBe(7);
+  });
+
+  it.each(['loading', 'removed', 'unavailable'] as const)('keeps a requested empty thread visible with a truthful %s root state', (rootStatus) => {
+    const cache = createWorkspaceSnapshotCache();
+    cache.threadHistory.set('$root:test', { roomId: '!room:test', rootId: '$root:test', rootStatus, events: [], state: { mode: 'live', revision: 1, canLoadOlder: false, canLoadNewer: false } });
+    const snapshot = buildWorkspaceSnapshot(fakeClient([]), 'online', [], [], cache);
+    expect(snapshot.threadsByRoot['$root:test']).toMatchObject({ roomId: '!room:test', rootStatus, messages: [], replyCount: 0 });
+    expect(snapshot.threadsByRoot['$root:test'].root).toBeUndefined();
+  });
+
+  it('hides retained root content after a newer SDK root has been redacted', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic removed root' }, '$root:test');
+    const removed = Object.assign(fakeEvent('m.room.message', {}, '$root:test'), { isRedacted: () => true });
+    const cache = createWorkspaceSnapshotCache();
+    const reply = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic reply', 'm.relates_to': { rel_type: 'm.thread', event_id: '$root:test', 'm.in_reply_to': { event_id: '$root:test' } } }, '$reply');
+    cache.threadHistory.set('$root:test', { roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found', events: [reply], state: { mode: 'live', revision: 2, canLoadOlder: false, canLoadNewer: false } });
+    const snapshot = buildWorkspaceSnapshot(fakeClient([], { threads: [{ id: '$root:test', length: 1, events: [], rootEvent: removed }] }), 'online', [], [], cache);
+    expect(snapshot.threadsByRoot['$root:test']).toMatchObject({ rootStatus: 'removed', messages: [{ id: '$reply' }] });
+    expect(snapshot.threadsByRoot['$root:test'].root).toBeUndefined();
+    expect(JSON.stringify(snapshot)).not.toContain('Synthetic removed root');
+  });
+
+  it('retains encryption placeholders and encrypted media without crossing room or thread boundaries', () => {
+    const root = Object.assign(fakeEvent('m.room.encrypted', {}, '$root:test'), { threadRootId: '$root:test' });
+    const encrypted = Object.assign(fakeEvent('m.room.encrypted', {}, '$encrypted'), { threadRootId: '$root:test' });
+    const file = { url: 'mxc://synthetic.test/file', key: { kty: 'oct', key_ops: ['encrypt', 'decrypt'], alg: 'A256CTR', k: 'synthetic-key', ext: true }, iv: 'synthetic-iv', hashes: { sha256: 'synthetic-hash' }, v: 'v2' };
+    const media = fakeEvent('m.room.message', { msgtype: 'm.file', body: 'Synthetic attachment', file, info: { mimetype: 'text/plain' }, 'm.relates_to': { rel_type: 'm.thread', event_id: '$root:test' } }, '$media');
+    const wrongRoom = Object.assign(replyEvent('$wrong-room'), { getRoomId: () => '!other:test' });
+    const cache = createWorkspaceSnapshotCache();
+    cache.threadHistory.set('$other-root', { roomId: '!other:test', rootId: '$other-root', rootStatus: 'unavailable', events: [], state: { mode: 'live', revision: 1, canLoadOlder: false, canLoadNewer: false } });
+    const snapshot = buildWorkspaceSnapshot(fakeClient([], { threads: [{ id: '$root:test', length: 2, rootEvent: root, events: [encrypted, media, wrongRoom, replyEvent('$wrong-thread', 'Wrong thread', '$other-root')] }] }), 'online', [], [], cache);
+    expect(snapshot.threadsByRoot['$root:test'].root).toMatchObject({ kind: 'encrypted', body: 'Waiting for encryption keys…' });
+    expect(snapshot.threadsByRoot['$root:test'].messages).toMatchObject([{ id: '$encrypted', kind: 'encrypted' }, { id: '$media', encryptedFile: file }]);
+    expect(snapshot.threadsByRoot['$root:test'].messages).toHaveLength(2);
+    expect(snapshot.threadsByRoot['$other-root']).toBeUndefined();
+  });
+
+  it('applies loaded thread edits and reactions with only thread-scoped reader receipts', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test');
+    const reply = replyEvent('$reply', 'Before');
+    const edit = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* After', 'm.new_content': { msgtype: 'm.text', body: 'After' }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$reply' } }, '$edit');
+    const reaction = fakeEvent('m.reaction', { 'm.relates_to': { rel_type: 'm.annotation', event_id: '$reply', key: '✨' } }, '$reaction');
+    const threadReceipt = vi.fn((userId: string) => userId === '@mara:test' ? { eventId: '$reply' } : null);
+    const client = fakeClient([], { threads: [{ id: '$root:test', length: 1, rootEvent: root, events: [reply], getReadReceiptForUserId: threadReceipt, timelineSet: { relations: { getAllChildEventsForEvent: (eventId) => eventId === '$reply' ? [edit, reaction] : [] } } }] });
+    const room = client.getVisibleRooms()[0];
+    Object.assign(room, { getJoinedMembers: () => [{ userId: '@mara:test', name: 'Mara', getMxcAvatarUrl: () => undefined }, { userId: '@other:test', name: 'Other', getMxcAvatarUrl: () => undefined }], getReadReceiptForUserId: () => ({ eventId: '$reply' }) });
+    const snapshot = buildWorkspaceSnapshot(client, 'online');
+    expect(snapshot.threadsByRoot['$root:test'].messages[0]).toMatchObject({ body: 'After', edited: true, reactions: [{ key: '✨', count: 1 }], readBy: [{ id: '@mara:test', displayName: 'Mara' }] });
+    expect(snapshot.threadsByRoot['$root:test'].messages[0].readBy).toHaveLength(1);
+    expect(threadReceipt).toHaveBeenCalledWith('@other:test');
+  });
+
+  it('uses server-bundled totals and participation with a separately decrypted live tail when no SDK thread exists', () => {
+    const root = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test'), {
+      getServerAggregatedRelation: (type: string) => type === 'm.thread' ? { count: 1200, current_user_participated: false } : undefined,
+    });
+    const latest = Object.assign(replyEvent('$latest', 'Decrypted latest reply'), { getRoomId: () => '!room:test', getTs: () => 2000 });
+    const cache = createWorkspaceSnapshotCache();
+    cache.threadHistory.set('$root:test', { roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found', latestEvent: latest, events: [replyEvent('$older')], state: { mode: 'history', revision: 4, canLoadOlder: true, canLoadNewer: true } });
+    const snapshot = buildWorkspaceSnapshot(fakeClient([root]), 'online', [], [], cache);
+    expect(snapshot.threadsByRoot['$root:test']).toMatchObject({ replyCount: 1200, participated: false, latestReplyEventId: '$latest', latestActivity: 2000, latestReply: { body: 'Decrypted latest reply' }, messages: [{ id: '$older' }] });
+    expect(snapshot.threadsByRoot['$root:test'].replyCountIsLowerBound).toBeUndefined();
+    expect(snapshot.messagesByRoom['!room:test'][0].thread?.replyCount).toBe(1200);
+  });
+
+  it('marks unknown partial totals as lower bounds and leaves unproven participation unknown', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test');
+    const cache = createWorkspaceSnapshotCache();
+    const state = { mode: 'live' as const, revision: 1, canLoadOlder: true, canLoadNewer: false };
+    cache.threadHistory.set('$root:test', { roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found', events: [replyEvent('$reply')], state });
+    const client = fakeClient([root]);
+    const partial = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(partial.threadsByRoot['$root:test']).toMatchObject({ replyCount: 1, replyCountIsLowerBound: true, latestReplyEventId: '$reply' });
+    expect(partial.threadsByRoot['$root:test'].participated).toBeUndefined();
+    expect(partial.messagesByRoom['!room:test'][0].thread?.replyCountIsLowerBound).toBe(true);
+    state.canLoadOlder = false;
+    expect(buildWorkspaceSnapshot(client, 'online', [], [], cache).threadsByRoot['$root:test'].replyCountIsLowerBound).toBeUndefined();
+  });
+
+  it('preserves controller-owned count uncertainty and participation when a minimal SDK thread appears', () => {
+    const root = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test'), {
+      getServerAggregatedRelation: () => ({ count: 1200, current_user_participated: false }),
+    });
+    const latest = Object.assign(replyEvent('$newest'), { getRoomId: () => '!room:test' });
+    const cache = createWorkspaceSnapshotCache();
+    const view = { roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found' as const, replyCount: 1200, replyCountIsLowerBound: true, participated: true,
+      latestEvent: latest, events: [replyEvent('$older')], state: { mode: 'history' as const, revision: 1, canLoadOlder: true, canLoadNewer: true } };
+    cache.threadHistory.set('$root:test', view);
+    const client = fakeClient([root], { threads: [{ id: '$root:test', length: 1, events: [latest], hasCurrentUserParticipated: false }] });
+    const snapshot = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(snapshot.threadsByRoot['$root:test']).toMatchObject({ replyCount: 1200, replyCountIsLowerBound: true, participated: true, latestReplyEventId: '$newest' });
+    expect(snapshot.messagesByRoom['!room:test'][0].thread).toMatchObject({ replyCount: 1200, replyCountIsLowerBound: true });
+    view.replyCount = 1201;
+    view.replyCountIsLowerBound = false;
+    const refreshed = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    expect(refreshed.threadsByRoot['$root:test'].replyCount).toBe(1201);
+    expect(refreshed.threadsByRoot['$root:test'].replyCountIsLowerBound).toBeUndefined();
+  });
+
+  it.each(['wrong-room', 'wrong-thread', 'pending', 'redacted', 'edit', 'root'])('rejects an invalid cached live-tail proof: %s', (invalid) => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic root' }, '$root:test');
+    let latest = Object.assign(replyEvent('$latest', 'Invalid cached tail', invalid === 'wrong-thread' ? '$other-root' : '$root:test'), { getRoomId: () => invalid === 'wrong-room' ? '!other:test' : '!room:test' });
+    if (invalid === 'pending') Object.assign(latest, { status: 'sending' });
+    if (invalid === 'redacted') Object.assign(latest, { isRedacted: () => true });
+    if (invalid === 'edit') latest = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: '* Invalid cached edit', 'm.relates_to': { rel_type: 'm.replace', event_id: '$old' } }, '$edit'), { getRoomId: () => '!room:test', threadRootId: '$root:test' });
+    if (invalid === 'root') latest = Object.assign(root, { getRoomId: () => '!room:test' });
+    const cache = createWorkspaceSnapshotCache();
+    cache.threadHistory.set('$root:test', { roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found', latestEvent: latest, events: [replyEvent('$old')], state: { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true } });
+    const summary = buildWorkspaceSnapshot(fakeClient([]), 'online', [], [], cache).threadsByRoot['$root:test'];
+    expect(summary.latestReplyEventId).toBeUndefined();
+    expect(summary.latestReply).toBeUndefined();
+  });
+
   it('keeps thread replies out of the main timeline and exposes a root summary', () => {
     const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Ship it?' }, '$root:test');
     const reply = fakeEvent('m.room.message', {

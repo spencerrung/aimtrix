@@ -41,3 +41,13 @@ test('navigation evidence retains fixed checks without links, destinations, tags
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
+
+test('thread history evidence discards roots, replies, ciphertext, receipts and drafts', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'encrypted-thread-history-and-links';
+  const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
+    rootId: privateValue, replyId: privateValue, ciphertext: privateValue, receipts: [privateValue], draft: privateValue }],
+  });
+  assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});
