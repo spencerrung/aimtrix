@@ -36,6 +36,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
   };
   const alice = await newPage(), bob = await newPage(), aliceSecond = await newPage();
   let aliceSession, bobSession, secondSession, roomId;
+  let navigationHistory;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
   const uploads = [];
@@ -387,6 +388,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }
       invariant(wire.slice(historyWireStart).every((event) => event.content['m.relates_to']?.rel_type !== 'm.thread'), 'history-main-conversation-events');
       invariant(new Set(sentIds).size === 350 && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
+      navigationHistory = { firstId: sentIds[40], secondId: sentIds[240], firstText: `${prefix} 040`, secondText: `${prefix} 240` };
       // Reload removes the in-memory SDK timeline; existing keys remain on this
       // device and online peers can still share keys, as in the reload journey.
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
@@ -429,6 +431,108 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(sentIds[20])}`);
       await aliceSecond.getByText('That message was removed.', { exact: true }).waitFor({ timeout: 45000 });
       invariant(await entry(20).count() === 0, 'redacted-context-hidden');
+    });
+    await check('standard-favorites-and-own-device-sync', async () => {
+      const tagPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/rooms/${encode(roomId)}/tags`;
+      const customTag = 'org.example.synthetic-navigation';
+      await api(`${tagPath}/${encode(customTag)}`, { token: aliceSession.accessToken, method: 'PUT', body: { order: 0.25 } });
+      for (const page of [alice, aliceSecond, bob]) await openRoom(page, roomName);
+      await alice.bringToFront();
+      await alice.getByRole('button', { name: 'Add to favorites', exact: true }).click();
+      await alice.getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
+      await aliceSecond.bringToFront();
+      await aliceSecond.getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
+      await until(async () => Object.hasOwn((await api(tagPath, { token: aliceSession.accessToken })).tags ?? {}, 'm.favourite'), 'favorite-server-tag');
+      await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
+      await aliceSecond.getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
+      invariant(await bob.getByRole('button', { name: 'Add to favorites', exact: true }).isVisible(), 'favorite-other-user-isolation');
+      const otherTags = await api(`/_matrix/client/v3/user/${encode(bobSession.userId)}/rooms/${encode(roomId)}/tags`, { token: bobSession.accessToken });
+      invariant(!Object.hasOwn(otherTags.tags ?? {}, 'm.favourite'), 'favorite-other-account-tag-absent');
+      await aliceSecond.bringToFront();
+      await aliceSecond.getByRole('button', { name: 'Remove from favorites', exact: true }).click();
+      await aliceSecond.getByRole('button', { name: 'Add to favorites', exact: true }).waitFor();
+      await alice.bringToFront();
+      await alice.getByRole('button', { name: 'Add to favorites', exact: true }).waitFor();
+      const tags = (await api(tagPath, { token: aliceSession.accessToken })).tags ?? {};
+      invariant(!Object.hasOwn(tags, 'm.favourite') && tags[customTag]?.order === 0.25, 'favorite-removal-preserves-other-tags');
+    });
+    await check('matrix-links-and-navigation-history', async () => {
+      invariant(Boolean(navigationHistory), 'navigation-history-available');
+      const { firstId, secondId, firstText, secondText } = navigationHistory;
+      const alias = `#navigation-${randomBytes(8).toString('hex')}:aimtrix.test`;
+      await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken, method: 'PUT', body: { room_id: roomId } });
+      await api(`/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.canonical_alias`, { token: aliceSession.accessToken, method: 'PUT', body: { alias } });
+      await aliceSecond.bringToFront();
+      // Start without the earlier redacted-context launch URL or SDK history.
+      await aliceSecond.goto(stack.origins.app); await openRoom(aliceSecond, roomName);
+      const timeline = aliceSecond.getByRole('region', { name: 'Messages', exact: true });
+      const first = timeline.locator('.timeline-message').filter({ hasText: firstText });
+      const second = timeline.locator('.timeline-message').filter({ hasText: secondText });
+      await timeline.locator('.timeline-message').first().waitFor({ timeout: 45000 });
+      invariant(await first.count() === 0 && await second.count() === 0, 'navigation-targets-outside-initial-window');
+      const draft = 'Synthetic draft retained through Matrix navigation';
+      const composer = aliceSecond.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
+      await composer.fill(draft);
+      let resolvedAlias = false, joinedRoom = false;
+      const requestedContexts = new Set();
+      const observeNavigation = (request) => {
+        const path = new URL(request.url()).pathname.split('/').map(decodeURIComponent);
+        if (request.method() === 'GET' && path.at(-1) === alias && path.includes('directory')) resolvedAlias = true;
+        if (request.method() === 'GET' && path.includes('context')) requestedContexts.add(path.at(-1));
+        if (request.method() === 'POST' && (path.includes('join') || path.at(-1) === 'createRoom')) joinedRoom = true;
+      };
+      const openLink = async (value) => {
+        await aliceSecond.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+        await aliceSecond.getByRole('dialog', { name: 'Quick switcher', exact: true }).getByRole('button', { name: 'Open Matrix link', exact: true }).click();
+        const dialog = aliceSecond.getByRole('dialog', { name: 'Open Matrix link', exact: true });
+        await dialog.getByLabel('Matrix link', { exact: true }).fill(value);
+        await dialog.getByRole('button', { name: 'Open link', exact: true }).click();
+        await dialog.waitFor({ state: 'hidden' });
+      };
+      const appTraverse = async (direction) => {
+        await aliceSecond.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+        const dialog = aliceSecond.getByRole('dialog', { name: 'Quick switcher', exact: true });
+        await dialog.getByRole('button', { name: direction, exact: true }).click();
+        await dialog.waitFor({ state: 'hidden' });
+      };
+      const restoredAt = async (entry, top) => {
+        await entry.waitFor({ timeout: 45000 });
+        await until(async () => {
+          const bounds = await entry.boundingBox();
+          return bounds !== null && Math.abs(bounds.y - top) < 3;
+        }, 'navigation-reading-anchor-restored');
+        invariant(await composer.textContent() === draft, 'navigation-draft-preserved');
+      };
+      aliceSecond.on('request', observeNavigation);
+      try {
+        await openLink(`https://matrix.to/#/${encode(alias)}/${encode(firstId)}`);
+        await first.waitFor({ timeout: 45000 });
+        // Let the context's intentional positioning finish before the observed
+        // reading scroll; no timing sleep or production controller hook needed.
+        await aliceSecond.evaluate(() => new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))));
+        await timeline.evaluate((element) => { element.scrollTop += 53; element.dispatchEvent(new Event('scroll')); });
+        const firstTop = (await first.boundingBox()).y;
+        await openLink(`matrix:roomid/${encode(roomId.slice(1))}/e/${encode(secondId.slice(1))}`);
+        await second.waitFor({ timeout: 45000 });
+        invariant(await first.count() === 0 && await timeline.locator('.timeline-message').count() <= 250, 'navigation-distinct-bounded-contexts');
+        await aliceSecond.evaluate(() => new Promise((resolve) => window.requestAnimationFrame(() => window.requestAnimationFrame(resolve))));
+        const secondTop = (await second.boundingBox()).y;
+        invariant(resolvedAlias && requestedContexts.has(firstId) && requestedContexts.has(secondId), 'navigation-real-alias-and-context-endpoints');
+        await aliceSecond.evaluate(() => window.history.back());
+        await restoredAt(first, firstTop);
+        await appTraverse('Forward');
+        await restoredAt(second, secondTop);
+        await appTraverse('Back');
+        await restoredAt(first, firstTop);
+        await aliceSecond.evaluate(() => window.history.forward());
+        await restoredAt(second, secondTop);
+        invariant(!joinedRoom, 'matrix-navigation-never-joins-or-creates');
+        invariant(await aliceSecond.evaluate(({ room, firstEvent, secondEvent, aliasValue }) => {
+          const state = JSON.stringify(window.history.state);
+          return ![room, firstEvent, secondEvent, aliasValue].some((value) => state.includes(value));
+        }, { room: roomId, firstEvent: firstId, secondEvent: secondId, aliasValue: alias }), 'navigation-history-state-opaque');
+      } finally { aliceSecond.off('request', observeNavigation); }
+      await composer.fill('');
     });
     await check('authenticated-encrypted-media', async () => {
       const latest = bob.getByRole('button', { name: 'Jump to latest messages', exact: true });

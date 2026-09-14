@@ -63,3 +63,26 @@ describe('browser platform', () => {
     expect(subscription.unsubscribe).toHaveBeenCalledOnce();
   });
 });
+
+
+describe('browser Matrix destinations', () => {
+  it('preserves complete alias targets when opening a route', () => {
+    const state = { __aimtrixShell: { session: 'synthetic', entry: 2 } };
+    window.history.replaceState(state, '', '/client/?demo=1&room=!old:test');
+    const listener = vi.fn();
+    window.addEventListener('aimtrix-push-route', listener);
+    try {
+      createBrowserPlatform().deepLinks.openRoute({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] });
+      expect(window.location.pathname).toBe('/client/');
+      expect(window.location.search).toBe('?demo=1&alias=%23lounge%3Atest&event=%24event&via=test');
+      expect(window.history.state).toEqual(state);
+      expect((listener.mock.calls[0][0] as CustomEvent).detail).toEqual({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] });
+    } finally { window.removeEventListener('aimtrix-push-route', listener); }
+  });
+
+  it('rejects invalid explicit events before changing the current route', () => {
+    window.history.replaceState({}, '', '/?event=%24original');
+    expect(() => createBrowserPlatform().deepLinks.openRoute({ roomId: '!room:test', eventId: 'broken' })).toThrow('invalid');
+    expect(window.location.search).toBe('?event=%24original');
+  });
+});

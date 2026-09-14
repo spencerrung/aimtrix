@@ -36,6 +36,7 @@ import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWor
 import { resolveHomeserver } from './discovery';
 import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
+import { isMatrixNavigationTarget, type MatrixNavigationTarget } from './matrixLinks';
 import { RoomHistory } from './RoomHistory';
 import {
   matrixFormattedMessage,
@@ -247,6 +248,7 @@ export class MatrixController {
   private profilePersonalizationLoaded = false;
   private profilePersonalizationSaveTimer?: number;
   private profilePersonalizationWrites = new WeakMap<MatrixClient, Promise<void>>();
+  private readonly favoriteWrites = new WeakMap<MatrixClient, Map<string, Promise<void>>>();
   private retryingMessages = new WeakSet<MatrixEvent>();
   private readonly spaceHierarchies = new Map<string, SpaceHierarchyRoomData[]>();
   private readonly spaceHierarchyRequests = new Map<string, Promise<void>>();
@@ -1754,6 +1756,62 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
+  public async resolveNavigationTarget(target: MatrixNavigationTarget): Promise<{ roomId: string; eventId?: string }> {
+    if (!isMatrixNavigationTarget(target)) throw new Error('That Matrix link is not supported.');
+    const client = this.client;
+    const revision = this.lifecycleRevision;
+    if (!client) throw new Error('Matrix is not connected.');
+    const { roomAlias, userId, eventId } = target;
+    let roomId = target.roomId;
+    if (roomAlias) {
+      try { roomId = (await client.getRoomIdForAlias(roomAlias)).room_id; }
+      catch { throw new Error('That room alias could not be resolved. Check the link and try again.'); }
+    } else if (userId) {
+      const direct = client.getAccountData('m.direct' as EventType.Direct)?.getContent<Record<string, unknown>>()[userId];
+      roomId = Array.isArray(direct) ? direct.find((id): id is string => {
+        if (typeof id !== 'string') return false;
+        const room = client.getRoom(id);
+        return room?.getMyMembership() === 'join' && room.getType() !== 'm.space';
+      }) : undefined;
+      if (!roomId) throw new Error('No joined conversation exists for this person. Use Start conversation to begin one.');
+    }
+    if (this.client !== client || this.lifecycleRevision !== revision) throw new Error('The Matrix session changed. Try again.');
+    const room = roomId ? client.getRoom(roomId) : undefined;
+    // Navigation is read-only. Routing hints and action=join never authorize
+    // joining a room, creating a DM, or opening an invite as a joined timeline.
+    if (!room || room.getMyMembership() !== 'join' || room.getType() === 'm.space') {
+      throw new Error('Join this conversation before opening its Matrix link.');
+    }
+    return { roomId: room.roomId, ...(eventId ? { eventId } : {}) };
+  }
+
+  public async setRoomFavorite(roomId: string, favorite: boolean): Promise<void> {
+    const client = this.client;
+    const revision = this.lifecycleRevision;
+    if (!client) throw new Error('Matrix is not connected.');
+    const writes = this.favoriteWrites.get(client) ?? new Map<string, Promise<void>>();
+    this.favoriteWrites.set(client, writes);
+    const previous = writes.get(roomId) ?? Promise.resolve();
+    const write = previous.catch(() => undefined).then(async () => {
+      if (this.client !== client || this.lifecycleRevision !== revision) throw new Error('The Matrix session changed. Try again.');
+      const room = client.getRoom(roomId);
+      if (!room || room.getMyMembership() !== 'join' || room.getType() === 'm.space') {
+        throw new Error('Only joined conversations can be favorites.');
+      }
+      try {
+        if (favorite) await client.setRoomTag(roomId, 'm.favourite', { ...room.tags?.['m.favourite'] });
+        else await client.deleteRoomTag(roomId, 'm.favourite');
+      } catch { throw new Error('The favorite could not be saved. Try again.'); }
+      if (this.client !== client || this.lifecycleRevision !== revision) throw new Error('The Matrix session changed. Try again.');
+      // The server's m.tag sync is authoritative. Do not replace other tags or
+      // claim a changed favorite in the snapshot before the server confirms it.
+      this.scheduleWorkspacePublish();
+    });
+    writes.set(roomId, write);
+    try { await write; }
+    finally { if (writes.get(roomId) === write) writes.delete(roomId); }
+  }
+
   public async createDirectRoom(userId: string): Promise<string> {
     const client = this.client;
     const sdk = this.sdk;
@@ -2953,6 +3011,12 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   };
 
+  private readonly handleRoomTags = (_event: MatrixEvent, room: Room): void => {
+    if (this.client?.getRoom(room.roomId) !== room) return;
+    this.bumpRoomVersion(room.roomId);
+    this.scheduleWorkspacePublish();
+  };
+
   private trackLocalEvent(client: MatrixClient, event: MatrixEvent): void {
     if (this.client !== client) return;
     const roomId = event.getRoomId();
@@ -3064,6 +3128,7 @@ export class MatrixController {
     this.client.on(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.on(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
     this.client.on(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);
+    this.client.on(this.sdk.RoomEvent.Tags, this.handleRoomTags);
     this.client.on(this.sdk.RoomStateEvent.Events, this.handleRoomState);
     this.client.on(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.on(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);
@@ -3083,6 +3148,7 @@ export class MatrixController {
     this.client.removeListener(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.removeListener(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
     this.client.removeListener(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);
+    this.client.removeListener(this.sdk.RoomEvent.Tags, this.handleRoomTags);
     this.client.removeListener(this.sdk.RoomStateEvent.Events, this.handleRoomState);
     this.client.removeListener(this.sdk.RoomStateEvent.Members, this.handleRoomState);
     this.client.removeListener(this.sdk.MatrixEventEvent.Decrypted, this.handleDecrypted);

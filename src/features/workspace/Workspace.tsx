@@ -1,5 +1,9 @@
 import { MemberActions } from './MemberActions';
-import { useShellNavigation } from './useShellNavigation';
+import { useShellNavigation, type ShellReadingPosition } from './useShellNavigation';
+import { QuickSwitcher } from './QuickSwitcher';
+import { NavigationDialogs } from './NavigationDialogs';
+import { getNavigationShortcut, type NavigationTarget } from './quickNavigation';
+import { parseMatrixLink, type MatrixNavigationTarget } from '../../matrix/matrixLinks';
 import type { VolatileDrafts } from './volatileDrafts';
 import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
 import { useDialogBusy } from '../../components/dialogContext';
@@ -10,6 +14,8 @@ import { MessageSendError } from '../../matrix/messageDelivery';
 import {
   ArrowDown,
   ArrowLeft,
+  ArrowRight,
+  Star,
   ArrowUp,
   BellRing,
   Check,
@@ -187,10 +193,11 @@ function firstSharedUrl(body: string): string | undefined {
 }
 
 function LinkifiedText({ body }: { body: string }) {
-  const parts = body.split(URL_PATTERN);
-  const links = body.match(URL_PATTERN) ?? [];
+  const parts = body.split(/(?:https?:\/\/|matrix:)[^\s<>()]+/gi);
+  const links = body.match(/(?:https?:\/\/|matrix:)[^\s<>()]+/gi) ?? [];
   return <>{parts.flatMap((part, index) => {
-    const url = links[index]?.replace(/[),.!?]+$/, '');
+    const link = links[index];
+    const url = link && (/^(?:matrix:|https:\/\/matrix\.to\/)/i.test(link) ? link : link.replace(/[),.!?]+$/, ''));
     return [part, url ? <a href={url} target="_blank" rel="noreferrer" key={`${url}:${index}`}>{url}</a> : null];
   })}</>;
 }
@@ -441,6 +448,8 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onCancelUpload?: () => void;
   onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
   onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
+  onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
+  onResolveNavigationTarget?: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
   onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
   onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
   onJoinRoom?: (roomIdOrAlias: string) => Promise<void>;
@@ -1124,9 +1133,13 @@ function BuddyPanel({
   onReorganize,
   scopeName,
   scopeSpace,
+  filter,
+  onFilterChange,
 }: {
   workspace: WorkspaceSnapshot;
   selectedRoomId?: string;
+  filter: 'all' | 'unread' | 'favorites';
+  onFilterChange: (filter: 'all' | 'unread' | 'favorites') => void;
   scopeName: string;
   scopeSpace?: SpaceSummary;
   query: string;
@@ -1153,7 +1166,7 @@ function BuddyPanel({
   const [childOrderOverrides, setChildOrderOverrides] = useState<Record<string, string[]>>({});
   const organizationQueue = useRef<Promise<void>>(Promise.resolve());
   const normalizedQuery = query.trim().toLowerCase();
-  const showSpaceTree = scopeSpace?.kind === 'matrix';
+  const showSpaceTree = scopeSpace?.kind === 'matrix' && filter === 'all';
   const canArrange = Boolean(
     showSpaceTree &&
     scopeSpace?.canManage &&
@@ -1348,6 +1361,7 @@ function BuddyPanel({
         />
       </label>
 
+      <label className="buddy-search"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)} style={{ width: '100%', minHeight: 44, color: 'var(--text)', background: 'var(--surface-raised)', border: 0 }}><option value="all">All conversations</option><option value="unread">Unread conversations</option><option value="favorites">Favorite conversations</option></select></label>
       <div className={`buddy-groups${showSpaceTree ? ' buddy-groups--space-tree' : ''}`}>
         {showSpaceTree && scopeSpace ? (
           <>
@@ -1424,7 +1438,7 @@ function BuddyPanel({
         ) : (
           roomGroups.map((group) => {
             const rooms = workspace.rooms.filter(
-              (room) => room.group === group && room.name.toLowerCase().includes(normalizedQuery),
+              (room) => room.group === group && room.name.toLowerCase().includes(normalizedQuery) && (filter === 'all' || (filter === 'favorites' ? room.favorite : (room.badgeCount ?? room.unreadCount) > 0)),
             );
             if (rooms.length === 0) return null;
             const isCollapsed = collapsed[group] ?? false;
@@ -1458,6 +1472,7 @@ function BuddyPanel({
             );
           })
         )}
+        {filter !== 'all' && !workspace.rooms.some((room) => room.name.toLowerCase().includes(normalizedQuery) && (filter === 'favorites' ? room.favorite : (room.badgeCount ?? room.unreadCount) > 0)) ? <p className="space-tree__empty">No {filter === 'favorites' ? 'favorite' : 'unread'} conversations in this space.</p> : null}
       </div>
 
       <div className="self-card">
@@ -1866,11 +1881,18 @@ function Conversation({
   onLoadMore,
   onOpenContext,
   onReturnToLive,
+  onNavigationLive,
   onDetachedChange,
   onReadLatest,
   onReadThread,
   onMarkUnread,
   onMarkRead,
+  onToggleFavorite,
+  favoritePending,
+  navigationEntry,
+  navigationReading,
+  navigationPending,
+  onRememberReading,
   gifEndpoint,
   stickerPacks,
   defaultStickerPack,
@@ -1941,11 +1963,18 @@ function Conversation({
   onLoadMore?: (direction: 'backward' | 'forward') => Promise<void>;
   onOpenContext?: (eventId: string) => Promise<void>;
   onReturnToLive?: () => Promise<void>;
+  onNavigationLive: () => void;
   onDetachedChange?: (detached: boolean) => void;
   onReadLatest?: (eventId: string) => Promise<void>;
   onReadThread?: (eventId: string) => Promise<void>;
   onMarkUnread?: (eventId?: string) => Promise<void>;
   onMarkRead?: (eventId?: string) => Promise<void>;
+  onToggleFavorite?: () => void;
+  favoritePending?: boolean;
+  navigationEntry: number;
+  navigationReading?: ShellReadingPosition;
+  navigationPending: boolean;
+  onRememberReading: (reading: ShellReadingPosition, entryId: number) => void;
   gifEndpoint?: string;
   stickerPacks: Array<{ name: string; manifestUrl: string }>;
   defaultStickerPack?: string;
@@ -2585,6 +2614,43 @@ function Conversation({
     previousTimelineMessages.current = messages;
   }, [conversationVisible, activeEntryUnreadMarker, history, historyAction, historicalWindow, messages, onDetachedChange, restoreTimelineViewport, room?.id, runProgrammaticScroll]);
 
+  const restoredNavigationEntry = useRef<number | undefined>(undefined);
+  const captureNavigationReading = useCallback(() => {
+    const element = timeline.current;
+    if (!element || !conversationVisible || navigationPending || history?.loading || restoredNavigationEntry.current !== navigationEntry) return;
+    const candidate = captureTimelineAnchor(element)?.candidates[0];
+    onRememberReading({ mode: history?.mode ?? 'live', atLatest: !historicalWindow && viewportMode.current === 'bottom', anchor: candidate && { eventId: candidate.eventId, offset: candidate.offset } }, navigationEntry);
+  }, [conversationVisible, historicalWindow, history?.loading, history?.mode, navigationEntry, navigationPending, onRememberReading]);
+  useEffect(() => {
+    const frame = requestAnimationFrame(captureNavigationReading);
+    return () => cancelAnimationFrame(frame);
+  }, [captureNavigationReading]);
+  useLayoutEffect(() => {
+    const element = timeline.current;
+    if (!element || !conversationVisible || navigationPending || history?.loading) return;
+    if (restoredNavigationEntry.current !== navigationEntry) {
+      const saved = navigationReading;
+      if (saved?.atLatest) {
+        viewportMode.current = 'bottom';
+        runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
+        queueMicrotask(() => setTimelineDetached(false));
+      } else if (saved?.anchor) {
+        const row = historyRows(element).find((item) => item.dataset.eventId === saved.anchor?.eventId);
+        if (!row && history?.targetStatus !== 'unavailable' && history?.targetStatus !== 'removed') return;
+        if (row) {
+          viewportMode.current = 'detached';
+          runProgrammaticScroll(() => { element.scrollTop += row.getBoundingClientRect().top - element.getBoundingClientRect().top - saved.anchor!.offset; });
+          row.focus({ preventScroll: true });
+          readingAnchor.current = captureTimelineAnchor(element);
+          queueMicrotask(() => setTimelineDetached(true));
+          onDetachedChange?.(true);
+        }
+      }
+      restoredNavigationEntry.current = navigationEntry;
+    }
+    captureNavigationReading();
+  }, [captureNavigationReading, conversationVisible, history?.loading, history?.targetStatus, messages, navigationEntry, navigationPending, navigationReading, onDetachedChange, runProgrammaticScroll]);
+
   useLayoutEffect(() => {
     const content = timelineContent.current;
     if (!content || typeof ResizeObserver === 'undefined') return;
@@ -2767,6 +2833,7 @@ function Conversation({
       });
       return;
     }
+    onNavigationLive();
     viewportMode.current = 'bottom';
     readingAnchor.current = undefined;
     unreadAnchorTop.current = undefined;
@@ -2779,7 +2846,7 @@ function Conversation({
       runProgrammaticScroll(() => { element.scrollTop = element.scrollHeight; });
       reportLatestRead();
     });
-  }, [history, onCloseContext, onDetachedChange, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll, searchOpen]);
+  }, [history, onCloseContext, onDetachedChange, onNavigationLive, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll, searchOpen]);
 
   useEffect(() => { if (viewportMode.current === 'bottom') reportLatestRead(); }, [history?.revision, latestMessageId, reportLatestRead, timelineDetached]);
 
@@ -2797,6 +2864,7 @@ function Conversation({
     unreadAnchorTop.current = undefined;
     readingAnchor.current = captureTimelineAnchor(element);
     onDetachedChange?.(detached);
+    captureNavigationReading();
     if (!detached) reportLatestRead();
     // Layout, focus and anchor restoration also emit scroll events. Only a
     // fresh user scroll gesture may turn an edge into automatic pagination;
@@ -2805,7 +2873,7 @@ function Conversation({
     if (!intent || intent.roomId !== activeRoomId || intent.until < Date.now() || historyLoading || historyError) return;
     if (movement < 0 && intent.direction !== 'forward' && element.scrollTop <= 80 && history?.canLoadOlder) void requestHistory('backward');
     else if (movement > 0 && intent.direction !== 'backward' && atBottom && history?.canLoadNewer) void requestHistory('forward');
-  }, [activeRoomId, conversationVisible, historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, onDetachedChange, reportLatestRead, requestHistory]);
+  }, [activeRoomId, captureNavigationReading, conversationVisible, historicalWindow, history?.canLoadNewer, history?.canLoadOlder, historyError, historyLoading, onDetachedChange, reportLatestRead, requestHistory]);
 
   const loadEmojiCatalog = useCallback(() => {
     if (catalogRequested.current) return;
@@ -2989,7 +3057,7 @@ function Conversation({
       aria-label={`Conversation with ${room.name}`}
     >
       <header className="conversation-header">
-        <IconButton className="conversation-back" label="Back to buddy list" onClick={onBack}>
+        <IconButton className="conversation-back" label="Back to previous view" onClick={onBack}>
           <ArrowLeft className="mobile-back" size={18} />
         </IconButton>
         <Avatar
@@ -3004,6 +3072,7 @@ function Conversation({
           <p>{room.statusMessage || (room.kind === 'direct' ? 'Direct message' : 'Matrix room')}</p>
         </div>
         <div className="conversation-header__actions">
+          {onToggleFavorite ? <button className="icon-button" type="button" aria-label={room.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={Boolean(room.favorite)} aria-disabled={favoritePending || undefined} onClick={() => { if (!favoritePending) onToggleFavorite(); }}><Star size={17} fill={room.favorite ? 'currentColor' : 'none'} /></button> : null}
           {onMarkUnread || onMarkRead ? <button ref={readActionsTrigger} className="icon-button" type="button" aria-label="Read status" aria-haspopup="dialog" aria-expanded={readActionsRoom === room.id} onClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setReadPopoverTop(Math.max(12, Math.min(bounds.bottom + 8, window.innerHeight - 240))); setReadPopoverRight(Math.max(12, Math.min(window.innerWidth - bounds.right, window.innerWidth - 344))); setReadActionsRoom((current) => current === room.id ? undefined : room.id); }}><Check size={17} /></button> : null}
           <IconButton label="Search loaded messages" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
           {room.encrypted ? <span className="encrypted-pill"><ShieldCheck size={13} /> Encrypted</span> : null}
@@ -3996,6 +4065,8 @@ export function Workspace({
   onSendGif,
   onMarkRoomRead,
   onMarkThreadRead,
+  onSetRoomFavorite,
+  onResolveNavigationTarget,
   onMarkRoomUnread,
   onJoinRoom,
   onSearchPublicRooms,
@@ -4045,7 +4116,13 @@ export function Workspace({
     }
   });
   const [query, setQuery] = useState('');
-  const { route: shellRoute, navigate: navigateShell, back: shellBack } = useShellNavigation({
+  const [navigationDialog, setNavigationDialog] = useState<'switcher' | 'link' | 'help'>();
+  const [conversationFilter, setConversationFilter] = useState<'all' | 'unread' | 'favorites'>('all');
+  const [recents, setRecents] = useState<string[]>([]);
+  const [favoritePending, setFavoritePending] = useState<Set<string>>(() => new Set());
+  const navigationIntent = useRef(0);
+  useEffect(() => () => { navigationIntent.current += 1; }, []);
+  const { route: shellRoute, entryId: shellEntry, reading: shellReading, remember: rememberReading, navigate: navigateShell, back: shellBack, forward: shellForward, canGoBack, canGoForward } = useShellNavigation({
     surface: 'list', roomId: selectedRoomId, spaceId: activeSpace,
     panel: preferences.detailsOpenByDefault ? 'details' : null,
   });
@@ -4216,7 +4293,6 @@ export function Workspace({
   const typingTimer = useRef<number | undefined>(undefined);
   const lastTypingSentAt = useRef(0);
   const handledPushRoute = useRef<PushRoute | undefined>(undefined);
-  const [settledContextRoute, setSettledContextRoute] = useState<PushRoute>();
   const missingPushRoom = useRef<PushRoute | undefined>(undefined);
   const currentHistoryRoom = useRef<string | undefined>(undefined);
   const historyHandlers = useRef({ onRoomSelected, onLoadRoomHistory, onOpenEventContext, onReturnToLive, onHistoryDetached });
@@ -4246,8 +4322,8 @@ export function Workspace({
     ]),
   ), [memberPowerOverrides, workspace.membersByRoom]);
   const scopedWorkspace = useMemo(
-    () => ({ ...workspace, rooms: visibleRooms, membersByRoom: effectiveMembersByRoom }),
-    [effectiveMembersByRoom, visibleRooms, workspace],
+    () => ({ ...workspace, rooms: visibleRooms.map((room) => ({ ...room, ...roomOverrides[room.id] })), membersByRoom: effectiveMembersByRoom }),
+    [effectiveMembersByRoom, roomOverrides, visibleRooms, workspace],
   );
   const effectiveRoomId = visibleRooms.some((room) => room.id === selectedRoomId)
     ? selectedRoomId
@@ -4313,23 +4389,79 @@ export function Workspace({
     ? Object.entries(workspace.messagesByRoom).find(([, roomMessages]) => roomMessages.some((message) => message.id === pushRoute.eventId))?.[0]
       ?? Object.values(workspace.threadsByRoot).flatMap((thread) => thread.messages).find((message) => message.id === pushRoute.eventId)?.roomId
     : undefined);
-  // Block the cached live view before effects dispatch an incoming context route.
-  const pendingRouteContext = Boolean(pushRoute?.eventId && settledContextRoute !== pushRoute && pendingRouteRoom === effectiveRoomId);
+  const [pendingContextSnapshot, setPendingContextSnapshot] = useState<{ roomId: string; routeEventId?: string; eventId: string; previousRevision?: number }>();
+  const [restoration, setRestoration] = useState({ roomId: shellRoute.roomId, eventId: shellRoute.eventId, entryId: shellEntry, reading: shellReading, restorePosition: false });
+  if (restoration.entryId !== shellEntry) {
+    const restorePosition = restoration.roomId !== shellRoute.roomId || restoration.eventId !== shellRoute.eventId;
+    const retainPendingReading = pendingContextSnapshot?.roomId === shellRoute.roomId
+      && pendingContextSnapshot !== undefined && pendingContextSnapshot.routeEventId === shellRoute.eventId;
+    // Panel transitions share the visible timeline but still own a fresh entry
+    // for subsequent reading updates. Only destination changes restore it.
+    setRestoration({ roomId: shellRoute.roomId, eventId: shellRoute.eventId, entryId: shellEntry, reading: restorePosition ? shellReading : retainPendingReading ? restoration.reading : undefined, restorePosition });
+  }
+  const routeContextTarget = restoration.reading?.atLatest ? undefined : restoration.reading?.anchor?.eventId ?? restoration.eventId;
+  const [settledNavigationEntry, setSettledNavigationEntry] = useState(shellEntry);
+  const [settledIncomingRoute, setSettledIncomingRoute] = useState<PushRoute>();
+  // Opening a docked panel changes the entry, but its still-visible timeline
+  // must keep waiting for the same destination's requested context snapshot.
+  const awaitingDestinationSnapshot = pendingContextSnapshot?.roomId === restoration.roomId
+    && pendingContextSnapshot !== undefined && pendingContextSnapshot.routeEventId === restoration.eventId;
+  const contextSnapshotCommitted = awaitingDestinationSnapshot
+    && selectedHistory?.targetEventId === pendingContextSnapshot.eventId
+    && !selectedHistory.loading && selectedHistory.revision !== pendingContextSnapshot.previousRevision;
+  if (contextSnapshotCommitted) setPendingContextSnapshot(undefined);
+  const pendingRouteContext = Boolean((pushRoute?.eventId && settledIncomingRoute !== pushRoute && (!pendingRouteRoom || pendingRouteRoom === effectiveRoomId)) || (restoration.restorePosition && settledNavigationEntry !== restoration.entryId) || (awaitingDestinationSnapshot && !contextSnapshotCommitted));
+  useLayoutEffect(() => { navigationIntent.current += 1; }, [shellEntry, pushRoute]);
   useEffect(() => {
-    if (pushRoute?.eventId && pendingRouteRoom === effectiveRoomId && selectedHistory?.mode === 'context'
-      && selectedHistory.targetEventId === pushRoute.eventId) {
-      queueMicrotask(() => setSettledContextRoute(pushRoute));
-    }
-  }, [effectiveRoomId, pendingRouteRoom, pushRoute, selectedHistory?.mode, selectedHistory?.targetEventId]);
+    if (shellRoute.roomId !== effectiveRoomId) return;
+    let active = true;
+    const restore = async () => {
+      try {
+        if (effectiveRoomId && restoration.restorePosition && restoration.entryId !== settledNavigationEntry) {
+          // A revisited entry follows its observed anchor, which may have moved
+          // beyond the original link's context window. Explicit links always
+          // request their context, including a retry of an unavailable target.
+          if (routeContextTarget && (!restoration.reading || !messages.some((message) => message.id === routeContextTarget) || (restoration.eventId && selectedHistory?.mode !== 'context'))) {
+            if (!historyHandlers.current.onOpenEventContext) {
+              if (workspace.mode !== 'demo') throw new Error('Message context is not available in this session.');
+            } else {
+              // The controller can resolve before its batched snapshot arrives.
+              // An overlapping old window must not consume the saved offset.
+              setPendingContextSnapshot({ roomId: effectiveRoomId, routeEventId: restoration.eventId, eventId: routeContextTarget, previousRevision: selectedHistory?.revision });
+              await historyHandlers.current.onOpenEventContext(effectiveRoomId, routeContextTarget);
+            }
+          } else if (restoration.reading?.atLatest && selectedHistory?.mode !== 'live') {
+            await historyHandlers.current.onReturnToLive?.(effectiveRoomId);
+          }
+        }
+      } catch {
+        if (active) {
+          setPendingContextSnapshot(undefined);
+          setNotice('This message or reading position could not be opened. Check your access and try the link again.');
+        }
+      } finally { if (active) setSettledNavigationEntry(restoration.entryId); }
+    };
+    queueMicrotask(() => { if (active) void restore(); });
+    return () => { active = false; };
+    // Each entry owns one restoration. Snapshot updates must not restart it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveRoomId, restoration]);
   const paginateCurrentRoom = useCallback(async (direction: 'backward' | 'forward') => {
     if (effectiveRoomId) await historyHandlers.current.onLoadRoomHistory?.(effectiveRoomId, direction);
   }, [effectiveRoomId]);
   const openCurrentEventContext = useCallback(async (eventId: string) => {
-    if (effectiveRoomId) await historyHandlers.current.onOpenEventContext?.(effectiveRoomId, eventId);
-  }, [effectiveRoomId]);
+    if (effectiveRoomId) {
+      if (shellRoute.eventId === eventId) { await historyHandlers.current.onOpenEventContext?.(effectiveRoomId, eventId); return; }
+      navigationIntent.current += 1; navigateShell({ ...shellRoute, roomId: effectiveRoomId, eventId, surface: 'conversation', panel: null }); }
+  }, [effectiveRoomId, navigateShell, shellRoute]);
   const returnCurrentRoomToLive = useCallback(async () => {
-    if (effectiveRoomId) await historyHandlers.current.onReturnToLive?.(effectiveRoomId);
-  }, [effectiveRoomId]);
+    if (effectiveRoomId) {
+      const intent = ++navigationIntent.current;
+      await historyHandlers.current.onReturnToLive?.(effectiveRoomId);
+      if (intent !== navigationIntent.current) return;
+      navigateShell({ ...shellRoute, eventId: undefined }, { replace: true });
+    }
+  }, [effectiveRoomId, navigateShell, shellRoute]);
   const changeHistoryDetached = useCallback((detached: boolean) => {
     if (effectiveRoomId) historyHandlers.current.onHistoryDetached?.(effectiveRoomId, detached);
   }, [effectiveRoomId]);
@@ -4370,9 +4502,12 @@ export function Workspace({
     [config.emojiPacks],
   );
 
-  const selectRoom = useCallback((roomId: string, spaceId = activeSpace) => {
+  const selectRoom = useCallback((roomId: string, spaceId = activeSpace, eventId?: string) => {
+    navigationIntent.current += 1;
+    setRecents((current) => [`room:${roomId}`, ...current.filter((key) => key !== `room:${roomId}`)].slice(0, 30));
+    setActiveSpace(spaceId);
     setSelectedRoomId(roomId);
-    navigateShell({ surface: 'conversation', roomId, spaceId, panel: contextDocked && shellRoute.panel === 'details' ? 'details' : null });
+    navigateShell({ surface: 'conversation', roomId, spaceId, eventId, panel: contextDocked && shellRoute.panel === 'details' ? 'details' : null });
     setNotice(undefined);
     setReplyTarget(undefined);
     setReplyThreadRootId(undefined);
@@ -4382,7 +4517,7 @@ export function Workspace({
   }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
   useEffect(() => {
-    if (!pushRoute || handledPushRoute.current === pushRoute) return;
+    if (!pushRoute || pushRoute.roomAlias || pushRoute.userId || handledPushRoute.current === pushRoute) return;
     const eventRoomId = pushRoute.eventId && !pushRoute.roomId
       ? Object.entries(workspace.messagesByRoom).find(([, roomMessages]) => roomMessages.some((message) => message.id === pushRoute.eventId))?.[0]
         ?? Object.values(workspace.threadsByRoot).flatMap((thread) => thread.messages).find((message) => message.id === pushRoute.eventId)?.roomId
@@ -4390,7 +4525,7 @@ export function Workspace({
     const roomId = pushRoute.roomId ?? eventRoomId;
     if (!roomId) {
       handledPushRoute.current = pushRoute;
-      queueMicrotask(() => setNotice('This notification does not include a room, and its message is not loaded. Open the conversation to find it.'));
+      queueMicrotask(() => { setSettledIncomingRoute(pushRoute); setNotice('This notification does not include a room, and its message is not loaded. Open the conversation to find it.'); });
       return;
     }
     if (!workspace.rooms.some((room) => room.id === roomId)) {
@@ -4407,14 +4542,9 @@ export function Workspace({
       if (targetSpace && targetSpace.id !== activeSpace) {
         setActiveSpace(targetSpace.id);
       }
-      selectRoom(roomId, targetSpace?.id ?? activeSpace);
-      if (pushRoute.eventId) {
-        const open = historyHandlers.current.onOpenEventContext;
-        if (!open) { setNotice('Message context is not available in this session.'); return; }
-        void open(roomId, pushRoute.eventId).catch(() => {
-          if (handledPushRoute.current === pushRoute && currentHistoryRoom.current === roomId) setNotice('The notification’s message could not be opened. Retry from the conversation history.');
-        });
-      }
+      selectRoom(roomId, targetSpace?.id ?? activeSpace, pushRoute.eventId);
+      setSettledIncomingRoute(pushRoute);
+
     });
   }, [activeSpace, onSpaceSelected, pushRoute, selectRoom, workspace.messagesByRoom, workspace.rooms, workspace.spaces, workspace.threadsByRoot]);
 
@@ -4431,6 +4561,8 @@ export function Workspace({
   }, [activeSpace, onSpaceSelected, workspace.mode]);
 
   const selectSpace = (spaceId: string) => {
+    navigationIntent.current += 1;
+    setRecents((current) => [`space:${spaceId}`, ...current.filter((key) => key !== `space:${spaceId}`)].slice(0, 30));
     const space = workspace.spaces.find((candidate) => candidate.id === spaceId);
     setActiveSpace(spaceId);
     setQuery('');
@@ -4443,6 +4575,97 @@ export function Workspace({
   useEffect(() => () => {
     if (typingTimer.current !== undefined) window.clearTimeout(typingTimer.current);
   }, []);
+
+  const chooseDestination = (target: NavigationTarget) => {
+    setPanelCollapsed('conversation', false);
+    if (target.kind === 'space') selectSpace(target.id);
+    else selectRoom(target.id, workspace.spaces.find((space) => space.roomIds.includes(target.id))?.id ?? activeSpace);
+    // Let Dialog restore its opener, then hand focus to the chosen destination.
+    // A later interaction or navigation always takes precedence.
+    queueMicrotask(() => queueMicrotask(() => {
+      const previous = document.activeElement;
+      const intent = navigationIntent.current;
+      requestAnimationFrame(() => {
+        if (navigationIntent.current !== intent || document.activeElement !== previous || document.querySelector('dialog[open]')) return;
+        const stage = appStage.current;
+        const destination = target.kind === 'space'
+          ? stage?.querySelector<HTMLElement>('.buddy-row--selected') ?? stage?.querySelector<HTMLElement>('.buddy-search input')
+          : [...(stage?.querySelectorAll<HTMLElement>('[data-room-id]') ?? [])].find((element) => element.dataset.roomId === target.id)?.querySelector<HTMLElement>('[data-room-heading]');
+        if (destination && !destination.closest('[hidden], [inert]')) destination.focus({ preventScroll: true });
+      });
+    }));
+  };
+  const goUnread = useCallback((direction: -1 | 1) => {
+    const rooms = workspace.rooms.filter((room) => room.membership === 'join' && room.kind !== 'space');
+    const current = rooms.findIndex((room) => room.id === effectiveRoomId);
+    for (let step = 1; step <= rooms.length; step += 1) {
+      const room = rooms[(current + direction * step + rooms.length * 2) % rooms.length];
+      if (room.id !== effectiveRoomId && (room.badgeCount ?? room.unreadCount) > 0) {
+        selectRoom(room.id, workspace.spaces.find((space) => space.roomIds.includes(room.id))?.id ?? activeSpace);
+        return true;
+      }
+    }
+    setNotice('No other unread conversations. You’re all caught up!');
+    return false;
+  }, [activeSpace, effectiveRoomId, selectRoom, workspace.rooms, workspace.spaces]);
+  useEffect(() => {
+    const handler = (event: globalThis.KeyboardEvent) => {
+      if ((event.target as HTMLElement)?.closest?.('dialog,[role="dialog"]')) return;
+      const shortcut = getNavigationShortcut(event, navigator.platform);
+      if (!shortcut) return;
+      event.preventDefault();
+      if (shortcut === 'switcher') setNavigationDialog('switcher');
+      else if (shortcut === 'help') setNavigationDialog('help');
+      else if (!goUnread(shortcut === 'previous-unread' ? -1 : 1)) setNavigationDialog('switcher');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [goUnread]);
+  const openMatrixTarget = useCallback(async (target: MatrixNavigationTarget) => {
+    const intent = ++navigationIntent.current;
+    const result = onResolveNavigationTarget ? await onResolveNavigationTarget(target) : (() => {
+      const room = workspace.rooms.find((candidate) => candidate.membership === 'join' && (target.roomId === candidate.id || target.roomAlias && target.roomAlias === candidate.canonicalAlias || target.userId && target.userId === candidate.directUserId));
+      if (!room) throw new Error('This destination is not available in your joined conversations. Join the room or start a conversation first.');
+      return { roomId: room.id, eventId: target.eventId };
+    })();
+    if (intent !== navigationIntent.current) return;
+    if (result.roomId === effectiveRoomId && result.eventId && result.eventId === shellRoute.eventId) {
+      await historyHandlers.current.onOpenEventContext?.(result.roomId, result.eventId);
+      return;
+    }
+    selectRoom(result.roomId, workspace.spaces.find((space) => space.roomIds.includes(result.roomId))?.id ?? activeSpace, result.eventId);
+  }, [activeSpace, effectiveRoomId, onResolveNavigationTarget, selectRoom, shellRoute.eventId, workspace.rooms, workspace.spaces]);
+  const matrixTargetHandler = useRef(openMatrixTarget);
+  useLayoutEffect(() => { matrixTargetHandler.current = openMatrixTarget; });
+  useEffect(() => {
+    if (!pushRoute || (!pushRoute.roomAlias && !pushRoute.userId) || handledPushRoute.current === pushRoute) return;
+    let active = true;
+    queueMicrotask(() => {
+      if (!active) return;
+      handledPushRoute.current = pushRoute;
+      void matrixTargetHandler.current(pushRoute).catch(() => {
+        if (active) setNotice('This Matrix destination is not available. Use Open Matrix link to check access or start a conversation.');
+      }).finally(() => { if (active) setSettledIncomingRoute(pushRoute); });
+    });
+    return () => { active = false; };
+  }, [pushRoute]);
+  const openMatrixLink = async (value: string) => {
+    const target = parseMatrixLink(value);
+    if (!target) throw new Error('Enter a complete Matrix room, message, or person link.');
+    await openMatrixTarget(target);
+  };
+  const toggleFavorite = async () => {
+    if (!selectedRoom || favoritePending.has(selectedRoom.id)) return;
+    const roomId = selectedRoom.id;
+    const favorite = !selectedRoom.favorite;
+    setFavoritePending((current) => new Set([...current, roomId]));
+    try {
+      if (workspace.mode === 'demo') setRoomOverrides((current) => ({ ...current, [roomId]: { ...current[roomId], favorite } }));
+      else if (onSetRoomFavorite) await onSetRoomFavorite(roomId, favorite);
+      if (currentHistoryRoom.current === roomId) setNotice(workspace.mode === 'demo' ? (favorite ? 'Favorite saved for this demo.' : 'Favorite removed for this demo.') : favorite ? 'Favorite saved. Your room list will update when it syncs.' : 'Favorite removed. Your room list will update when it syncs.');
+    } catch { if (currentHistoryRoom.current === roomId) setNotice('Could not update your favorite. Try the star again.'); }
+    finally { setFavoritePending((current) => { const next = new Set(current); next.delete(roomId); return next; }); }
+  };
 
   const uploadAttachment = async (file: File, threadRootId?: string, codeLanguage?: string, roomId = effectiveRoomId): Promise<boolean> => {
     if (!roomId) return false;
@@ -4936,9 +5159,30 @@ export function Workspace({
   }, []);
 
   return (
-    <div ref={appStage} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}${contextPanel ? ' context-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented && contextPanel && !(event.target as HTMLElement).closest('[role=dialog]')) { event.preventDefault(); closePanel(); } }}>
+    <div ref={appStage} onClickCapture={(event) => {
+      if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
+      const anchor = (event.target as Element).closest?.('a');
+      if (!anchor) return;
+      const value = anchor.getAttribute('href') ?? '';
+      let matrixLink = value.toLowerCase().startsWith('matrix:');
+      try { matrixLink ||= new URL(value).hostname === 'matrix.to'; } catch { /* Other links use ordinary browser navigation. */ }
+      if (!matrixLink) return;
+      event.preventDefault();
+      void openMatrixLink(value).catch(() => { setNotice('This Matrix link could not be opened. Use Open Matrix link in the quick switcher to check access or start a conversation.'); });
+    }} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}${contextPanel ? ' context-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented && contextPanel && !(event.target as HTMLElement).closest('dialog,[role=dialog]')) { event.preventDefault(); closePanel(); } }}>
+      {navigationDialog === 'switcher' ? <QuickSwitcher workspace={{ ...workspace, rooms: workspace.rooms.map((room) => ({ ...room, ...roomOverrides[room.id] })) }} recents={recents} onSelect={chooseDestination} onClose={() => setNavigationDialog(undefined)}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
+          <button className="aqua-button" style={{ minHeight: 44 }} type="button" disabled={!canGoBack} onClick={() => { setNavigationDialog(undefined); shellBack(); }}><ArrowLeft size={14} /> Back</button>
+          <button className="aqua-button" style={{ minHeight: 44 }} type="button" disabled={!canGoForward} onClick={() => { setNavigationDialog(undefined); shellForward(); }}><ArrowRight size={14} /> Forward</button>
+          <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => { if (goUnread(1)) setNavigationDialog(undefined); }}>Next unread</button>
+          <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => setNavigationDialog('link')}>Open Matrix link</button>
+          <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => setNavigationDialog('help')}>Keyboard shortcuts</button>
+          {notice === 'No other unread conversations. You’re all caught up!' ? <p role="status" style={{ margin: 0 }}>{notice}</p> : null}
+        </div>
+      </QuickSwitcher> : navigationDialog ? <NavigationDialogs kind={navigationDialog} onClose={() => setNavigationDialog(undefined)} onOpenLink={openMatrixLink} onStartConversation={onCreateDirectRoom ? async (userId) => { const id = await onCreateDirectRoom(userId); selectRoom(id, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace); } : undefined} /> : null}
       <section className={`aimtrix-window${connectionNotice ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
+          <button className="icon-button" type="button" aria-label="Quick switcher" title="Quick switcher" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setNavigationDialog('switcher')}><Search size={18} /></button>
           <div className="app-titlebar__identity">
             <BrandMark compact />
             <strong>{config.brandName}</strong>
@@ -4984,6 +5228,8 @@ export function Workspace({
             scopeSpace={activeSpaceSummary}
             query={query}
             onQueryChange={setQuery}
+            filter={conversationFilter}
+            onFilterChange={setConversationFilter}
             onSelectRoom={selectRoom}
             onOpenProfile={() => setProfileOpen((open) => !open)}
             onOpenSettings={() => {
@@ -5008,6 +5254,13 @@ export function Workspace({
             onRevealConversation={() => { suppressContextReturnFocus.current = true; closePanel(); }}
             room={selectedRoom}
             history={selectedHistory}
+            navigationEntry={restoration.entryId}
+            navigationReading={restoration.reading}
+            navigationPending={pendingRouteContext}
+            onRememberReading={rememberReading}
+            onNavigationLive={() => navigateShell({ ...shellRoute, eventId: undefined }, { replace: true })}
+            onToggleFavorite={selectedRoom?.membership === 'join' && (workspace.mode === 'demo' || onSetRoomFavorite) ? () => { void toggleFavorite(); } : undefined}
+            favoritePending={Boolean(effectiveRoomId && favoritePending.has(effectiveRoomId))}
             members={effectiveMembersByRoom[effectiveRoomId ?? ''] ?? []}
             messages={messages}
             activeThread={activeThread}

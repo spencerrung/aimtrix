@@ -5,6 +5,8 @@ import { defaultRuntimeConfig } from './config/runtimeConfig';
 import { demoWorkspace } from './demo/demoWorkspace';
 import { defaultProfilePersonalization, type ProfilePersonalization } from './settings/profilePersonalization';
 import type { MatrixControllerSnapshot } from './matrix/MatrixController';
+import type { MatrixNavigationTarget } from './matrix/matrixLinks';
+import type { PushRoute } from './pwa/pushRouting';
 
 const harness = vi.hoisted(() => ({
   snapshot: {} as MatrixControllerSnapshot,
@@ -16,6 +18,8 @@ const harness = vi.hoisted(() => ({
   markThreadRead: vi.fn(),
   markUnread: vi.fn(),
   notificationPreferences: vi.fn(),
+  favorite: vi.fn(),
+  resolveNavigation: vi.fn(),
 }));
 vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   constructor() { return new Proxy(this, { get: (target, key) => Reflect.get(target, key) ?? (() => undefined) }); }
@@ -28,20 +32,28 @@ vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   markThreadRead = (...args: unknown[]) => harness.markThreadRead(...args);
   markRoomUnread = (...args: unknown[]) => harness.markUnread(...args);
   setNotificationPreferences = (preferences: unknown) => harness.notificationPreferences(preferences);
+  setRoomFavorite = (...args: unknown[]) => harness.favorite(...args);
+  resolveNavigationTarget = (...args: unknown[]) => harness.resolveNavigation(...args);
 } }));
 vi.mock('./config/runtimeConfig', async (original) => {
   const actual = await original<typeof import('./config/runtimeConfig')>();
   return { ...actual, loadRuntimeConfig: async () => ({ config: actual.defaultRuntimeConfig, warnings: [] }) };
 });
-vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread }: {
+vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread, onSetRoomFavorite, onResolveNavigationTarget, pushRoute }: {
   workspace: typeof demoWorkspace; profilePersonalization: ProfilePersonalization; onProfilePersonalizationChange: (next: ProfilePersonalization) => Promise<void>;
   onMarkRoomRead: (roomId: string, options: { eventId: string; explicit: boolean }) => Promise<void>;
   onMarkThreadRead: (roomId: string, rootId: string, options: { eventId: string }) => Promise<void>;
   onMarkRoomUnread: (roomId: string, eventId: string) => Promise<void>;
+  onSetRoomFavorite: (roomId: string, favorite: boolean) => Promise<void>;
+  onResolveNavigationTarget: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
+  pushRoute?: PushRoute;
 }) => <main><span>{workspace.user.id}</span><span data-testid="profile-bio">{profilePersonalization.bio}</span><button onClick={() => void onProfilePersonalizationChange({ ...profilePersonalization, bio: 'Old pending update' })}>Update profile</button>
   <button onClick={() => void onMarkRoomRead('synthetic-room', { eventId: '$viewed', explicit: true })}>Read main</button>
   <button onClick={() => void onMarkThreadRead('synthetic-room', '$root', { eventId: '$reply' })}>Read thread</button>
   <button onClick={() => void onMarkRoomUnread('synthetic-room', '$return')}>Unread reminder</button>
+  <button onClick={() => void onSetRoomFavorite('synthetic-room', true)}>Favorite room</button>
+  <button onClick={() => void onResolveNavigationTarget({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] })}>Resolve destination</button>
+  <span data-testid="incoming-route">{JSON.stringify(pushRoute)}</span>
 </main> }));
 import App from './App';
 
@@ -51,6 +63,9 @@ beforeEach(() => {
   harness.listeners.clear(); harness.snapshot = ready(); harness.remote = undefined;
   harness.update.mockReset().mockResolvedValue(undefined); harness.forget.mockReset().mockResolvedValue(undefined);
   harness.notificationPreferences.mockReset();
+  harness.favorite.mockReset().mockResolvedValue(undefined);
+  harness.resolveNavigation.mockReset().mockResolvedValue({ roomId: '!lounge:test', eventId: '$event' });
+  window.history.replaceState({}, '', '/');
   harness.markRead.mockReset().mockResolvedValue(undefined); harness.markThreadRead.mockReset().mockResolvedValue(undefined); harness.markUnread.mockReset().mockResolvedValue(undefined);
   localStorage.clear(); sessionStorage.clear();
 });
@@ -119,5 +134,34 @@ describe('App receipt privacy', () => {
     expect(harness.markRead).toHaveBeenCalledWith('synthetic-room', { eventId: '$viewed', explicit: true, publicReceipt });
     expect(harness.markThreadRead).toHaveBeenCalledWith('synthetic-room', '$root', { eventId: '$reply', publicReceipt });
     expect(harness.markUnread).toHaveBeenCalledWith('synthetic-room', '$return');
+  });
+});
+
+
+describe('App Matrix navigation', () => {
+  it('connects favorite and complete navigation targets to controller operations', async () => {
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Favorite room' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Resolve destination' }));
+    expect(harness.favorite).toHaveBeenCalledWith('synthetic-room', true);
+    expect(harness.resolveNavigation).toHaveBeenCalledWith({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] });
+  });
+
+  it('replaces stale route fields without losing application URL or history state', async () => {
+    window.history.replaceState({ preserved: true }, '', '/client/?appearance=aqua&room=!old:test&event=$old');
+    render(<App />);
+    await screen.findByRole('button', { name: 'Resolve destination' });
+    fireEvent(window, new CustomEvent('aimtrix-push-route', { detail: { roomAlias: '#lounge:test', eventId: '$event', via: ['test'] } }));
+    expect(JSON.parse(screen.getByTestId('incoming-route').textContent!)).toEqual({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] });
+    expect(window.location.pathname + window.location.search).toBe('/client/?appearance=aqua&alias=%23lounge%3Atest&event=%24event&via=test');
+    expect(window.history.state).toEqual({ preserved: true });
+    fireEvent(window, new CustomEvent('aimtrix-push-route', { detail: { userId: '@alice:test' } }));
+    expect(window.location.search).toBe('?appearance=aqua&user=%40alice%3Atest');
+    fireEvent(window, new CustomEvent('aimtrix-push-route', { detail: { eventId: '$event-only' } }));
+    expect(window.location.search).toBe('?appearance=aqua&event=%24event-only');
+    const previous = screen.getByTestId('incoming-route').textContent;
+    fireEvent(window, new CustomEvent('aimtrix-push-route', { detail: { roomId: '!other:test', eventId: '' } }));
+    expect(screen.getByTestId('incoming-route')).toHaveTextContent(previous!);
+    expect(window.location.search).toBe('?appearance=aqua&event=%24event-only');
   });
 });

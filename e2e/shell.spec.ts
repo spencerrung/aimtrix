@@ -113,7 +113,7 @@ test('phone and tablet route Back preserves the room, draft and exact reading an
   await thread.getByRole('button', { name: 'Close thread' }).click();
   await expect(main).toBeVisible();
   await expect.poll(async () => Math.abs(await root.evaluate((element) => element.getBoundingClientRect().top - element.closest('.timeline')!.getBoundingClientRect().top) - anchorOffset)).toBeLessThan(3);
-  if (size.width < 768) await page.getByRole('button', { name: 'Back to buddy list' }).click();
+  if (size.width < 768) await page.getByRole('button', { name: 'Back to previous view' }).click();
   else await page.goBack();
   await expect(page.getByRole('button', { name: /Welcome Lounge/ })).toBeVisible();
   if (size.width < 768) await expect(main).toBeHidden();
@@ -131,7 +131,7 @@ for (const size of [{ width: 412, height: 360 }, { width: 568, height: 320 }, { 
     await composer.fill('Still composing');
     await expectReachable(composer);
     await expectReachable(page.getByRole('button', { name: 'Send message', exact: true }));
-    await expectReachable(page.getByRole('button', { name: 'Back to buddy list' }));
+    await expectReachable(page.getByRole('button', { name: 'Back to previous view' }));
     const more = page.getByRole('button', { name: 'More message tools' });
     await expectReachable(more);
     await more.click();
@@ -160,7 +160,7 @@ test('minimum phone preserves named header actions and contextual Back navigatio
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.setViewportSize({ width: 320, height: 568 });
   await openRoom(page);
-  await expectReachable(page.getByRole('button', { name: 'Back to buddy list' }));
+  await expectReachable(page.getByRole('button', { name: 'Back to previous view' }));
   await expectReachable(page.getByRole('button', { name: 'More message tools' }));
   const searchButton = page.getByRole('button', { name: 'Search loaded messages', exact: true });
   await expectReachable(searchButton);

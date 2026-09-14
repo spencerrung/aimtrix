@@ -10,6 +10,7 @@ import {
   parseRoomBackground,
 } from './roomBackgrounds';
 import { resolveReadReceiptTarget, resolveReadReceiptTargets } from './readReceipts';
+import { isMatrixNavigationTarget } from './matrixLinks';
 import { LEGACY_MARKED_UNREAD_EVENT, MARKED_UNREAD_EVENT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import {
   resolveSpaceRelations,
@@ -588,16 +589,16 @@ function messagesForRoom(
   );
 }
 
-function directRoomIds(client: MatrixClient): Set<string> {
+function directRoomIds(client: MatrixClient): Map<string, string> {
   const getAccountData = client.getAccountData.bind(client) as unknown as (
     eventType: string,
   ) => MatrixEvent | undefined;
   const directEvent = getAccountData(matrixEventType.direct);
   const content = directEvent?.getContent<Record<string, unknown>>() ?? {};
-  const ids = new Set<string>();
-  for (const roomIds of Object.values(content)) {
-    if (Array.isArray(roomIds)) {
-      for (const roomId of roomIds) if (typeof roomId === 'string') ids.add(roomId);
+  const ids = new Map<string, string>();
+  for (const [userId, roomIds] of Object.entries(content)) {
+    if (isMatrixNavigationTarget({ userId }) && Array.isArray(roomIds)) {
+      for (const roomId of roomIds) if (typeof roomId === 'string' && isMatrixNavigationTarget({ roomId })) ids.set(roomId, userId);
     }
   }
   return ids;
@@ -791,6 +792,9 @@ export function buildWorkspaceSnapshot(
     const membership = room.getMyMembership() === 'invite' ? 'invite' : 'join';
     const isDirect = directIds.has(room.roomId);
     const directMember = isDirect ? otherDirectMember(room, userId) : undefined;
+    const favorite = Object.hasOwn(room.tags ?? {}, 'm.favourite');
+    const canonicalAlias = room.currentState.getStateEvents('m.room.canonical_alias', '')
+      ?.getContent<{ alias?: unknown }>().alias;
     const latest = history?.state.mode && history.state.mode !== 'live'
       ? messagesForRoom(room, userId, pinnedIds, localEvents).at(-1)
       : messages.at(-1);
@@ -866,11 +870,14 @@ export function buildWorkspaceSnapshot(
       id: room.roomId,
       name: room.name || room.getDefaultRoomName(userId),
       avatarUrl: mediaSource(room.getMxcAvatarUrl()) ?? memberAvatar(directMember),
+      favorite,
+      canonicalAlias: typeof canonicalAlias === 'string' && isMatrixNavigationTarget({ roomAlias: canonicalAlias }) ? canonicalAlias : undefined,
+      directUserId: isDirect ? directIds.get(room.roomId) ?? directMember?.userId : undefined,
       kind: isDirect ? 'direct' : 'room',
       group:
         membership === 'invite'
           ? 'Invites'
-          : badgeCount > 0
+          : favorite || badgeCount > 0
             ? 'Favorites'
             : isDirect
               ? 'Direct Messages'

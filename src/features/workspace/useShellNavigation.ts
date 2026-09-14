@@ -8,19 +8,41 @@ export interface ShellRoute {
   roomId?: string;
   spaceId?: string;
   threadRootId?: string;
+  eventId?: string;
+}
+
+export interface ShellReadingPosition {
+  mode: 'live' | 'history' | 'context';
+  anchor?: { eventId: string; offset: number };
+  atLatest?: boolean;
 }
 
 const historyKey = '__aimtrixShell';
+const entryLimit = 100;
 
 interface Entry {
   route: ShellRoute;
+  reading?: ShellReadingPosition;
   previous?: number;
+  next?: number;
+}
+
+function sameDestination(left: ShellRoute, right: ShellRoute) {
+  return left.roomId === right.roomId && left.spaceId === right.spaceId && left.eventId === right.eventId;
 }
 
 function sameRoute(left: ShellRoute, right: ShellRoute) {
-  return left.surface === right.surface && left.panel === right.panel &&
-    left.roomId === right.roomId && left.spaceId === right.spaceId &&
-    left.threadRootId === right.threadRootId;
+  return sameDestination(left, right) && left.surface === right.surface &&
+    left.panel === right.panel && left.threadRootId === right.threadRootId;
+}
+
+function copyReading(reading?: ShellReadingPosition): ShellReadingPosition | undefined {
+  return reading && {
+    mode: reading.mode,
+    atLatest: reading.atLatest,
+    anchor: reading.anchor && Number.isFinite(reading.anchor.offset)
+      ? { eventId: reading.anchor.eventId, offset: reading.anchor.offset } : undefined,
+  };
 }
 
 function stateRecord(value: unknown): Record<string, unknown> {
@@ -29,12 +51,15 @@ function stateRecord(value: unknown): Record<string, unknown> {
 }
 
 /**
- * Owns navigation for one mounted workspace, independently of its viewport size.
- * Browser history contains opaque pointers only; room and event IDs remain in
- * memory and cannot be restored by another account or a later workspace mount.
+ * Owns bounded navigation for one mounted workspace, independently of viewport.
+ * Browser history contains opaque pointers only; room/event IDs and reading
+ * positions stay in memory and cannot be restored by another account or mount.
  */
 export function useShellNavigation(initialRoute: ShellRoute) {
-  const [route, setRoute] = useState(initialRoute);
+  const [view, setView] = useState(() => ({
+    route: initialRoute, entryId: 0, reading: undefined as ShellReadingPosition | undefined,
+    canGoBack: initialRoute.surface !== 'list', canGoForward: false,
+  }));
   const [session] = useState(() => `shell-${Date.now()}-${Math.random().toString(36).slice(2)}`);
   const navigationRef = useRef({
     session,
@@ -43,25 +68,39 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     sequence: 0,
     entries: new Map<number, Entry>([[0, { route: initialRoute }]]),
     mounted: false,
+    browserUsable: true,
     traversing: false,
     pending: undefined as { route: ShellRoute; options: { replace?: boolean } } | undefined,
   });
 
+  const publish = useCallback(() => {
+    const navigation = navigationRef.current;
+    const entry = navigation.entries.get(navigation.current)!;
+    setView({
+      route: entry.route, entryId: navigation.current, reading: copyReading(entry.reading),
+      canGoBack: !navigation.traversing && (entry.previous !== undefined || entry.route.surface !== 'list'),
+      canGoForward: !navigation.traversing && entry.next !== undefined,
+    });
+  }, []);
+
+  const historyMatchesCurrent = useCallback(() => {
+    if (typeof window === 'undefined') return false;
+    const pointer = stateRecord(stateRecord(window.history.state)[historyKey]);
+    const navigation = navigationRef.current;
+    return pointer.session === navigation.session && pointer.entry === navigation.current;
+  }, []);
+
   const writeHistory = useCallback((entry: number, replace: boolean) => {
     const navigation = navigationRef.current;
-    if (typeof window === 'undefined') return false;
+    if (typeof window === 'undefined') return;
     try {
-      const next = {
-        ...stateRecord(window.history.state),
-        [historyKey]: { session: navigation.session, entry },
-      };
+      const next = { ...stateRecord(window.history.state), [historyKey]: { session: navigation.session, entry } };
       if (replace) window.history.replaceState(next, '');
       else window.history.pushState(next, '');
-      return true;
     } catch {
-      // Embedded/restricted browsers can refuse history writes. Keep the
-      // visible navigation usable using the same in-memory route chain.
-      return false;
+      // A failed push means browser and memory adjacency no longer agree. Use
+      // memory for both directions for the rest of this workspace lifetime.
+      navigation.browserUsable = false;
     }
   }, []);
 
@@ -69,45 +108,80 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     const navigation = navigationRef.current;
     if (!navigation.mounted && typeof window !== 'undefined') return;
     if (navigation.traversing) {
-      // history.back() is asynchronous. Apply the latest intent after its
-      // popstate, rather than allowing that older traversal to overwrite it.
+      // Browser traversal is asynchronous: its popstate must finish before the
+      // latest new destination can replace the forward branch.
       navigation.pending = { route: next, options };
       return;
     }
     let current = navigation.entries.get(navigation.current)!;
     if (sameRoute(current.route, next)) return;
+    if (!historyMatchesCurrent()) navigation.browserUsable = false;
     const enteringContext = next.surface === 'context' && current.route.surface !== 'context';
+    // Contextual tools replace one another; different rooms/message links are
+    // destinations even when both happen to be displayed in contextual routes.
+    const replace = !enteringContext && (options.replace ??
+      (current.route.surface === 'context' && next.surface === 'context' && sameDestination(current.route, next)));
+    if (!replace) {
+      let future = current.next;
+      while (future !== undefined) {
+        const following = navigation.entries.get(future)?.next;
+        navigation.entries.delete(future);
+        future = following;
+      }
+      current.next = undefined;
+    }
     if (enteringContext) {
-      // A remembered desktop drawer is presentation state, not a parent
-      // destination: closing its replacement must reveal the room alone.
       current = { ...current, route: { ...current.route, panel: null } };
       navigation.entries.set(navigation.current, current);
       if (current.route.surface === 'list') {
-        // Desktop already displays a room alongside the list. Give that room
-        // its own entry before opening context so a later narrow viewport has
-        // the same context -> conversation -> list Back chain.
+        // Desktop shows a room alongside the list: insert that room so mobile
+        // still has context -> conversation -> list after a viewport change.
         const parent = ++navigation.sequence;
+        const previous = navigation.current;
+        current.next = parent;
         current = {
           route: { ...next, surface: 'conversation', panel: null },
-          previous: navigation.current,
+          reading: sameDestination(current.route, next) ? copyReading(current.reading) : undefined,
+          previous,
         };
         navigation.entries.set(parent, current);
         navigation.current = parent;
         writeHistory(parent, false);
       }
     }
-    // Switching the drawer's content keeps a single Back step to the room.
-    const replace = !enteringContext && (options.replace ?? (current.route.surface === 'context' && next.surface === 'context'));
+    const previousId = navigation.current;
     const entry = ++navigation.sequence;
+    const parent = replace ? current.previous : previousId;
+    const following = replace ? current.next : undefined;
     navigation.entries.set(entry, {
-      route: next,
-      previous: replace ? current.previous : navigation.current,
+      route: { ...next },
+      reading: sameDestination(current.route, next) ? copyReading(current.reading) : undefined,
+      previous: parent, next: following,
     });
+    if (parent !== undefined) navigation.entries.get(parent)!.next = entry;
+    if (following !== undefined) navigation.entries.get(following)!.previous = entry;
+    if (replace) navigation.entries.delete(previousId);
     navigation.current = entry;
-    navigation.traversing = false;
+    // Remove the oldest reachable entry; if we're at that entry, discard the
+    // furthest forward one instead. No retained link may point at pruned data.
+    while (navigation.entries.size > entryLimit) {
+      let oldest = navigation.current;
+      while (navigation.entries.get(oldest)!.previous !== undefined) oldest = navigation.entries.get(oldest)!.previous!;
+      if (oldest !== navigation.current) {
+        const following = navigation.entries.get(oldest)!.next!;
+        navigation.entries.get(following)!.previous = undefined;
+        navigation.entries.delete(oldest);
+      } else {
+        let newest = navigation.current;
+        while (navigation.entries.get(newest)!.next !== undefined) newest = navigation.entries.get(newest)!.next!;
+        const previous = navigation.entries.get(newest)!.previous!;
+        navigation.entries.get(previous)!.next = undefined;
+        navigation.entries.delete(newest);
+      }
+    }
     writeHistory(entry, replace);
-    setRoute(next);
-  }, [writeHistory]);
+    publish();
+  }, [historyMatchesCurrent, publish, writeHistory]);
 
   useEffect(() => {
     const navigation = navigationRef.current;
@@ -119,17 +193,16 @@ export function useShellNavigation(initialRoute: ShellRoute) {
       const pointer = stateRecord(stateRecord(event.state)[historyKey]);
       const entry = pointer.session === navigation.session && typeof pointer.entry === 'number'
         ? navigation.entries.get(pointer.entry) : undefined;
-      if (entry) {
-        navigation.current = pointer.entry as number;
-        setRoute(entry.route);
-      } else {
-        // A previous workspace's entries are inert. Replace their marker rather
-        // than recovering account-specific navigation after sign-out/sign-in.
+      if (entry) navigation.current = pointer.entry as number;
+      else {
+        // Another account/mount, a discarded branch, or pruned history cannot
+        // recover private destinations. Start a fresh chain at this workspace.
         navigation.current = ++navigation.sequence;
+        navigation.entries.clear();
         navigation.entries.set(navigation.current, { route: navigation.initial });
         writeHistory(navigation.current, true);
-        setRoute(navigation.initial);
       }
+      publish();
       const pending = navigation.pending;
       navigation.pending = undefined;
       if (pending) navigate(pending.route, pending.options);
@@ -137,6 +210,7 @@ export function useShellNavigation(initialRoute: ShellRoute) {
     window.addEventListener('popstate', handlePopState);
     return () => {
       navigation.mounted = false;
+      navigation.traversing = false;
       navigation.pending = undefined;
       window.removeEventListener('popstate', handlePopState);
       const state = stateRecord(window.history.state);
@@ -145,33 +219,44 @@ export function useShellNavigation(initialRoute: ShellRoute) {
       delete sanitized[historyKey];
       try { window.history.replaceState(sanitized, ''); } catch { /* Restricted history. */ }
     };
-  }, [navigate, writeHistory]);
+  }, [navigate, publish, writeHistory]);
 
-  const back = useCallback(() => {
+  const traverse = useCallback((direction: 'back' | 'forward') => {
     const navigation = navigationRef.current;
     if (navigation.traversing || (!navigation.mounted && typeof window !== 'undefined')) return;
     const current = navigation.entries.get(navigation.current)!;
-    if (current.previous !== undefined) {
-      const pointer = typeof window !== 'undefined'
-        ? stateRecord(stateRecord(window.history.state)[historyKey]) : {};
-      if (pointer.session === navigation.session && pointer.entry === navigation.current) {
+    const target = direction === 'back' ? current.previous : current.next;
+    if (target !== undefined) {
+      if (navigation.browserUsable && historyMatchesCurrent()) {
         try {
           navigation.traversing = true;
-          window.history.back();
+          publish();
+          window.history[direction]();
           return;
-        } catch { navigation.traversing = false; }
+        } catch { navigation.traversing = false; navigation.browserUsable = false; }
       }
-      navigation.current = current.previous;
-      writeHistory(navigation.current, true);
-      setRoute(navigation.entries.get(navigation.current)!.route);
-    } else if (current.route.surface !== 'list') {
+      navigation.current = target;
+      writeHistory(target, true);
+      publish();
+    } else if (direction === 'back' && current.route.surface !== 'list') {
       navigate({
         ...current.route,
         surface: current.route.surface === 'context' ? 'conversation' : 'list',
         panel: null,
       }, { replace: true });
     }
-  }, [navigate, writeHistory]);
+  }, [historyMatchesCurrent, navigate, publish, writeHistory]);
 
-  return { route, navigate, back };
+  const back = useCallback(() => traverse('back'), [traverse]);
+  const forward = useCallback(() => traverse('forward'), [traverse]);
+  // Captured while scrolling/before leaving; deliberately does not render or
+  // create a destination. The returned reading snapshot changes on traversal.
+  const remember = useCallback((reading?: ShellReadingPosition, entryId?: number) => {
+    const navigation = navigationRef.current;
+    if (!navigation.mounted) return;
+    const entry = navigation.entries.get(entryId ?? navigation.current);
+    if (entry) entry.reading = copyReading(reading);
+  }, []);
+
+  return { ...view, navigate, back, forward, remember };
 }

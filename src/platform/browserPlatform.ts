@@ -153,8 +153,8 @@ function createBrowserDeepLinks(): DeepLinkService {
     currentUrl: () => new URL(window.location.href),
     replacePath: (path) => window.history.replaceState({}, '', path),
     openRoute: (route: PushRoute) => {
-      const path = routeUrl(route);
-      window.history.replaceState({}, '', path);
+      const path = routeUrl(route, window.location.href);
+      window.history.replaceState(window.history.state, '', path);
       window.dispatchEvent(new CustomEvent('aimtrix-push-route', { detail: route }));
     },
     navigate: (url) => window.location.assign(url),

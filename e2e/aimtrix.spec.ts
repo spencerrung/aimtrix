@@ -136,7 +136,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
     await expect(page.getByRole('main', { name: /GIF Club/ })).toHaveClass(/room-backdrop--graphite-grid/);
     await dialog.getByRole('button', { name: 'Close background decorator' }).click();
   } else {
-    await page.getByRole('button', { name: 'Back to buddy list' }).click();
+    await page.getByRole('button', { name: 'Back to previous view' }).click();
   }
   await page.getByRole('button', { name: 'Direct Messages', exact: true }).click();
   await page.getByRole('button', { name: /Mara Chen/ }).click();
@@ -314,7 +314,7 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
 test('shared images open in an accessible viewer', async ({ page }, testInfo) => {
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
-    await page.getByRole('button', { name: 'Back to buddy list' }).click();
+    await page.getByRole('button', { name: 'Back to previous view' }).click();
     await page.getByRole('button', { name: 'Direct Messages', exact: true }).click();
   }
   await page.getByRole('button', { name: /Mara Chen/ }).click();

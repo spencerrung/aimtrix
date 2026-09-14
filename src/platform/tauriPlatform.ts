@@ -199,13 +199,13 @@ function createTauriDeepLinks(): DeepLinkService {
     return true;
   };
   const applyRoute = (route: PushRoute) => {
-    window.history.replaceState({}, '', routeUrl(route));
+    window.history.replaceState(window.history.state, '', routeUrl(route, window.location.href));
     window.dispatchEvent(new CustomEvent('aimtrix-push-route', { detail: route }));
   };
   const applyUrl = (value: string) => {
     try {
       const url = new URL(value);
-      if (applySsoCallback(url)) return;
+      if (url.protocol !== 'matrix:' && url.hostname !== 'matrix.to' && applySsoCallback(url)) return;
       const route = parsePushRoute(url);
       if (route) applyRoute(route);
     } catch {

@@ -17,7 +17,7 @@ import { MatrixController } from './matrix/MatrixController';
 import type { PushRegistrationResult } from './matrix/MatrixController';
 import { MediaProvider } from './matrix/MediaProvider';
 import { getAimtrixPlatform } from './platform/aimtrixPlatform';
-import { parsePushRoute, pushRouteFromMessage, type PushRoute } from './pwa/pushRouting';
+import { parsePushRoute, pushRouteFromMessage, routeUrl, type PushRoute } from './pwa/pushRouting';
 import {
   defaultUserPreferences,
   loadUserPreferences,
@@ -314,6 +314,8 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onSetRoomBackgroundPolicy={(roomId, permission) => controller.setRoomBackgroundPolicy(roomId, permission)}
         onEnableRoomEncryption={(roomId) => controller.enableRoomEncryption(roomId)}
         onSetRoomMuted={(roomId, muted) => controller.setRoomMuted(roomId, muted)}
+        onSetRoomFavorite={(roomId, favorite) => controller.setRoomFavorite(roomId, favorite)}
+        onResolveNavigationTarget={(target) => controller.resolveNavigationTarget(target)}
         onInviteToRoom={(roomId, userId) => controller.inviteToRoom(roomId, userId)}
         onRemoveRoomMember={(roomId, userId, action) => controller.removeRoomMember(roomId, userId, action)}
         onSetRoomMemberPower={(roomId, userId, level) => controller.setRoomMemberPower(roomId, userId, level)}
@@ -344,11 +346,7 @@ export default function App() {
       const route = pushRouteFromMessage(value);
       if (!route) return;
       setPushRoute(route);
-      const url = new URL(window.location.href);
-      if (route.roomId) url.searchParams.set('room', route.roomId);
-      if (route.eventId) url.searchParams.set('event', route.eventId);
-      else url.searchParams.delete('event');
-      window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`);
+      window.history.replaceState(window.history.state, '', routeUrl(route, window.location.href));
     };
     const handlePushRoute = (event: MessageEvent) => {
       if (event.data?.type === 'AIMTRIX_PUSH_ROUTE') applyRoute(event.data);

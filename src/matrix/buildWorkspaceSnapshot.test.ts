@@ -36,12 +36,16 @@ function fakeClient(
     pushRuleEnabled?: boolean;
     accountData?: Record<string, Record<string, unknown>>;
     readUpToEventId?: string;
+    tags?: Record<string, Record<string, unknown>>;
+    canonicalAlias?: string;
+    directUserId?: string;
     threads?: Array<{ id: string; length: number; events: MatrixEvent[] }>;
   } = {},
 ): MatrixClient {
   const room = {
     roomId: '!room:test',
     name: 'Sticker Room',
+    tags: options.tags ?? {},
     getMyMembership: () => 'join',
     getType: () => undefined,
     getLiveTimeline: () => ({ getEvents: () => events }),
@@ -60,7 +64,8 @@ function fakeClient(
     getMxcAvatarUrl: () => undefined,
     hasEncryptionStateEvent: () => true,
     currentState: {
-      getStateEvents: () => undefined,
+      getStateEvents: (type: string) => type === 'm.room.canonical_alias' && options.canonicalAlias
+        ? fakeEvent(type, { alias: options.canonicalAlias }) : undefined,
       maySendStateEvent: () => false,
     },
   } as unknown as Room;
@@ -68,11 +73,57 @@ function fakeClient(
   return {
     getSafeUserId: () => '@me:test',
     getUser: () => null,
-    getAccountData: () => undefined,
+    getAccountData: (type: string) => type === 'm.direct' && options.directUserId
+      ? fakeEvent(type, { [options.directUserId]: ['!room:test'] }) : undefined,
     getVisibleRooms: () => [room],
     getRoomPushRule: () => options.muted ? { actions: ['dont_notify'], enabled: options.pushRuleEnabled } : undefined,
   } as unknown as MatrixClient;
 }
+
+describe('favorite and navigation room summaries', () => {
+  it('uses only the standard favorite tag, independently of unread badges', () => {
+    const favorite = fakeClient([], { tags: { 'm.favourite': { order: 0.5 }, 'org.example.custom': {} } });
+    expect(buildWorkspaceSnapshot(favorite, 'online').rooms[0]).toMatchObject({ favorite: true, group: 'Favorites', badgeCount: 0 });
+    const unread = fakeClient([], { unreadCount: 3 });
+    expect(buildWorkspaceSnapshot(unread, 'online').rooms[0]).toMatchObject({ favorite: false, group: 'Favorites' });
+    const custom = fakeClient([], { tags: { 'org.example.favorite': {} } });
+    expect(buildWorkspaceSnapshot(custom, 'online').rooms[0]).toMatchObject({ favorite: false, group: 'Rooms' });
+  });
+
+  it('reflects tag additions and removals even when message snapshots are cached', () => {
+    const client = fakeClient([]);
+    const room = client.getVisibleRooms()[0];
+    const cache = createWorkspaceSnapshotCache();
+    expect(buildWorkspaceSnapshot(client, 'online', [], undefined, cache).rooms[0].favorite).toBe(false);
+    room.tags = { 'm.favourite': {} };
+    expect(buildWorkspaceSnapshot(client, 'online', [], undefined, cache).rooms[0].favorite).toBe(true);
+    room.tags = {};
+    expect(buildWorkspaceSnapshot(client, 'online', [], undefined, cache).rooms[0].group).toBe('Rooms');
+  });
+
+  it('keeps invitations in their group even if another client favorites them', () => {
+    const client = fakeClient([], { tags: { 'm.favourite': {} } });
+    client.getVisibleRooms()[0].getMyMembership = () => 'invite';
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0]).toMatchObject({ favorite: true, group: 'Invites' });
+  });
+
+  it('exposes the canonical alias and m.direct counterpart before that person joins', () => {
+    const client = fakeClient([], { canonicalAlias: '#synthetic:test', directUserId: '@other:test' });
+    expect(buildWorkspaceSnapshot(client, 'online').rooms[0]).toMatchObject({
+      canonicalAlias: '#synthetic:test', directUserId: '@other:test', kind: 'direct',
+    });
+    expect(buildWorkspaceSnapshot(fakeClient([]), 'online').rooms[0]).toMatchObject({
+      canonicalAlias: undefined, directUserId: undefined,
+    });
+  });
+
+  it('ignores malformed navigation metadata while retaining standard Unicode aliases', () => {
+    expect(buildWorkspaceSnapshot(fakeClient([], { canonicalAlias: '#team lounge:test', directUserId: '@legacy person:test' }), 'online').rooms[0])
+      .toMatchObject({ canonicalAlias: '#team lounge:test', directUserId: '@legacy person:test', kind: 'direct' });
+    expect(buildWorkspaceSnapshot(fakeClient([], { canonicalAlias: '#missing-server', directUserId: 'not-a-user' }), 'online').rooms[0])
+      .toMatchObject({ canonicalAlias: undefined, directUserId: undefined, kind: 'room' });
+  });
+});
 
 describe('buildWorkspaceSnapshot stickers', () => {
   it('preserves standard Matrix mention user IDs for message rendering', () => {

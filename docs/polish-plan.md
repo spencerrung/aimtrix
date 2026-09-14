@@ -10,6 +10,8 @@ Step 03 deliverable: [disposable live Matrix tests](live-matrix-tests.md), with 
 
 Step 04 deliverable: [accessible interaction foundations](accessible-interactions.md), covering shared modal/picker behavior, keyboard focus, action feedback and cancellable verification. Live and assistive-technology evidence boundaries remain explicit.
 
+Step 10 deliverable: [quick navigation](quick-navigation.md), covering keyboard/touch switching, standard favorites, unread filters, Matrix links, and Back/Forward reading positions. Native device and broader directory/search boundaries remain explicit.
+
 ## Product goal
 
 Aimtrix should be a dependable daily Matrix client that people enjoy spending time in. Preserve its full-viewport hosted experience, roughly 65/35 Aqua-era character versus modern behavior, original Aero artwork, playful space rail, buddy list, personality drawer, foundational E2EE, and static self-hosting.
