@@ -35,8 +35,8 @@ function routeFromNativeData(value: unknown): PushRoute | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const data = value as Record<string, unknown>;
   return pushRouteFromMessage({
-    roomId: data.room_id ?? data.roomId,
-    eventId: data.event_id ?? data.eventId,
+    roomId: Object.hasOwn(data, 'room_id') ? data.room_id : data.roomId,
+    eventId: Object.hasOwn(data, 'event_id') ? data.event_id : data.eventId,
   });
 }
 
@@ -262,9 +262,8 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
     return true;
   };
   const applyRoute = (route: PushRoute) => {
-    const path = routeUrl(route);
-    if (`${window.location.pathname}${window.location.search}` === path) return;
-    window.history.replaceState({}, '', path);
+    const path = routeUrl(route, window.location.href);
+    window.history.replaceState(window.history.state, '', path);
     window.dispatchEvent(new CustomEvent('aimtrix-push-route', { detail: route }));
     onRoute(route);
   };
@@ -272,7 +271,7 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
   void App.addListener('appUrlOpen', ({ url }) => {
     try {
       const parsed = new URL(url);
-      if (applySsoCallback(parsed)) return;
+      if (parsed.protocol !== 'matrix:' && parsed.hostname !== 'matrix.to' && applySsoCallback(parsed)) return;
       const route = parsePushRoute(parsed);
       if (route) applyRoute(route);
     } catch {
@@ -284,9 +283,9 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
     async prepare() {
       const launch = await App.getLaunchUrl();
       if (!launch) return;
-      const parsed = new URL(launch.url);
-      if (applySsoCallback(parsed)) return;
       try {
+        const parsed = new URL(launch.url);
+        if (parsed.protocol !== 'matrix:' && parsed.hostname !== 'matrix.to' && applySsoCallback(parsed)) return;
         const route = parsePushRoute(parsed);
         if (route) window.history.replaceState({}, '', routeUrl(route));
       } catch {

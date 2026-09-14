@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   pushListeners: new Map<string, (value: any) => void>(),
   localListeners: new Map<string, (value: any) => void>(),
   storage: new Map<string, string>(),
+  getLaunchUrl: vi.fn(async () => undefined as { url: string } | undefined),
 }));
 
 vi.mock('@capacitor/core', () => ({
@@ -20,7 +21,7 @@ vi.mock('@capacitor/app', () => ({
       mocks.appListeners.set(event, listener);
       return { remove: vi.fn() };
     }),
-    getLaunchUrl: vi.fn().mockResolvedValue(undefined),
+    getLaunchUrl: mocks.getLaunchUrl,
   },
 }));
 
@@ -71,6 +72,8 @@ describe('Capacitor platform', () => {
     mocks.pushListeners.clear();
     mocks.localListeners.clear();
     mocks.storage.clear();
+    mocks.getLaunchUrl.mockReset().mockResolvedValue(undefined);
+    window.history.replaceState({}, '', '/');
   });
 
   it('persists native credentials and SSO state in secure storage', async () => {
@@ -115,5 +118,51 @@ describe('Capacitor platform', () => {
     });
 
     expect(window.location.search).toBe('?room=%21room%3Aexample.com&event=%24event');
+  });
+});
+
+
+describe('Capacitor Matrix destinations', () => {
+  it('preserves aliases, event IDs and via on cold start', async () => {
+    const platform = createCapacitorPlatform();
+    mocks.getLaunchUrl.mockResolvedValue({ url: 'https://matrix.to/#/%23lounge:test/$event?via=test&via=other.test' });
+    await platform.deepLinks.prepare();
+    expect(window.location.search).toBe('?alias=%23lounge%3Atest&event=%24event&via=test&via=other.test');
+  });
+
+  it('routes standard user links without treating their query as an SSO callback', () => {
+    const state = { __aimtrixShell: { session: 'synthetic', entry: 2 } };
+    window.history.replaceState(state, '', '/client/?demo=1&room=!old:test');
+    createCapacitorPlatform();
+    mocks.appListeners.get('appUrlOpen')?.({ url: 'matrix:u/alice:test?loginToken=synthetic-ignored-value' });
+    expect(window.location.pathname).toBe('/client/');
+    expect(window.location.search).toBe('?demo=1&user=%40alice%3Atest');
+    expect(window.history.state).toEqual(state);
+  });
+
+  it.each(['broken', '', null])('rejects malformed explicit native event %j without opening the room', (event_id) => {
+    createCapacitorPlatform();
+    window.history.replaceState({}, '', '/?room=%21original%3Atest');
+    mocks.pushListeners.get('pushNotificationActionPerformed')?.({ notification: { data: { room_id: '!other:test', event_id } } });
+    expect(window.location.search).toBe('?room=%21original%3Atest');
+  });
+
+  it('dispatches another explicit open even when shell navigation left the previous URL in place', () => {
+    createCapacitorPlatform();
+    const listener = vi.fn();
+    window.addEventListener('aimtrix-push-route', listener);
+    try {
+      const receive = mocks.appListeners.get('appUrlOpen')!;
+      receive({ url: 'matrix:u/alice:test' });
+      receive({ url: 'matrix:u/alice:test' });
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect((listener.mock.calls[1][0] as CustomEvent).detail).toMatchObject({ userId: '@alice:test' });
+    } finally { window.removeEventListener('aimtrix-push-route', listener); }
+  });
+
+  it('ignores malformed launch URLs without preventing startup', async () => {
+    const platform = createCapacitorPlatform();
+    mocks.getLaunchUrl.mockResolvedValue({ url: 'not a URL' });
+    await expect(platform.deepLinks.prepare()).resolves.toBeUndefined();
   });
 });

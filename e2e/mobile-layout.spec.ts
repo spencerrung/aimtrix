@@ -45,7 +45,7 @@ test('timeline and composer survive a narrow landscape resize', async ({ page })
   await page.evaluate(() => window.dispatchEvent(new Event('orientationchange')));
 
   await expect(composer).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Back to buddy list' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Back to previous view' })).toBeVisible();
   expect(await composer.evaluate((element) => element.getBoundingClientRect().bottom <= window.innerHeight)).toBe(true);
   expect(Math.abs(await timeline.evaluate((element) => element.scrollTop) - before)).toBeLessThan(48);
 });

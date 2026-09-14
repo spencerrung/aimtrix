@@ -5,7 +5,7 @@ import { createTauriPlatform } from './tauriPlatform';
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   getCurrent: vi.fn(async () => null as string[] | null),
-  onOpenUrl: vi.fn(async () => () => undefined),
+  onOpenUrl: vi.fn<(listener: (urls: string[]) => void) => Promise<() => undefined>>(async () => () => undefined),
   check: vi.fn(),
   relaunch: vi.fn(),
 }));
@@ -90,5 +90,31 @@ describe('Tauri platform', () => {
     if (result.status === 'available') await result.install();
     expect(downloadAndInstall).toHaveBeenCalledOnce();
     expect(mocks.relaunch).toHaveBeenCalledOnce();
+  });
+});
+
+
+describe('Tauri Matrix destinations', () => {
+  it('preserves standard room-alias events and routing hints during cold start', async () => {
+    window.history.replaceState({}, '', '/');
+    const platform = createTauriPlatform();
+    mocks.getCurrent.mockResolvedValue(['matrix:r/lounge:test/e/event?via=test']);
+    await platform.deepLinks.prepare();
+    expect(window.location.search).toBe('?alias=%23lounge%3Atest&event=%24event&via=test');
+  });
+
+  it('preserves user targets on subsequent opens and rejects malformed event links', async () => {
+    const state = { __aimtrixShell: { session: 'synthetic', entry: 2 } };
+    window.history.replaceState(state, '', '/client/?demo=1&room=!old:test');
+    const platform = createTauriPlatform();
+    mocks.getCurrent.mockResolvedValue(null);
+    await platform.deepLinks.prepare();
+    const receive = mocks.onOpenUrl.mock.calls.at(-1)![0];
+    receive(['matrix:u/alice:test?loginToken=synthetic-ignored-value']);
+    expect(window.location.pathname).toBe('/client/');
+    expect(window.location.search).toBe('?demo=1&user=%40alice%3Atest');
+    expect(window.history.state).toEqual(state);
+    receive(['aimtrix://open?room=!other:test&event=broken']);
+    expect(window.location.search).toBe('?demo=1&user=%40alice%3Atest');
   });
 });

@@ -82,6 +82,8 @@ function renderWorkspace(
     onReturnToLive?: (roomId: string) => Promise<void>;
     onHistoryDetached?: (roomId: string, detached: boolean) => void;
     onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
+    onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
+    onResolveNavigationTarget?: (target: import('../../matrix/matrixLinks').MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
     onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
     onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
     onSendMessage?: (
@@ -134,6 +136,8 @@ function renderWorkspace(
       onHistoryDetached={overrides.onHistoryDetached}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onMarkRoomUnread={overrides.onMarkRoomUnread}
+      onSetRoomFavorite={overrides.onSetRoomFavorite}
+      onResolveNavigationTarget={overrides.onResolveNavigationTarget}
       onMarkThreadRead={overrides.onMarkThreadRead}
       onSendMessage={overrides.onSendMessage}
       onSendReply={overrides.onSendReply}
@@ -1806,7 +1810,7 @@ describe('Workspace history navigation', () => {
     expect(screen.queryByRole('button', { name: 'Jump to latest messages' })).not.toBeInTheDocument();
   });
 
-  it('focuses the exact context target and exposes removed and unavailable states without sending receipts', () => {
+  it('focuses the exact context target and exposes removed and unavailable states without sending receipts', async () => {
     const workspace = historyWorkspace('context');
     workspace.historyByRoom!.welcome.targetEventId = 'm3';
     workspace.historyByRoom!.welcome.targetStatus = 'found';
@@ -1827,17 +1831,17 @@ describe('Workspace history navigation', () => {
     unavailable.historyByRoom!.welcome.targetStatus = 'unavailable';
     rerenderWorkspace(unavailable);
     fireEvent.click(screen.getByRole('button', { name: 'Try opening message again' }));
-    expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'missing');
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'missing'));
     expect(onMarkRoomRead).not.toHaveBeenCalled();
   });
 
-  it('opens replied-to context even when the original event is not loaded', () => {
+  it('opens replied-to context even when the original event is not loaded', async () => {
     const workspace = historyWorkspace();
     workspace.messagesByRoom.welcome[0].replyTo = { eventId: '$not-loaded', senderName: 'A friend', body: 'Earlier message' };
     const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
     renderWorkspace({ workspace, onOpenEventContext });
     fireEvent.click(screen.getByRole('button', { name: 'Jump to replied message from A friend' }));
-    expect(onOpenEventContext).toHaveBeenCalledWith('welcome', '$not-loaded');
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', '$not-loaded'));
   });
 
   it('discards a pending old room failure and reactivates history on every room visit', async () => {
@@ -1866,6 +1870,52 @@ describe('Workspace history navigation', () => {
     rerenderWorkspace(structuredClone(options.workspace));
     await waitFor(() => expect(onOpenEventContext).toHaveBeenLastCalledWith('welcome', 'm3'));
     expect(onOpenEventContext).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the current linked context when a panel opens and closes', async () => {
+    vi.stubGlobal('innerWidth', 1024);
+    const workspace = historyWorkspace();
+    const onOpenEventContext = vi.fn().mockResolvedValue(undefined);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, pushRoute: { roomId: 'welcome', eventId: 'm2' }, onOpenEventContext });
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'm2'));
+    const context = structuredClone(workspace);
+    context.historyByRoom!.welcome = { ...context.historyByRoom!.welcome, mode: 'context', revision: 2, targetEventId: 'm2', targetStatus: 'found' };
+    rerenderWorkspace(context);
+    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    expect(screen.getByRole('complementary', { name: 'Search loaded messages' })).toBeVisible();
+    fireEvent.keyDown(screen.getByPlaceholderText('Search loaded messages'), { key: 'Escape' });
+    await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
+    expect(onOpenEventContext).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not remember an overlapping old context when the request finishes before its snapshot publishes', async () => {
+    const workspace = historyWorkspace('context');
+    workspace.historyByRoom!.welcome.targetEventId = 'm3';
+    workspace.historyByRoom!.welcome.targetStatus = 'found';
+    let visibleEvent = 'm3';
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('timeline')) return { ...rect(0), height: 200, bottom: 200 };
+      const top = this.dataset.eventId === visibleEvent ? 25 : 500;
+      return { ...rect(top), height: 40, bottom: top + 40 };
+    });
+    const pending = pendingSend();
+    const onOpenEventContext = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace, pushRoute: { roomId: 'welcome', eventId: 'm2' }, onOpenEventContext });
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', 'm2'));
+    await act(async () => pending.resolve());
+    // The old window contains m2, but still positions and highlights m3.
+    // A finished request cannot make that viewport the new entry's saved place.
+    fireEvent.scroll(screen.getByRole('region', { name: 'Messages' }));
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Back to previous view' }));
+    await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledTimes(2));
+    expect(onOpenEventContext.mock.calls).toEqual([['welcome', 'm2'], ['welcome', 'm2']]);
+    const published = structuredClone(workspace);
+    published.historyByRoom!.welcome = { ...published.historyByRoom!.welcome, revision: 2, targetEventId: 'm2', targetStatus: 'found' };
+    visibleEvent = 'm2';
+    rerenderWorkspace(published);
+    await waitFor(() => expect(container.querySelector('[data-event-id="m2"]')).toHaveFocus());
+    expect(container.querySelector('[data-event-id="m2"]')).toHaveClass('timeline-message--target');
   });
 
   it('does not page on mount or snapshot refresh and only loads at a user-reached edge', async () => {
@@ -2259,5 +2309,167 @@ describe('Workspace read bookkeeping', () => {
     const row = screen.getByRole('button', { name: /Welcome Lounge.*2 unread notifications/ });
     expect(within(row).getByLabelText('2 unread notifications')).toHaveTextContent('2');
     expect(within(row).queryByText('12')).not.toBeInTheDocument();
+  });
+});
+
+
+describe('Workspace quick navigation', () => {
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal('innerWidth', 1280); });
+  afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
+
+  it.each([
+    ['matrix:roomid/synthetic:example.org/e/opaque.!', '$opaque.!'],
+    ['https://matrix.to/#/!synthetic:example.org/$opaque.!', '$opaque.!'],
+  ])('preserves opaque Matrix event punctuation when opening a message-body link %s', async (link, eventId) => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome[0].body = `Synthetic link ${link}`;
+    const resolve = vi.fn().mockResolvedValue({ roomId: 'dev-shack', eventId });
+    renderWorkspace({ workspace, onResolveNavigationTarget: resolve });
+    const anchor = screen.getByRole('link', { name: link });
+    expect(anchor).toHaveAttribute('href', link);
+    fireEvent.click(anchor);
+    await waitFor(() => expect(resolve).toHaveBeenCalledWith({ roomId: '!synthetic:example.org', eventId }));
+    expect(screen.getByLabelText('Message Dev Shack')).toBeVisible();
+  });
+
+  it('keeps the current draft when filtering hides its room and only shows synced favorites', async () => {
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    const pending = pendingSend();
+    const save = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onSetRoomFavorite: save });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Synthetic favorite draft');
+    fireEvent.change(screen.getByRole('combobox', { name: 'Conversation filter' }), { target: { value: 'favorites' } });
+    expect(screen.getByText('No favorite conversations in this space.')).toBeVisible();
+    expect(composer).toHaveTextContent('Synthetic favorite draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
+    expect(screen.getByRole('button', { name: 'Add to favorites' })).toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
+    expect(save).toHaveBeenCalledTimes(1);
+    await act(async () => pending.reject(new Error('Synthetic unavailable')));
+    expect(screen.getByText('Could not update your favorite. Try the star again.')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(screen.getByText('No favorite conversations in this space.')).toBeVisible();
+    const synced = structuredClone(workspace); synced.rooms[0].favorite = true;
+    rerenderWorkspace(synced);
+    expect(screen.getByRole('button', { name: 'Remove from favorites' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: /Welcome Lounge/ })).toBeVisible();
+    expect(composer).toHaveTextContent('Synthetic favorite draft');
+  });
+
+  it('resolves an incoming alias once through snapshot changes without allowing its late result to override a room selection', async () => {
+    let finish!: (result: { roomId: string; eventId: string }) => void;
+    const resolve = vi.fn().mockReturnValue(new Promise((accept) => { finish = accept; }));
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    const { rerenderWorkspace } = renderWorkspace({ workspace, pushRoute: { roomAlias: '#synthetic:example.org', eventId: '$synthetic' }, onResolveNavigationTarget: resolve });
+    await waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
+    rerenderWorkspace(structuredClone(workspace));
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    await act(async () => finish({ roomId: 'welcome', eventId: '$synthetic' }));
+    expect(screen.getByLabelText('Message Dev Shack')).toBeVisible();
+    expect(resolve).toHaveBeenCalledTimes(1);
+  });
+
+  it('tracks pending favorites per room and keeps a previous room failure out of the current conversation', async () => {
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    const previous = pendingSend(); const current = pendingSend();
+    const save = vi.fn().mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
+    renderWorkspace({ workspace, onSetRoomFavorite: save });
+    fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    expect(screen.getByRole('button', { name: 'Add to favorites' })).not.toHaveAttribute('aria-disabled', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
+    expect(save.mock.calls).toEqual([['welcome', true], ['dev-shack', true]]);
+    await act(async () => previous.reject(new Error('Synthetic favorite failure')));
+    expect(screen.queryByText('Could not update your favorite. Try the star again.')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add to favorites' })).toHaveAttribute('aria-disabled', 'true');
+    await act(async () => current.resolve());
+    expect(screen.getByRole('button', { name: 'Add to favorites' })).not.toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it.each([{ roomId: '!unavailable:example.org' }, { eventId: '$unloaded' }])('does not open a late alias after a newer unavailable incoming route %j', async (replacement: PushRoute) => {
+    let finish!: (result: { roomId: string }) => void;
+    const resolve = vi.fn().mockReturnValue(new Promise((accept) => { finish = accept; }));
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    const options = { workspace, pushRoute: { roomAlias: '#synthetic:example.org' } as PushRoute, onResolveNavigationTarget: resolve };
+    const { rerenderWorkspace } = renderWorkspace(options);
+    await waitFor(() => expect(resolve).toHaveBeenCalledTimes(1));
+    options.pushRoute = replacement;
+    rerenderWorkspace(workspace);
+    await act(async () => finish({ roomId: 'dev-shack' }));
+    expect(screen.getByLabelText('Message Welcome Lounge')).toBeVisible();
+    expect(screen.queryByLabelText('Message Dev Shack')).not.toBeInTheDocument();
+  });
+
+  it('keeps the newer room when an earlier return to live finishes', async () => {
+    const pending = pendingSend();
+    const onReturnToLive = vi.fn().mockReturnValue(pending.promise);
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    workspace.historyByRoom = { welcome: { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true } };
+    renderWorkspace({ workspace, onReturnToLive });
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    expect(onReturnToLive).toHaveBeenCalledWith('welcome');
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    await act(async () => pending.resolve());
+    expect(screen.getByLabelText('Message Dev Shack')).toBeVisible();
+    expect(screen.queryByLabelText('Message Welcome Lounge')).not.toBeInTheDocument();
+  });
+
+  it.each([1280, 320])('hands switcher focus to the selected room and space at %i pixels', async (width) => {
+    vi.stubGlobal('innerWidth', width);
+    renderWorkspace();
+    const choose = (query: string) => {
+      const opener = screen.getByRole('button', { name: 'Quick switcher' });
+      opener.focus(); fireEvent.click(opener);
+      const search = screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' });
+      fireEvent.change(search, { target: { value: query } });
+      fireEvent.keyDown(search, { key: 'Enter' });
+    };
+    choose('Dev Shack');
+    await waitFor(() => expect(within(screen.getByRole('main', { name: 'Conversation with Dev Shack' })).getByRole('heading', { name: 'Dev Shack', level: 2 })).toHaveFocus());
+    choose('Direct Messages');
+    await waitFor(() => expect(screen.getByRole('button', { name: /Mara Chen/ })).toHaveFocus());
+  });
+
+  it('leaves later user focus alone after a switcher choice', async () => {
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
+    vi.stubGlobal('cancelAnimationFrame', vi.fn());
+    renderWorkspace();
+    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    const search = screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' });
+    fireEvent.change(search, { target: { value: 'Dev Shack' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => {});
+    const composer = screen.getByLabelText('Message Dev Shack');
+    composer.focus();
+    act(() => { for (const callback of frames) callback(0); });
+    expect(composer).toHaveFocus();
+  });
+
+  it('opens keyboard switching from the composer but ignores unread and help shortcuts in editable fields and dialogs', async () => {
+    renderWorkspace();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Synthetic retained draft');
+    fireEvent.keyDown(composer, { key: 'ArrowDown', altKey: true, shiftKey: true });
+    fireEvent.keyDown(composer, { key: '/', ctrlKey: true });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(composer, { key: 'k', ctrlKey: true, isComposing: true });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    fireEvent.keyDown(composer, { key: 'k', ctrlKey: true });
+    const search = screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' });
+    fireEvent.change(search, { target: { value: 'Dev Shack' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(screen.getByLabelText('Message Dev Shack')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.change(screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' }), { target: { value: 'Welcome Lounge' } });
+    fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' }), { key: 'Enter' });
+    expect(screen.getByLabelText('Message Welcome Lounge')).toHaveTextContent('Synthetic retained draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'k', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
+    await act(async () => {});
   });
 });

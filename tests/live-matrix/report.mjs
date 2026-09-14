@@ -4,6 +4,7 @@ export const checkNames = new Set([
   'password-login-three-devices', 'encrypted-room-create-and-join',
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders',
+  'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
   'encrypted-send-receive-and-latency', 'encrypted-history-and-context', 'authenticated-encrypted-media',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback',

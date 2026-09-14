@@ -47,6 +47,9 @@ export interface RoomSummary {
   id: string;
   name: string;
   avatarUrl?: string;
+  favorite?: boolean;
+  canonicalAlias?: string;
+  directUserId?: string;
   kind: RoomKind;
   group: 'Invites' | 'Favorites' | 'Direct Messages' | 'Rooms';
   membership: 'join' | 'invite';

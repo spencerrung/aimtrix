@@ -31,3 +31,13 @@ test('read-tracking evidence accepts its fixed check name but discards receipt a
   assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
+test('navigation evidence retains fixed checks without links, destinations, tags or reading anchors', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const name of ['standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history']) {
+    const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
+      roomId: privateValue, link: privateValue, alias: privateValue, tags: { privateValue }, anchor: { eventId: privateValue } }],
+    });
+    assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
