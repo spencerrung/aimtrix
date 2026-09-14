@@ -123,6 +123,28 @@ Public profiles, scheduling, and integrations begin with explicit decisions rath
 
 Step 09 implementation and protocol semantics are documented in [read state and reminders](unread-state.md). Its validation boundaries remain separate from old-thread retrieval and physical-device acceptance.
 
+## Delivery batches
+
+September 14 working agreement: prefer one MR for related issues that share a user journey, implementation seams and validation. Issue numbers remain stable acceptance units; they do not require separate branches or MRs. Resolve dependencies inside a batch in implementation order, and preserve every included issue's scope.
+
+The next MR combines **#152, #153 and #154**: complete room/thread messaging through rich content and actions, durable drafts, shared composition, and staged encrypted attachments. All external prerequisites are complete. This covers composing, staging, sending, rendering and replying/editing in one integrated delivery.
+
+| Delivery order | MR outcome | Issues | Reason for grouping |
+| --- | --- | --- | --- |
+| Next | Complete room/thread messaging | #152, #153, #154 | Shared content/actions, draft ownership, composer parity, attachment metadata, and send/retry behavior. |
+| Then | Attention and catch-up | #155, #159 | Home activity and notification controls share unread/mute/thread semantics and exact event routing. |
+| Then | Collections and history retrieval | #156, #157 | Saves, pins/media/links and filtered search share results, coverage, pagination, access-loss handling and context return. |
+| Then | Private encrypted search | #158 | Integrates the preceding search surface, with a separately reviewable index, storage, backfill and deletion lifecycle. |
+| Then | First-use encryption confidence | #160, #161 | Onboarding, setup/restore and incoming verification share account health, crypto callbacks and guided recovery. |
+
+These are five planned MRs for ten issues. The next MR is the committed scope; later groupings are working boundaries to revisit after each delivery. Moving #159 alongside #155 satisfies its existing prerequisites and does not renumber the queue. Cross-browser/accessibility and profiling work under #162/#163 can still proceed independently; feature-specific checks do not close their broader acceptance gates.
+
+Within the next MR, use reviewable commits for shared rendering/actions, the structured draft/storage contract, composer parity, attachment staging/queue behavior, and integrated evidence. Document draft privacy, quota/corruption, account cleanup and reload semantics before persisting content. Coordinate that storage contract with #158 without adding indexing to this MR. Attachment reload may require truthful reattachment; durable binary storage is not an implied requirement.
+
+Run focused regressions as each substantial component lands, then the complete local and hosted gates on the integrated MR. Share the desktop/mobile visual and live Matrix journeys across the included issues, with explicit evidence for each acceptance criterion. Do not create separate MRs solely for preparatory refactors or each issue's tests. Re-run affected gates after fixes; batching does not waive validation.
+
+List each completed issue separately in the MR's closing references and map its acceptance criteria to behavior and evidence. On merge, verify automatic closure and update each issue and the tracker. An unfinished issue stays open with an explicit remaining scope; being bundled never counts as completion. Split a batch only for a concrete implementation, review or infrastructure boundary, such as a send-pipeline redesign or a blocked storage contract, and record the reason rather than silently narrowing the work.
+
 ## Ordered issue index
 
 Priority uses the existing GitHub labels: **P0** foundational/blocking, **P1** important daily-client or compatibility work, **P2** additive expansion. The tracker checklist is the editable execution queue.
@@ -178,6 +200,7 @@ Start with the baseline and references, while the live harness, browser coverage
 - Build call test infrastructure independently of call UI work. Live group-call acceptance requires both the protocol implementation and Synapse/LiveKit/TURN infrastructure.
 - Native evidence gates the corresponding native release; provider evidence gates closed-app delivery claims. Their availability does not block unrelated browser polish.
 - Treat stated issue dependencies as required inputs. Treat sequence and related-issue links as coordination guidance. Do not create a single serial chain through all 36 issues.
+- Use the delivery batches above as the current MR order. Complete internal dependencies within the same MR when the combined result remains coherent and reviewable.
 
 Implement substantial coherent slices that include protocol behavior, UI states, accessibility, regression coverage, visual review, and documentation. Avoid closing a slice because its first control renders.
 
