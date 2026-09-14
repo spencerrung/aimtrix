@@ -4602,10 +4602,11 @@ export function Workspace({
       const room = rooms[(current + direction * step + rooms.length * 2) % rooms.length];
       if (room.id !== effectiveRoomId && (room.badgeCount ?? room.unreadCount) > 0) {
         selectRoom(room.id, workspace.spaces.find((space) => space.roomIds.includes(room.id))?.id ?? activeSpace);
-        return;
+        return true;
       }
     }
     setNotice('No other unread conversations. You’re all caught up!');
+    return false;
   }, [activeSpace, effectiveRoomId, selectRoom, workspace.rooms, workspace.spaces]);
   useEffect(() => {
     const handler = (event: globalThis.KeyboardEvent) => {
@@ -4615,7 +4616,7 @@ export function Workspace({
       event.preventDefault();
       if (shortcut === 'switcher') setNavigationDialog('switcher');
       else if (shortcut === 'help') setNavigationDialog('help');
-      else goUnread(shortcut === 'previous-unread' ? -1 : 1);
+      else if (!goUnread(shortcut === 'previous-unread' ? -1 : 1)) setNavigationDialog('switcher');
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
@@ -5173,9 +5174,10 @@ export function Workspace({
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
           <button className="aqua-button" style={{ minHeight: 44 }} type="button" disabled={!canGoBack} onClick={() => { setNavigationDialog(undefined); shellBack(); }}><ArrowLeft size={14} /> Back</button>
           <button className="aqua-button" style={{ minHeight: 44 }} type="button" disabled={!canGoForward} onClick={() => { setNavigationDialog(undefined); shellForward(); }}><ArrowRight size={14} /> Forward</button>
-          <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => { setNavigationDialog(undefined); goUnread(1); }}>Next unread</button>
+          <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => { if (goUnread(1)) setNavigationDialog(undefined); }}>Next unread</button>
           <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => setNavigationDialog('link')}>Open Matrix link</button>
           <button className="aqua-button" style={{ minHeight: 44 }} type="button" onClick={() => setNavigationDialog('help')}>Keyboard shortcuts</button>
+          {notice === 'No other unread conversations. You’re all caught up!' ? <p role="status" style={{ margin: 0 }}>{notice}</p> : null}
         </div>
       </QuickSwitcher> : navigationDialog ? <NavigationDialogs kind={navigationDialog} onClose={() => setNavigationDialog(undefined)} onOpenLink={openMatrixLink} onStartConversation={onCreateDirectRoom ? async (userId) => { const id = await onCreateDirectRoom(userId); selectRoom(id, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace); } : undefined} /> : null}
       <section className={`aimtrix-window${connectionNotice ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>

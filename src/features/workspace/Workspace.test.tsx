@@ -2473,3 +2473,22 @@ describe('Workspace quick navigation', () => {
     await act(async () => {});
   });
 });
+
+
+describe('Unread navigation feedback', () => {
+  beforeEach(() => { localStorage.clear(); vi.stubGlobal('innerWidth', 320); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+  it('keeps the caught-up result visible in the switcher when the phone conversation is hidden', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    for (const room of workspace.rooms) { room.unreadCount = 0; room.badgeCount = 0; }
+    renderWorkspace({ workspace });
+    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next unread' }));
+    const dialog = screen.getByRole('dialog', { name: 'Quick switcher' });
+    expect(within(dialog).getByText('No other unread conversations. You’re all caught up!')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Close quick switcher' }));
+    fireEvent.keyDown(document.body, { key: 'ArrowDown', altKey: true, shiftKey: true });
+    expect(screen.getByRole('dialog', { name: 'Quick switcher' })).toBeVisible();
+    await act(async () => {});
+  });
+});
