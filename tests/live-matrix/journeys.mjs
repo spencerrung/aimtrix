@@ -56,7 +56,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
   };
   const alice = await newPage(), bob = await newPage(), aliceSecond = await newPage();
   let aliceSession, bobSession, secondSession, roomId;
-  let navigationHistory, threadHistory, attachmentThreadRootId;
+  let navigationHistory, threadHistory, attachmentThreadRootId, formattedPeer;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
   const uploads = [];
@@ -730,49 +730,63 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await peerThread.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
     await check('durable-room-thread-drafts-and-reattach', async () => {
-      const roomDraft = 'Synthetic durable room draft';
-      const threadDraft = 'Synthetic durable thread draft';
-      const roomFile = { name: 'room-draft.bin', mimeType: 'application/octet-stream', buffer: randomBytes(40) };
-      const threadFile = { name: 'thread-draft.bin', mimeType: 'application/octet-stream', buffer: randomBytes(48) };
-      const roomCaption = 'Synthetic durable room caption', threadCaption = 'Synthetic durable thread caption';
-      const start = wire.length;
-      await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(roomDraft);
-      await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles(roomFile);
-      await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).fill(roomCaption);
-      await openMatrixEvent(alice, roomId, attachmentThreadRootId);
-      const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
-      await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(threadDraft);
-      await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(threadFile);
-      await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).fill(threadCaption);
-      // Observe only synthetic draft strings in memory; do not persist a storage snapshot.
-      await until(() => alice.evaluate(({ roomDraft, threadDraft, roomCaption, threadCaption }) => {
-        const drafts = Object.keys(localStorage).filter((key) => key.startsWith('aimtrix.private-drafts.v1:')).map((key) => localStorage.getItem(key)).join('');
-        return [roomDraft, threadDraft, roomCaption, threadCaption].every((value) => drafts.includes(value));
-      }, { roomDraft, threadDraft, roomCaption, threadCaption }), 'drafts-persisted');
-      await alice.reload();
-      await openRoom(alice, roomName);
-      const roomComposer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
-      await until(async () => await roomComposer.innerText() === roomDraft, 'room-draft-restored');
-      await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).waitFor();
-      invariant(await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).inputValue() === roomCaption && await alice.getByRole('button', { name: 'Send attachments', exact: true }).isDisabled(), 'draft-reattach-required');
-      await openMatrixEvent(alice, roomId, attachmentThreadRootId);
-      await until(async () => await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft, 'thread-draft-restored');
-      await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).waitFor();
-      invariant(await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).inputValue() === threadCaption && await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).isDisabled(), 'draft-reattach-required');
-      invariant(wire.length === start, 'draft-reload-no-send');
-      await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).setInputFiles(threadFile);
-      await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
-      await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Sent', { exact: true }).waitFor();
-      await openMatrixEvent(bob, roomId, attachmentThreadRootId);
-      await verifyAttachment(bob.getByRole('complementary', { name: 'Thread', exact: true }), threadFile, threadCaption);
-      invariant(await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft && await roomComposer.innerText() === roomDraft, 'independent-draft-contexts');
-      await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill('');
-      await thread.getByRole('button', { name: 'Close thread', exact: true }).click();
-      await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
-      await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).setInputFiles(roomFile);
-      await alice.getByRole('region', { name: 'Attachments', exact: true }).getByText('Ready to send', { exact: true }).waitFor();
-      await alice.getByRole('button', { name: `Remove ${roomFile.name}`, exact: true }).click();
-      await roomComposer.fill('');
+      let stage = 'draft-stage-room';
+      try {
+        const roomDraft = 'Synthetic durable room draft';
+        const threadDraft = 'Synthetic durable thread draft';
+        const roomFile = { name: 'room-draft.bin', mimeType: 'application/octet-stream', buffer: randomBytes(40) };
+        const threadFile = { name: 'thread-draft.bin', mimeType: 'application/octet-stream', buffer: randomBytes(48) };
+        const roomCaption = 'Synthetic durable room caption', threadCaption = 'Synthetic durable thread caption';
+        const start = wire.length;
+        await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(roomDraft);
+        await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles(roomFile);
+        await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).fill(roomCaption);
+        stage = 'draft-stage-thread';
+        await openMatrixEvent(alice, roomId, attachmentThreadRootId);
+        stage = 'draft-thread-composer';
+        const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+        await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(threadDraft);
+        stage = 'draft-thread-file';
+        await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(threadFile);
+        stage = 'draft-thread-caption';
+        await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).fill(threadCaption);
+        stage = 'draft-thread-persistence';
+        // Observe only synthetic draft strings in memory; do not persist a storage snapshot.
+        await until(() => alice.evaluate(({ roomDraft, threadDraft, roomCaption, threadCaption }) => {
+          const drafts = Object.keys(localStorage).filter((key) => key.startsWith('aimtrix.private-drafts.v1:')).map((key) => localStorage.getItem(key)).join('');
+          return [roomDraft, threadDraft, roomCaption, threadCaption].every((value) => drafts.includes(value));
+        }, { roomDraft, threadDraft, roomCaption, threadCaption }), 'drafts-persisted');
+        stage = 'draft-reload-room';
+        await alice.reload();
+        await openRoom(alice, roomName);
+        const roomComposer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
+        await until(async () => await roomComposer.innerText() === roomDraft, 'room-draft-restored');
+        await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).waitFor();
+        invariant(await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).inputValue() === roomCaption && await alice.getByRole('button', { name: 'Send attachments', exact: true }).isDisabled(), 'draft-reattach-required');
+        stage = 'draft-reload-thread';
+        await openMatrixEvent(alice, roomId, attachmentThreadRootId);
+        await until(async () => await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft, 'thread-draft-restored');
+        stage = 'draft-reattach-thread';
+        await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).waitFor();
+        invariant(await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).inputValue() === threadCaption && await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).isDisabled(), 'draft-reattach-required');
+        invariant(wire.length === start, 'draft-reload-no-send');
+        stage = 'draft-send-reattached';
+        await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).setInputFiles(threadFile);
+        await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
+        await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Sent', { exact: true }).waitFor();
+        stage = 'draft-receive-reattached';
+        await openMatrixEvent(bob, roomId, attachmentThreadRootId);
+        await verifyAttachment(bob.getByRole('complementary', { name: 'Thread', exact: true }), threadFile, threadCaption);
+        invariant(await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft && await roomComposer.innerText() === roomDraft, 'independent-draft-contexts');
+        stage = 'draft-cleanup-contexts';
+        await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill('');
+        await thread.getByRole('button', { name: 'Close thread', exact: true }).click();
+        await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
+        await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).setInputFiles(roomFile);
+        await alice.getByRole('region', { name: 'Attachments', exact: true }).getByText('Ready to send', { exact: true }).waitFor();
+        await alice.getByRole('button', { name: `Remove ${roomFile.name}`, exact: true }).click();
+        await roomComposer.fill('');
+      } catch { throw new Error(stage); }
     });
     await check('formatted-api-peer-interoperability', async () => {
       // This is a standard Matrix API peer, not a third-party client UI claim.
@@ -807,10 +821,39 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(stored.type === 'm.room.message' && stored.content.format === 'org.matrix.custom.html' && stored.content.formatted_body.includes('<strong>Synthetic outbound formatting</strong>') && stored.content['m.relates_to']?.event_id === root.event_id && wire.length === start + 1, 'formatted-outbound-roundtrip');
       await openMatrixEvent(bob, formattedRoomId, root.event_id);
       await bob.getByRole('complementary', { name: 'Thread', exact: true }).locator(`[data-event-id=${JSON.stringify(eventId)}] strong`).filter({ hasText: /^Synthetic outbound formatting$/ }).waitFor();
-      for (const page of [alice, bob]) {
-        await page.getByRole('button', { name: 'Close thread', exact: true }).click();
-        await openRoom(page, roomName);
-      }
+      for (const page of [alice, bob]) await page.getByRole('button', { name: 'Close thread', exact: true }).click();
+      await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).fill('**Synthetic outbound room formatting** with _emphasis_ and `inline code`.');
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      const roomOutbound = alice.locator('.timeline-message').filter({ hasText: 'Synthetic outbound room formatting' });
+      await roomOutbound.getByText('Accepted by server', { exact: true }).waitFor();
+      formattedPeer = { roomId: formattedRoomId, rootId: root.event_id, replyId: reply.event_id, outboundId: await roomOutbound.getAttribute('data-event-id') };
+      for (const page of [alice, bob]) await openRoom(page, roomName);
+    });
+    if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {
+      // An actual separately distributed Element UI reads the server's events.
+      // Only this disposable browser context holds its login/session data.
+      const peer = await newPage();
+      await peer.goto(`${stack.origins.element}/#/login`);
+      await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.bob.user_id);
+      await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+      await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+      await until(async () => !(new URL(peer.url()).hash.startsWith('#/login')), 'element-login');
+      await peer.goto(`${stack.origins.element}/#/room/${encode(formattedPeer.roomId)}`);
+      // Startup prompts can arrive after navigation; wait for the actual tile
+      // while dismissing only the optional verification deferral control.
+      const skip = peer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
+      const outbound = peer.locator('.mx_EventTile').filter({ hasText: 'Synthetic outbound room formatting' });
+      await until(async () => {
+        if (await skip.isVisible()) await skip.click();
+        return outbound.locator('strong').filter({ hasText: /^Synthetic outbound room formatting$/ }).isVisible();
+      }, 'element-timeline', 60000);
+      await outbound.locator('em').filter({ hasText: /^emphasis$/ }).waitFor();
+      await outbound.locator('code').filter({ hasText: /^inline code$/ }).waitFor();
+      const root = peer.locator('.mx_EventTile').filter({ has: peer.locator('strong').filter({ hasText: /^API peer root$/ }) });
+      await root.locator('strong').filter({ hasText: /^API peer root$/ }).waitFor();
+      await root.locator('blockquote').filter({ hasText: /^Preserved quotation$/ }).waitFor();
+      await root.locator('li').filter({ hasText: /^List item$/ }).waitFor();
+      await peer.close();
     });
     await check('shared-backdrop-and-permissions', async () => {
       const start = Date.now();

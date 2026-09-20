@@ -61,6 +61,34 @@ describe('MatrixController thread history integration', () => {
     await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId });
   });
 
+  it('routes accepted thread roots and replies before their remote echo arrives', async () => {
+    const test = fixture();
+    test.root.setStatus(EventStatus.SENT);
+    test.loaded.set(rootId, test.root);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId, threadRootId: rootId });
+    const reply = new MatrixEvent({ event_id: '$accepted-reply', room_id: roomId, type: 'm.room.message', content: {
+      msgtype: 'm.text', body: 'Synthetic accepted reply', 'm.relates_to': { rel_type: 'm.thread', event_id: rootId },
+    } });
+    reply.setStatus(EventStatus.SENT);
+    test.loaded.set('$accepted-reply', reply);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: '$accepted-reply' })).resolves.toEqual({ roomId, eventId: '$accepted-reply', threadRootId: rootId });
+    reply.setStatus(EventStatus.NOT_SENT);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: '$accepted-reply' })).resolves.toEqual({ roomId, eventId: '$accepted-reply' });
+  });
+
+  it('recognizes a freshly opened root retained by independent thread history', async () => {
+    const test = fixture();
+    const root = new MatrixEvent({ event_id: rootId, room_id: roomId, type: 'm.room.message', content: { msgtype: 'm.text', body: 'Synthetic fresh root' } });
+    root.setStatus(EventStatus.SENT);
+    test.loaded.set(rootId, root);
+    test.internal.snapshotCache.threadHistory.set(rootId, { roomId, rootId, rootStatus: 'found', root, events: [],
+      state: { mode: 'live', revision: 1, canLoadOlder: false, canLoadNewer: false } });
+    expect(root.isThreadRoot).toBe(false);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId, threadRootId: rootId });
+    test.internal.snapshotCache.threadHistory.get(rootId)!.roomId = '!other:test';
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId });
+  });
+
   it.each(['client', 'membership'])('rejects classification when %s changes during decryption', async (change) => {
     const test = fixture();
     test.loaded.set(rootId, test.root);

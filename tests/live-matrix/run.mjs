@@ -12,8 +12,9 @@ import { checkNames, failureCategories, makeReport } from './report.mjs';
 // No Playwright reporter, traces, HAR, videos, storage snapshots, or screenshots.
 // All exceptions are discarded at this boundary; only a fixed check ID is reported.
 const args = process.argv.slice(2);
-invariant(args.every((arg) => ['--repeat=2', '--probe-failure'].includes(arg)), 'unsupported-option');
+invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui'].includes(arg)), 'unsupported-option');
 const probe = args.includes('--probe-failure');
+const elementUi = args.includes('--element-ui');
 const repeats = args.includes('--repeat=2') ? 2 : 1;
 const output = resolve('matrix-test-results');
 await mkdir(output, { recursive: true });
@@ -41,7 +42,7 @@ for (let run = 1; run <= repeats; run++) {
     }
   };
   try {
-    stack = await createStack();
+    stack = await createStack({ elementUi });
     await check('disposable-stack', () => stack.start());
     await check('application-server', async () => {
       const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: false,
@@ -73,7 +74,7 @@ for (let run = 1; run <= repeats; run++) {
     activeBrowser = undefined;
   }
   const expectedFailure = probe && stage === 'diagnostic-failure-probe' && checks.at(-1)?.passed;
-  const report = makeReport({ revision, platform: `${process.platform}/${process.arch}`, browser: 'Chromium', run, probe,
+  const report = makeReport({ revision, platform: `${process.platform}/${process.arch}`, browser: 'Chromium', run, probe, elementUi,
     passed: !interrupted && (expectedFailure || !failed), failureStage: failed ? stage : null, checks, metrics });
   const serialized = JSON.stringify(report, null, 2);
   // Belt-and-braces check in addition to the allowlisted report fields.

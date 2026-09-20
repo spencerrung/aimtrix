@@ -7,6 +7,7 @@ import type {
   SyncState,
 } from 'matrix-js-sdk';
 import type { RoomMessageEventContent, StickerEventContent } from 'matrix-js-sdk/lib/@types/events.js';
+import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
 import { MARKED_UNREAD_EVENT, UNREAD_RETURN_POINT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
@@ -1818,10 +1819,14 @@ export class MatrixController {
         }
         if (event) {
           await client.decryptEventIfNeeded(event).catch(() => undefined);
-          if (event.getRoomId() === room.roomId && !event.status) {
+          // HTTP acceptance can precede the remote echo. A server-assigned ID
+          // remains navigable while the SDK still marks that echo as SENT.
+          if (event.getRoomId() === room.roomId && (!event.status || event.status === EventStatus.SENT)) {
             const relation = historyRelation(event);
+            const knownThread = this.snapshotCache.threadHistory.get(eventId);
             if (relation?.rel_type === 'm.thread' && validUnreadEventId(relation.event_id)) threadRootId = relation.event_id;
-            else if (room.getThread(eventId) || event.isThreadRoot) threadRootId = eventId;
+            else if (room.getThread(eventId) || event.isThreadRoot ||
+              (knownThread?.roomId === room.roomId && knownThread.rootId === eventId && knownThread.rootStatus === 'found')) threadRootId = eventId;
           }
         }
       } catch { /* Ordinary context exposes unavailable events without disclosing server details. */ }
