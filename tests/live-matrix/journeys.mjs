@@ -866,12 +866,13 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         // before asserting that a newly arriving peer message is visible.
         const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
         if (await latest.isVisible()) { await latest.click(); await latest.waitFor({ state: 'hidden' }); }
-        const accepted = peer.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.room.message/'));
         stage = 'element-return-composer';
         const composer = peer.getByRole('textbox', { name: 'Send an unencrypted message…', exact: true });
         await composer.fill('**Synthetic Element return** with _peer emphasis_ and `peer code`.');
-        await composer.press('Enter');
-        const response = await accepted;
+        const [response] = await Promise.all([
+          peer.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes(`/rooms/${encode(formattedPeer.roomId)}/send/m.room.message/`)),
+          composer.press('Enter'),
+        ]);
         invariant(response.ok(), 'element-formatted-send');
         const content = response.request().postDataJSON();
         invariant(content.format === 'org.matrix.custom.html' && content.formatted_body?.includes('<strong>Synthetic Element return</strong>'), 'element-formatted-send');
