@@ -202,12 +202,30 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const bobRoot = bob.locator('.timeline-message').filter({ hasText: 'Retry round trip' }).first();
       await bobRoot.locator('.thread-summary').click();
       const received = bob.getByRole('complementary', { name: 'Thread', exact: true }).locator('.timeline-message').filter({ hasText: marker });
-      await received.waitFor({ timeout: 45000 });
-      invariant(await received.count() === 1 && await failed.count() === 1, 'single-thread-reply');
-      threadHistory = { rootId: await root.getAttribute('data-event-id'), replyId: await failed.getAttribute('data-event-id') };
+      // HTTP acceptance and peer delivery can precede the sender's remote-echo
+      // reconciliation. Require stable convergence, not a single intermediate
+      // render; persistent duplicates or a missing accepted row still fail.
+      let settledReplyId, settledSamples = 0;
+      await until(async () => {
+        const [peerIds, senderIds] = await Promise.all([
+          received.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-event-id'))),
+          failed.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-event-id'))),
+        ]);
+        const replyId = peerIds[0];
+        if (peerIds.length !== 1 || senderIds.length !== 1 || !replyId?.startsWith('$') || senderIds[0] !== replyId) {
+          settledSamples = 0; settledReplyId = undefined; return false;
+        }
+        settledSamples = settledReplyId === replyId ? settledSamples + 1 : 1;
+        settledReplyId = replyId;
+        return settledSamples >= 3;
+      }, 'single-thread-reply');
+      threadHistory = { rootId: await root.getAttribute('data-event-id'), replyId: settledReplyId };
       const attempts = wire.slice(start);
       invariant(attempts.length === 2 && attempts[0].path === attempts[1].path && JSON.stringify(attempts[0].content) === JSON.stringify(attempts[1].content), 'thread-retry-same-ciphertext-transaction');
       invariant(attempts[0].content['m.relates_to']?.rel_type === 'm.thread', 'standard-thread-relation');
+      const relations = await api(`/_matrix/client/v1/rooms/${encode(roomId)}/relations/${encode(threadHistory.rootId)}/m.thread?limit=100`, { token: aliceSession.accessToken });
+      const acceptedCopies = relations.chunk.filter((event) => event.type === 'm.room.encrypted' && event.content?.ciphertext === attempts[0].content.ciphertext);
+      invariant(acceptedCopies.length === 1 && acceptedCopies[0].event_id === settledReplyId, 'single-thread-reply');
       const cancelled = 'Synthetic cancelled thread reply';
       await alice.route(pattern, reject);
       await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(cancelled);
