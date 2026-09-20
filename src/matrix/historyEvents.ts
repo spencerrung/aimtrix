@@ -2,7 +2,7 @@ import type { MatrixEvent } from 'matrix-js-sdk';
 
 export const HISTORY_MESSAGE_LIMIT = 250;
 export const HISTORY_RAW_LIMIT = 10_000;
-const messageTypes = new Set(['m.text', 'm.notice', 'm.emote', 'm.image', 'm.file', 'm.audio', 'm.video']);
+export const supportedMessageTypes = new Set(['m.text', 'm.notice', 'm.emote', 'm.image', 'm.file', 'm.audio', 'm.video']);
 
 export function historyEventContent(event: MatrixEvent): Record<string, unknown> {
   return event.getOriginalContent?.() ?? event.getContent();
@@ -16,12 +16,14 @@ export function historyRelation(event: MatrixEvent): { rel_type?: string; event_
 /** Mirrors the visible rows in the snapshot, including recoverable pending edits. */
 export function isVisibleTimelineEvent(event: MatrixEvent): boolean {
   if (!event.getId() || !event.getSender() || event.isRedacted() || event.status === 'cancelled') return false;
+  if (event.isState?.()) return false;
   if (historyRelation(event)?.rel_type === 'm.replace' && (event.status === null || event.status === 'sent')) return false;
   const type = event.getType();
   if (type === 'm.room.encrypted') return true;
   const content = historyEventContent(event);
-  if (typeof content.body !== 'string') return false;
-  return type === 'm.sticker' || (type === 'm.room.message' && messageTypes.has(String(content.msgtype)));
+  if (type === 'm.sticker') return typeof content.body === 'string';
+  return type === 'm.room.message' && typeof content.msgtype === 'string' && content.msgtype.length > 0
+    && (typeof content.body === 'string' || !supportedMessageTypes.has(content.msgtype));
 }
 
 /** Trim visible rows while retaining loaded edits/reactions for their originals. */

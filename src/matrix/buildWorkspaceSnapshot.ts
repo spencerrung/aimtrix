@@ -1,4 +1,5 @@
-import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent } from './historyEvents';
+import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent, supportedMessageTypes } from './historyEvents';
+import { MAX_FORMATTED_BODY_LENGTH, parseIncomingFormatting } from './incomingFormatting';
 import type { HistoryView } from './RoomHistory';
 import type { ThreadHistoryView } from './ThreadHistory';
 import { deliveryForStatus, deliveryFailureCopy } from './messageDelivery';
@@ -128,6 +129,7 @@ function reactionsEqual(
     return reaction.key === other.key &&
       reaction.count === other.count &&
       reaction.reacted === other.reacted &&
+      reaction.canRemove === other.canRemove &&
       reaction.ownEventId === other.ownEventId;
   });
 }
@@ -159,9 +161,13 @@ function messagesEqual(left: MessageSummary, right: MessageSummary): boolean {
     left.senderName === right.senderName &&
     left.senderAvatarUrl === right.senderAvatarUrl &&
     left.body === right.body &&
+    JSON.stringify(left.formatted) === JSON.stringify(right.formatted) &&
+    JSON.stringify(left.actions) === JSON.stringify(right.actions) &&
+    left.fallbackType === right.fallbackType &&
     left.timestamp === right.timestamp &&
     left.kind === right.kind &&
     left.mediaUrl === right.mediaUrl &&
+    left.fileName === right.fileName &&
     left.mimeType === right.mimeType &&
     left.mediaKind === right.mediaKind &&
     left.codeFile === right.codeFile &&
@@ -209,6 +215,7 @@ interface MessageContent {
   format?: string;
   formatted_body?: string;
   url?: string;
+  filename?: string;
   file?: EncryptedMediaInfo & { url?: string };
   info?: { mimetype?: string };
   'm.new_content'?: MessageContent;
@@ -262,9 +269,11 @@ function eventBody(
   body: string;
   kind: MessageSummary['kind'];
   mediaUrl?: string;
+  fileName?: string;
   edited?: boolean;
   mentionUserIds?: string[];
   formattedBody?: string;
+  fallbackType?: string;
   nudge?: boolean;
   encryptedFile?: MessageSummary['encryptedFile'];
   mimeType?: string;
@@ -272,7 +281,7 @@ function eventBody(
   codeFile?: boolean;
   codeLanguage?: string;
 } | undefined {
-  if (event.isRedacted()) return undefined;
+  if (event.isRedacted() || event.isState?.()) return undefined;
   const type = event.getType();
   if (type === matrixEventType.encrypted) {
     return { body: 'Waiting for encryption keys…', kind: 'encrypted' };
@@ -297,6 +306,7 @@ function eventBody(
     ? originalEventContent(candidateReplacement)['m.relates_to']
     : undefined;
   const validReplacement = candidateReplacement &&
+    candidateReplacement.getType() === matrixEventType.message &&
     !candidateReplacement.isRedacted() &&
     (candidateReplacement.status === null || candidateReplacement.status === 'sent') &&
     candidateReplacement.getSender() === event.getSender() &&
@@ -304,30 +314,36 @@ function eventBody(
     candidateRelation.event_id === event.getId()
     ? candidateReplacement
     : undefined;
-  const replacementContent = validReplacement?.getContent<MessageContent>()['m.new_content'];
+  const proposedContent = validReplacement?.getContent<MessageContent>()['m.new_content'];
+  const replacementContent = proposedContent && typeof proposedContent.body === 'string' && typeof proposedContent.msgtype === 'string'
+    ? proposedContent : undefined;
   const content = replacementContent ?? originalContent;
+  if (typeof content.msgtype !== 'string' || !content.msgtype) return undefined;
+  if (!supportedMessageTypes.has(content.msgtype)) return {
+    body: typeof content.body === 'string' && content.body.trim() ? content.body : 'This message type is not supported yet.',
+    kind: 'unsupported', fallbackType: content.msgtype.slice(0, 256), edited: Boolean(replacementContent),
+  };
   if (typeof content.body !== 'string') return undefined;
   const body = originalContent['m.relates_to']?.['m.in_reply_to']
     ? stripReplyFallback(content.body)
     : content.body;
+  const richText = {
+    body,
+    edited: Boolean(replacementContent),
+    mentionUserIds: Array.isArray(content['m.mentions']?.user_ids)
+      ? content['m.mentions']?.user_ids.filter((id): id is string => typeof id === 'string').slice(0, 100)
+      : undefined,
+    formattedBody: content.format === 'org.matrix.custom.html' && typeof content.formatted_body === 'string' && content.formatted_body.length <= MAX_FORMATTED_BODY_LENGTH
+      ? content.formatted_body : undefined,
+  };
 
   switch (content.msgtype) {
     case matrixMessageType.text:
-      return {
-        body,
-        kind: 'text',
-        edited: Boolean(replacementContent),
-        mentionUserIds: Array.isArray(content['m.mentions']?.user_ids)
-          ? content['m.mentions']?.user_ids.filter((id): id is string => typeof id === 'string')
-          : undefined,
-        formattedBody: content.format === 'org.matrix.custom.html' && typeof content.formatted_body === 'string'
-          ? content.formatted_body
-          : undefined,
-      };
+      return { ...richText, kind: 'text' };
     case matrixMessageType.notice:
-      return { body, kind: 'notice', edited: Boolean(replacementContent), nudge: (content['dev.alucard.aimtrix.nudge.v1'] as { version?: unknown } | undefined)?.version === 1 };
+      return { ...richText, kind: 'notice', nudge: (content['dev.alucard.aimtrix.nudge.v1'] as { version?: unknown } | undefined)?.version === 1 };
     case matrixMessageType.emote:
-      return { body, kind: 'emote', edited: Boolean(replacementContent) };
+      return { ...richText, kind: 'emote' };
     case matrixMessageType.image:
     case matrixMessageType.file:
     case matrixMessageType.audio:
@@ -343,6 +359,7 @@ function eventBody(
       return {
         body: body || mediaKind,
         kind: 'media',
+        fileName: (typeof content.filename === 'string' ? content.filename : body).split(/[\\/]/u).at(-1)?.split('').filter((character) => character.charCodeAt(0) >= 32 && character.charCodeAt(0) !== 127).join('').trim().slice(0, 1024) || 'attachment',
         mediaUrl: mediaSource(content.file?.url ?? content.url),
         encryptedFile: content.file,
         mimeType: content.info?.mimetype,
@@ -481,14 +498,20 @@ function messagesForEvents(
     const replyEvent = replyEventId ? eventById.get(replyEventId) ?? room.findEventById?.(replyEventId) : undefined;
     const replySenderId = replyEvent?.getSender();
     const replyRendered = replyEvent ? eventBody(replyEvent, replacements.get(replyEventId!)) : undefined;
+    const accepted = event.status === null && !pendingEdit && room.getMyMembership() === 'join';
     const eventReactions = [...(reactions.get(eventId)?.entries() ?? [])].map(
-      ([key, reaction]) => ({
+      ([key, reaction]) => {
+        const ownReaction = reaction.ownEventId ? eventById.get(reaction.ownEventId) : undefined;
+        return {
         key,
         count: reaction.senders.size,
         reacted: reaction.senders.has(userId),
         ownEventId: reaction.ownEventId,
-      }),
+        ...(ownReaction ? { canRemove: accepted && room.currentState.maySendRedactionForEvent?.(ownReaction, userId) === true } : {}),
+      }; },
     );
+    const canMessage = accepted && room.currentState.maySendEvent?.(room.hasEncryptionStateEvent() ? 'm.room.encrypted' : 'm.room.message', userId) === true;
+    const canQuote = canMessage && rendered.kind !== 'encrypted' && rendered.kind !== 'unsupported';
 
     return [{
       id: eventId,
@@ -498,9 +521,19 @@ function messagesForEvents(
       senderName: sender?.name || senderId,
       senderAvatarUrl: memberAvatar(sender),
       body: rendered.body,
+      formatted: parseIncomingFormatting(rendered.formattedBody, rendered.mentionUserIds),
+      fallbackType: rendered.fallbackType,
+      actions: {
+        reply: canQuote, thread: canQuote,
+        react: accepted && room.currentState.maySendEvent?.('m.reaction', userId) === true,
+        pin: accepted && room.currentState.maySendStateEvent?.('m.room.pinned_events', userId) === true,
+        edit: canMessage && senderId === userId && ['text', 'notice', 'emote'].includes(rendered.kind),
+        redact: accepted && room.currentState.maySendRedactionForEvent?.(event, userId) === true,
+      },
       timestamp: event.getTs(),
       kind: rendered.kind,
       mediaUrl: rendered.mediaUrl,
+      fileName: rendered.fileName,
       encryptedFile: rendered.encryptedFile,
       mimeType: rendered.mimeType,
       mediaKind: rendered.mediaKind,

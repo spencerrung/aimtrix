@@ -106,7 +106,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
             {busy && 'message' in snapshot ? snapshot.message : 'Sign On'}
           </button>
           <div className="sso-divider"><span>or</span></div>
-          {recovery ? <p className="session-recovery__note">Continuing through SSO leaves this page and clears unsent drafts in this tab.</p> : null}
+          {recovery ? <p className="session-recovery__note">SSO leaves this page. Saved drafts return for the same account; changes kept only in this tab may be lost. Files need to be reattached.</p> : null}
           <button
             className="aqua-button sso-button"
             type="button"

@@ -45,7 +45,7 @@ test('expiry hides conversations and restores volatile drafts after same-account
   if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   await expect(composer).toHaveText('Synthetic unsent main draft');
   await page.getByRole('button', { name: '2 replies' }).click();
-  await expect(page.getByRole('textbox', { name: 'Message thread', exact: true })).toHaveValue('Synthetic unsent thread draft');
+  await expect(page.getByRole('textbox', { name: 'Message thread', exact: true })).toHaveText('Synthetic unsent thread draft');
   const saved = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
   expect(saved).not.toContain('Synthetic unsent');
 });

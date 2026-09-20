@@ -1,6 +1,8 @@
 import type { MessageDelivery } from './messageDelivery';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { RoomBackground, RoomBackgroundPolicy } from './roomBackgrounds';
+import type { FormattedMessageNode } from './incomingFormatting';
+export type { FormattedMessageNode } from './incomingFormatting';
 
 export type PresenceState = 'online' | 'away' | 'busy' | 'offline';
 export type RoomKind = 'direct' | 'room' | 'space';
@@ -112,7 +114,10 @@ export interface MessageSummary {
   senderAvatarUrl?: string;
   body: string;
   timestamp: number;
-  kind: 'text' | 'notice' | 'emote' | 'media' | 'sticker' | 'encrypted';
+  kind: 'text' | 'notice' | 'emote' | 'media' | 'sticker' | 'encrypted' | 'unsupported';
+  formatted?: FormattedMessageNode[];
+  fallbackType?: string;
+  actions?: { reply: boolean; thread: boolean; react: boolean; pin: boolean; edit: boolean; redact: boolean };
   isOwn: boolean;
   pending?: boolean;
   transactionId?: string;
@@ -136,8 +141,10 @@ export interface MessageSummary {
     count: number;
     reacted: boolean;
     ownEventId?: string;
+    canRemove?: boolean;
   }>;
   mediaUrl?: string;
+  fileName?: string;
   encryptedFile?: EncryptedMediaInfo;
   mimeType?: string;
   mediaKind?: 'image' | 'video' | 'audio' | 'file';

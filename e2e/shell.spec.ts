@@ -27,7 +27,7 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
   await expect(details).toBeHidden();
   await expect(thread).toBeVisible();
   await expectReachable(composer);
-  await expectReachable(page.getByRole('button', { name: 'More message tools' }));
+  await expectReachable(main.getByRole('button', { name: 'More message tools' }));
   expect((await main.boundingBox())!.width).toBeGreaterThanOrEqual(420);
   const mainBounds = (await main.boundingBox())!;
   const threadBounds = (await thread.boundingBox())!;
@@ -42,7 +42,7 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
   await page.getByRole('button', { name: 'Search loaded messages', exact: true }).click();
   await expect(search.getByRole('textbox', { name: 'Search loaded messages' })).toHaveValue('goal');
   await page.getByRole('button', { name: /2 replies/ }).click();
-  await expect(thread.getByLabel('Message thread')).toHaveValue('Keep my thread draft');
+  await expect(thread.getByLabel('Message thread')).toHaveText('Keep my thread draft');
   await expect(composer).toHaveText('Keep my conversation draft');
   await thread.getByRole('separator', { name: 'Resize thread panel' }).press('End');
   expect((await main.boundingBox())!.width).toBeGreaterThanOrEqual(420);
@@ -99,7 +99,7 @@ test('phone and tablet route Back preserves the room, draft and exact reading an
   await expect.poll(async () => Math.abs(await root.evaluate((element) => element.getBoundingClientRect().top - element.closest('.timeline')!.getBoundingClientRect().top) - anchorOffset)).toBeLessThan(3);
   await page.goForward();
   await expect(thread).toBeVisible();
-  await expect(thread.getByLabel('Message thread')).toHaveValue('A retained thread draft');
+  await expect(thread.getByLabel('Message thread')).toHaveText('A retained thread draft');
   const historyLength = await page.evaluate(() => history.length);
   await page.setViewportSize({ width: 1280, height: 800 });
   await expect(main).toBeVisible();
@@ -146,7 +146,7 @@ for (const size of [{ width: 412, height: 360 }, { width: 568, height: 320 }, { 
     await expectReachable(threadComposer);
     await expectReachable(thread.getByRole('button', { name: 'Send thread reply' }));
     await expectReachable(thread.getByRole('button', { name: 'Close thread' }));
-    await expectReachable(thread.getByRole('button', { name: 'More thread tools' }));
+    await expectReachable(thread.getByRole('button', { name: 'More message tools' }));
     expect(await threadComposer.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
     await page.screenshot({ path: testInfo.outputPath(`thread-${size.width}x${size.height}.png`) });
     await thread.getByRole('button', { name: 'Send thread reply' }).click();

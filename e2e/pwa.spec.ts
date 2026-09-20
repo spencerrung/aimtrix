@@ -42,7 +42,25 @@ test('service-worker update prompt protects drafts before reload', async ({ page
 
   const status = page.getByRole('status').filter({ hasText: 'Aimtrix update ready' });
   await expect(status).toContainText('Aimtrix update ready');
-  await expect(status).toContainText('Finish any draft');
+  await expect(status).toContainText('Reload when you are ready');
   await status.getByRole('button', { name: 'Later' }).click();
   await expect(status).toBeHidden();
+});
+
+
+test('update confirmation warns before discarding a demo draft', async ({ page }, testInfo) => {
+  if (testInfo.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  await page.getByRole('textbox', { name: /Message Welcome Lounge/ }).fill('Synthetic update draft');
+  await page.evaluate(() => {
+    const waitingWorker = { postMessage: () => { document.documentElement.dataset.updateApplied = 'yes'; } } as unknown as ServiceWorker;
+    window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: waitingWorker }));
+  });
+  await page.getByRole('button', { name: 'Reload', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Reload Aimtrix?' });
+  await expect(dialog).toContainText('Reloading will lose unsaved changes');
+  await page.screenshot({ path: testInfo.outputPath('draft-update-confirmation.png') });
+  await expect(page.locator('html')).not.toHaveAttribute('data-update-applied', 'yes');
+  await dialog.getByRole('button', { name: 'Cancel' }).click();
+  await expect(page.getByRole('textbox', { name: /Message Welcome Lounge/ })).toHaveText('Synthetic update draft');
+  await expect(page.locator('html')).not.toHaveAttribute('data-update-applied', 'yes');
 });

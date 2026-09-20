@@ -52,7 +52,7 @@ test('an old root outside the room window supports paging and keeps historical a
   await thread.getByRole('button', { name: 'Load older thread replies', exact: true }).evaluate((button: HTMLButtonElement) => button.click());
   await expect(timeline.locator('[data-event-id="$reply-60"]')).toHaveCount(1);
   await expect.poll(async () => Math.abs(await anchor.evaluate((row) => row.getBoundingClientRect().top - row.closest('.thread-panel__timeline')!.getBoundingClientRect().top) - top)).toBeLessThan(3);
-  await expect(composer).toHaveValue('Keep my draft while paging an old thread');
+  await expect(composer).toHaveText('Keep my draft while paging an old thread');
   const reads = await page.evaluate(() => window.threadFixture.reads.length);
   await composer.focus();
   await timeline.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new Event('scroll')); });
@@ -68,7 +68,7 @@ test('an old root outside the room window supports paging and keeps historical a
   expect(await page.evaluate(() => window.threadFixture.reads.length)).toBe(reads);
   await page.goForward();
   await expect(thread).toBeVisible();
-  await expect(composer).toHaveValue('Keep my draft while paging an old thread');
+  await expect(composer).toHaveText('Keep my draft while paging an old thread');
   await thread.getByRole('button', { name: 'Jump to latest replies', exact: true }).click();
   await expect(timeline.locator('[data-event-id="$reply-161"]')).toBeVisible();
   await composer.focus();
@@ -111,7 +111,7 @@ test('standard reply links own thread history and browser Back restores the room
   await page.goForward();
   await expect(thread).toBeVisible();
   await expect(reply).toHaveCount(1);
-  await expect(threadComposer).toHaveValue('Thread draft behind a reply link');
+  await expect(threadComposer).toHaveText('Thread draft behind a reply link');
   expect(page.url()).not.toContain('reply-5');
   expect(page.url()).not.toContain('old-thread-root');
   await page.screenshot({ path: info.outputPath('thread-link-restored.png') });
@@ -141,7 +141,7 @@ test('different reply links in one thread retain separate Back and Forward readi
   await expect(first).toHaveCount(1);
   await expect(second).toHaveCount(0);
   await expect.poll(async () => Math.abs(await first.evaluate((row) => row.getBoundingClientRect().top - row.closest('.thread-panel__timeline')!.getBoundingClientRect().top) - offset)).toBeLessThan(3);
-  await expect(composer).toHaveValue('One draft shared by two reply destinations');
+  await expect(composer).toHaveText('One draft shared by two reply destinations');
   await page.goForward();
   await expect(second).toHaveCount(1);
   await expect.poll(async () => Math.abs(await second.evaluate((row) => row.getBoundingClientRect().top - row.closest('.thread-panel__timeline')!.getBoundingClientRect().top) - secondOffset)).toBeLessThan(3);
@@ -173,7 +173,7 @@ test('reopening the same reply link revisits its target after paging and scrolli
   await openThreadLink(page, '$reply-5');
   await expect(target).toBeFocused();
   await expect.poll(async () => Math.abs(await target.evaluate((row) => row.getBoundingClientRect().top - row.closest('.thread-panel__timeline')!.getBoundingClientRect().top) - offset)).toBeLessThan(3);
-  await expect(composer).toHaveValue('Draft survives reopening the same reply link');
+  await expect(composer).toHaveText('Draft survives reopening the same reply link');
   expect(await page.evaluate(() => window.threadFixture.contexts.filter((request) => request.eventId === '$reply-5').length)).toBe(2);
   expect(await page.evaluate(() => window.threadFixture.reads.length)).toBe(0);
 });
@@ -193,7 +193,7 @@ test('newer thread paging keeps a stable anchor and unique bounded replies', asy
   await newer.evaluate((button: HTMLButtonElement) => button.click());
   await expect(timeline.locator('[data-event-id="$reply-130"]')).toHaveCount(1);
   await expect.poll(async () => Math.abs(await anchor.evaluate((row) => row.getBoundingClientRect().top - row.closest('.thread-panel__timeline')!.getBoundingClientRect().top) - offset)).toBeLessThan(3);
-  await expect(composer).toHaveValue('Draft while paging toward newer replies');
+  await expect(composer).toHaveText('Draft while paging toward newer replies');
   const ids = await timeline.locator('[data-event-id]').evaluateAll((rows) => rows.map((row) => row.getAttribute('data-event-id')));
   expect(new Set(ids).size).toBe(ids.length);
   expect(ids.length).toBeLessThanOrEqual(100);
@@ -223,7 +223,7 @@ test('sending from historical replies returns the thread to latest and preserves
   await composer.fill('A new reply from historical thread context');
   await thread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
   await expect(thread.locator('[data-event-id="$sent-reply"]')).toBeInViewport();
-  await expect(composer).toHaveValue('');
+  await expect(composer).toHaveText('');
   await expect(thread.getByRole('button', { name: 'Jump to latest replies', exact: true })).toBeHidden();
   await thread.getByRole('button', { name: 'Close thread', exact: true }).click();
   await expect(mainTimeline).toBeVisible();
@@ -239,10 +239,10 @@ test('thread paging failures retain the draft and the chosen reading point for r
   await page.evaluate(() => window.dispatchEvent(new Event('thread-fixture-fail-next')));
   await thread.getByRole('button', { name: 'Load older thread replies', exact: true }).click();
   await expect(thread.getByRole('status').filter({ hasText: /could not|unable|failed/i })).toBeVisible();
-  await expect(composer).toHaveValue('A draft survives thread history failure');
+  await expect(composer).toHaveText('A draft survives thread history failure');
   await thread.getByRole('button', { name: /Retry loading thread replies|Try loading again|Retry/i }).click();
   await expect(thread.locator('[data-event-id="$reply-60"]')).toHaveCount(1);
-  await expect(composer).toHaveValue('A draft survives thread history failure');
+  await expect(composer).toHaveText('A draft survives thread history failure');
 });
 
 test('removed roots and unavailable linked replies remain truthful and navigable', async ({ page }, info) => {
@@ -270,7 +270,7 @@ test('thread history controls and composer remain reachable across themes and sh
   }
   for (const size of [{ width: 412, height: 360 }, { width: 568, height: 320 }]) {
     await page.setViewportSize(size);
-    for (const label of ['Close thread', 'More thread tools', 'Send thread reply']) {
+    for (const label of ['Close thread', 'More message tools', 'Send thread reply']) {
       await expect(thread.getByRole('button', { name: label, exact: true })).toBeInViewport({ ratio: 1 });
     }
     await expect(thread.getByRole('textbox', { name: 'Message thread', exact: true })).toBeInViewport({ ratio: 1 });

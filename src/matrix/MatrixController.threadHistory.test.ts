@@ -17,6 +17,7 @@ function fixture() {
   const room = {
     roomId, getMyMembership: vi.fn().mockReturnValue('join'), getType: () => undefined,
     hasEncryptionStateEvent: vi.fn().mockReturnValue(true), getEventForTxnId: () => undefined,
+    currentState: { maySendEvent: () => true },
     setThreadUnreadNotificationCount: vi.fn(), hasPendingEvent: vi.fn().mockReturnValue(false), findEventById: (id: string) => loaded.get(id), getThread: vi.fn().mockReturnValue(undefined),
   };
   const client = {
@@ -24,6 +25,7 @@ function fixture() {
     getEventMapper: () => (raw: MatrixEvent['event']) => new MatrixEvent(raw),
     decryptEventIfNeeded: vi.fn<(event: MatrixEvent) => Promise<void>>().mockResolvedValue(undefined),
     getCrypto: vi.fn().mockReturnValue({}), makeTxnId: () => 'synthetic-transaction',
+    getSafeUserId: () => '@synthetic:test',
     sendEvent: vi.fn().mockResolvedValue({ event_id: '$accepted' }), sendMessage: vi.fn(), http: { authedRequest: vi.fn().mockResolvedValue({}) },
   };
   const controller = new MatrixController(structuredClone(defaultRuntimeConfig));

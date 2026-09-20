@@ -140,3 +140,14 @@ Execution results are retained in allowlisted run summaries and the [Polish 10 P
 Counts may truthfully use a plus sign when a complete total is unknown. The retry/cancellation journey accepts that label while still verifying one accepted reply, original transaction/ciphertext reuse, and removal of the cancelled local echo. The new history journey checks nondecreasing counts separately from its exact live-tail and receipt assertions. Event IDs, roots, drafts, encrypted wire events and receipt payloads remain in browser/process memory; only the fixed check name and aggregate result enter the report.
 
 September 14 local validation passed 22/22 checks with complete cleanup against Synapse 1.160.0 and Dex 2.45.1; report privacy tests passed 6/6. Hosted repeat/probe evidence is recorded on the delivery PR. This establishes the disposable browser boundary, not federation, other homeserver implementations or physical native devices. See [thread history](thread-history.md).
+
+## Polish 12–14 extension
+
+The combined messaging batch adds four checks, bringing a normal complete run to 26 checks:
+
+- `encrypted-staged-attachments-and-retry`: stage two files with standard captions, reject the second event, retry its original encrypted transaction/ciphertext, and verify one accepted copy of each file and decrypted bytes on another device.
+- `encrypted-thread-attachment`: send a reviewed file inside a new thread and verify its caption, filename, thread relation and peer decryption.
+- `durable-room-thread-drafts-and-reattach`: reload structured room/thread drafts, preserve context and captions, require explicit reattachment, then send the reattached thread file to the peer.
+- `formatted-api-peer-interoperability`: receive safe formatted roots and notice replies from a direct standard Matrix API peer and read an Aimtrix formatted thread reply back through the API and another browser device. This deliberately unencrypted disposable room permits protocol-payload assertions; encrypted attachment checks remain separate. It does not claim a third-party client's UI was exercised.
+
+The original encrypted-thread retry journey now starts in the shared thread composer. Reports still contain only fixed check identifiers and aggregate results. Draft contents, filenames, captions, attachment bytes, room/event IDs and wire payloads remain in disposable browser/process memory. Successful runs and the diagnostic failure probe are recorded on the delivery PR; no production homeserver or infrastructure is used.

@@ -51,3 +51,15 @@ test('thread history evidence discards roots, replies, ciphertext, receipts and 
   assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
+
+test('messaging evidence discards filenames, captions, drafts, bytes and formatted event payloads', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const name of ['encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment', 'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability']) {
+    const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
+      filename: privateValue, caption: privateValue, bytes: [privateValue], draft: privateValue,
+      formatted_body: privateValue, event: { content: privateValue }, transactionId: privateValue }],
+    });
+    assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
