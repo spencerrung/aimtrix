@@ -23,7 +23,7 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 - [x] SSO/CAS discovery, redirect, token callback restoration, and callback URL cleanup.
 - [x] Per-account IndexedDB Rust/WASM crypto store with an in-memory sync store; crypto initializes before sync.
 - [x] Active/restored session rejection, token-free reauthentication, crypto retention, guarded account cleanup and explicit forget. See [session recovery](docs/session-recovery.md) for soft/hard logout and evidence boundaries.
-- [x] Startup and signed-in offline/reconnecting/consent/storage states, non-destructive SDK reconnect, and volatile same-account text draft retention through reauthentication. Durable drafts remain #153.
+- [x] Startup and signed-in offline/reconnecting/consent/storage states, non-destructive SDK reconnect, and same-account structured draft retention through reauthentication. See [private local drafts](docs/draft-storage.md).
 - [x] E2EE enforcement in encrypted rooms with no plaintext fallback.
 
 ### Messaging, media, rooms, and spaces
@@ -32,11 +32,14 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 - [x] One contextual thread/details/search surface, bounded desktop widths, shared mobile/browser Back, retained reading anchors and drafts, accessible More/member menus, and reduced-height composition. See [conversation shell](docs/conversation-shell.md); physical keyboard/native Back acceptance remains separate.
 - [x] Keyboard/touch quick switching, standard Matrix favorites, scoped unread/favorite filters, account-wide next-unread navigation, Matrix links, and Back/Forward reading positions. See [quick navigation](docs/quick-navigation.md) for privacy, failure states, and evidence boundaries.
 - [x] Movable history bounded to 250 visible messages, older/newer navigation, old-event/reply context, stable reading anchors, truthful loading/retry/end states, and return to live. See [history navigation](docs/history-navigation.md); full search retains its separate gate; thread history and read reconciliation are documented below.
-- [x] Independent old thread roots and bounded reply history, standard reply links, separate room/thread Back/Forward anchors, root fallbacks and focused live-tail read guards. See [thread history](docs/thread-history.md); durable composition and Home activity remain separate work.
+- [x] Independent old thread roots and bounded reply history, standard reply links, separate room/thread Back/Forward anchors, root fallbacks and focused live-tail read guards. See [thread history](docs/thread-history.md) and [shared room/thread messaging](docs/room-thread-messaging.md); Home activity remains separate work.
 - [x] Text, notices, emotes, replies, edits, redaction, reactions, pins, typing state, and read-receipt sending.
 - [x] Private main/thread read tracking, focused live-tail advancement, consistent mute/highlight badges, explicit read/unread reminders and saved message context. See [read state](docs/unread-state.md) for cross-device semantics and older-server/physical-device boundaries.
 - [x] Image/video/audio/file rendering and authenticated encrypted-attachment decryption.
 - [x] Encrypted/unencrypted uploads with limits, progress, cancellation, and retry.
+- [x] Shared safe formatted-message rendering/actions across rooms, replies and thread roots, with permission checks, accessible failure feedback and truthful unsupported-message fallbacks. See [room/thread messaging](docs/room-thread-messaging.md).
+- [x] Shared room/thread editor tools and account/homeserver-scoped structured local drafts, draft indicators/list, full edit restoration and revision-safe send cleanup. Browser draft plaintext/privacy, quotas, conflicts and logout cleanup are explicit in the [draft contract](docs/draft-storage.md).
+- [x] Multiple reviewed attachments with captions, ordering, per-file encrypted progress/cancellation/retry and explicit reload reattachment; attachment bytes are never persisted with drafts. See [room/thread messaging](docs/room-thread-messaging.md) for protocol and validation boundaries.
 - [x] Join by alias/ID, public-directory search, invite accept/reject, leave, room creation, encrypted room creation, direct-chat creation, and space creation.
 - [x] Room name/topic/avatar, irreversible encryption enablement, push-rule mute, invite, member list, and leave controls.
 - [x] Power-gated kick/ban/unban and member/moderator role controls.

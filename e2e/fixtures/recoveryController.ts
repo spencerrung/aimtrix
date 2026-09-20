@@ -16,6 +16,7 @@ export class MatrixController {
   loadProfilePersonalization = () => undefined;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = () => this.snapshot;
+  getDraftScope = () => 'workspace' in this.snapshot || 'recovery' in this.snapshot ? { userId: recovery.userId, homeserver: recovery.homeserver } : undefined;
   publish(snapshot: object) { this.snapshot = snapshot; this.listeners.forEach((listener) => listener()); }
   reauthenticate = async () => { this.publish({ status: 'signed-out', recovery }); };
   forgetSession = async () => { this.publish({ status: 'signed-out' }); };

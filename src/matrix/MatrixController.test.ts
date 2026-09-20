@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { Blob as NodeBlob } from 'node:buffer';
 import type { MatrixClient, Room } from 'matrix-js-sdk';
 import { MatrixEvent } from 'matrix-js-sdk/lib/models/event.js';
 import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
@@ -83,6 +84,8 @@ describe('MatrixController protocol integration', () => {
     const transactions = new Map<string, MatrixEvent>();
     const room = {
       roomId: '!room:test',
+      getMyMembership: () => 'join',
+      currentState: { maySendEvent: () => true },
       hasEncryptionStateEvent: () => encrypted,
       getEventForTxnId: (txn: string) => transactions.get(txn),
       findEventById: (id: string) => events.get(id),
@@ -92,6 +95,7 @@ describe('MatrixController protocol integration', () => {
       getRoom: vi.fn().mockReturnValue(room),
       getSafeUserId: () => '@self:test',
       getCrypto: vi.fn().mockReturnValue({}),
+      decryptEventIfNeeded: vi.fn().mockResolvedValue(undefined),
       makeTxnId: vi.fn().mockReturnValue('delivery-transaction'),
       sendMessage: vi.fn().mockResolvedValue({ event_id: '$accepted:test' }),
       sendEvent: vi.fn().mockResolvedValue({ event_id: '$accepted:test' }),
@@ -101,6 +105,7 @@ describe('MatrixController protocol integration', () => {
     };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, client as unknown as Partial<MatrixClient>, deliverySdk);
+    events.set('$original:test', new MatrixEvent({ event_id: '$original:test', room_id: room.roomId, sender: '@self:test', type: 'm.room.message', content: { msgtype: 'm.text', body: 'Synthetic original' } }));
     const publish = vi.spyOn(controller as unknown as ControllerInternals, 'scheduleWorkspacePublish').mockImplementation(() => undefined);
     const add = (status: EventStatus | null = EventStatus.NOT_SENT, sender = '@self:test', txn = 'delivery-transaction') => {
       const event = new MatrixEvent({ event_id: '~local:test', room_id: room.roomId, sender, type: encrypted ? 'm.room.encrypted' : 'm.room.message', content: encrypted
@@ -158,6 +163,8 @@ describe('MatrixController protocol integration', () => {
   it('preserves the original thread context of a replacement event', async () => {
     const fixture = deliveryFixture();
     const original = fixture.add(null);
+    original.handleRemoteEcho({ ...original.event, event_id: '$accepted-original:test' });
+    fixture.events.set(original.getId()!, original);
     original.setThreadId('$thread-root:test');
     await fixture.controller.editMessage('!room:test', original.getId()!, 'Synthetic correction');
     expect(fixture.client.sendEvent).toHaveBeenCalledWith('!room:test', '$thread-root:test', 'm.room.message', expect.objectContaining({
@@ -386,13 +393,8 @@ describe('MatrixController protocol integration', () => {
   });
 
   it('keeps mention metadata inside standard Matrix replacement content', async () => {
-    const sendEvent = vi.fn().mockResolvedValue({});
-    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
-    inject(controller, { sendEvent, getRoom: () => ({ roomId: '!room:test', hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined, findEventById: () => undefined }) } as unknown as Partial<MatrixClient>, {
-      EventType: { RoomMessage: 'm.room.message' },
-      MsgType: { Text: 'm.text' },
-      RelationType: { Replace: 'm.replace' },
-    });
+    const { controller, client } = deliveryFixture();
+    const sendEvent = client.sendEvent;
 
     await controller.editMessage('!room:test', '$original:test', '@Mara corrected', [{
       userId: '@mara:test',
@@ -408,7 +410,7 @@ describe('MatrixController protocol integration', () => {
         'm.mentions': { user_ids: ['@mara:test'] },
         formatted_body: expect.stringContaining('https://matrix.to/#/%40mara%3Atest'),
       }),
-    }), 'synthetic-transaction');
+    }), 'delivery-transaction');
   });
   it('ignores crypto-store decryptions that are not in a loaded room timeline', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
@@ -820,7 +822,9 @@ describe('MatrixController protocol integration', () => {
       return { content_uri: 'mxc://test/file' };
     });
     const client = {
-      getRoom: vi.fn().mockReturnValue({ hasEncryptionStateEvent: () => false }),
+      getRoom: vi.fn().mockReturnValue({ roomId: '!room:test', getMyMembership: () => 'join', currentState: { maySendEvent: () => true }, hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined }),
+      getCrypto: () => undefined,
+      getSafeUserId: () => '@self:test',
       uploadContent,
       sendMessage,
     };
@@ -847,6 +851,7 @@ describe('MatrixController protocol integration', () => {
         url: 'mxc://test/file',
         'dev.alucard.aimtrix.code.v1': { language: 'typescript' },
       }),
+      'synthetic-transaction',
     );
   });
 
@@ -876,15 +881,18 @@ describe('MatrixController protocol integration', () => {
   });
 
   it('encrypts sticker media in encrypted rooms and keeps plaintext uploads out of them', async () => {
+    vi.stubGlobal('Blob', NodeBlob);
     const sendEvent = vi.fn().mockResolvedValue({});
     const uploadContent = vi.fn().mockResolvedValue({ content_uri: 'mxc://test/encrypted-sticker' });
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
       new Response('<svg/>', { status: 200, headers: { 'content-type': 'image/svg+xml' } }),
     ));
-    const room = { hasEncryptionStateEvent: () => true };
+    const room = { roomId: '!room:test', getMyMembership: () => 'join', currentState: { maySendEvent: () => true }, hasEncryptionStateEvent: () => true, getEventForTxnId: () => undefined };
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, {
       getRoom: vi.fn().mockReturnValue(room),
+      getCrypto: () => ({}),
+      getSafeUserId: () => '@self:test',
       uploadContent,
       sendEvent,
     } as unknown as Partial<MatrixClient>, {
@@ -921,8 +929,11 @@ describe('MatrixController protocol integration', () => {
       blob: () => Promise.resolve(new Blob(['png'], { type: 'image/png' })),
     }));
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const room = { roomId: '!room:test', getMyMembership: () => 'join', currentState: { maySendEvent: () => true }, hasEncryptionStateEvent: () => false, getEventForTxnId: () => undefined };
     inject(controller, {
-      getRoom: () => ({ hasEncryptionStateEvent: () => false }),
+      getRoom: () => room,
+      getCrypto: () => undefined,
+      getSafeUserId: () => '@self:test',
       uploadContent,
       sendEvent,
     } as unknown as Partial<MatrixClient>, {
@@ -944,7 +955,7 @@ describe('MatrixController protocol integration', () => {
       body: 'Bufo wave',
       url: 'mxc://test/bufo',
       info: expect.objectContaining({ mimetype: 'image/png' }),
-    }));
+    }), 'synthetic-transaction');
     vi.unstubAllGlobals();
   });
 

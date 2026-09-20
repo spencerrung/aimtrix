@@ -17,6 +17,7 @@ function fixture() {
   const room = {
     roomId, getMyMembership: vi.fn().mockReturnValue('join'), getType: () => undefined,
     hasEncryptionStateEvent: vi.fn().mockReturnValue(true), getEventForTxnId: () => undefined,
+    currentState: { maySendEvent: () => true },
     setThreadUnreadNotificationCount: vi.fn(), hasPendingEvent: vi.fn().mockReturnValue(false), findEventById: (id: string) => loaded.get(id), getThread: vi.fn().mockReturnValue(undefined),
   };
   const client = {
@@ -24,6 +25,7 @@ function fixture() {
     getEventMapper: () => (raw: MatrixEvent['event']) => new MatrixEvent(raw),
     decryptEventIfNeeded: vi.fn<(event: MatrixEvent) => Promise<void>>().mockResolvedValue(undefined),
     getCrypto: vi.fn().mockReturnValue({}), makeTxnId: () => 'synthetic-transaction',
+    getSafeUserId: () => '@synthetic:test',
     sendEvent: vi.fn().mockResolvedValue({ event_id: '$accepted' }), sendMessage: vi.fn(), http: { authedRequest: vi.fn().mockResolvedValue({}) },
   };
   const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
@@ -56,6 +58,34 @@ describe('MatrixController thread history integration', () => {
     test.client.fetchRoomEvent.mockRejectedValueOnce(new Error('Private detail'));
     await expect(test.controller.resolveNavigationTarget({ roomId, eventId: '$missing' })).resolves.toEqual({ roomId, eventId: '$missing' });
     test.client.fetchRoomEvent.mockResolvedValueOnce({ ...test.root.event, room_id: '!other:test' });
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId });
+  });
+
+  it('routes accepted thread roots and replies before their remote echo arrives', async () => {
+    const test = fixture();
+    test.root.setStatus(EventStatus.SENT);
+    test.loaded.set(rootId, test.root);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId, threadRootId: rootId });
+    const reply = new MatrixEvent({ event_id: '$accepted-reply', room_id: roomId, type: 'm.room.message', content: {
+      msgtype: 'm.text', body: 'Synthetic accepted reply', 'm.relates_to': { rel_type: 'm.thread', event_id: rootId },
+    } });
+    reply.setStatus(EventStatus.SENT);
+    test.loaded.set('$accepted-reply', reply);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: '$accepted-reply' })).resolves.toEqual({ roomId, eventId: '$accepted-reply', threadRootId: rootId });
+    reply.setStatus(EventStatus.NOT_SENT);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: '$accepted-reply' })).resolves.toEqual({ roomId, eventId: '$accepted-reply' });
+  });
+
+  it('recognizes a freshly opened root retained by independent thread history', async () => {
+    const test = fixture();
+    const root = new MatrixEvent({ event_id: rootId, room_id: roomId, type: 'm.room.message', content: { msgtype: 'm.text', body: 'Synthetic fresh root' } });
+    root.setStatus(EventStatus.SENT);
+    test.loaded.set(rootId, root);
+    test.internal.snapshotCache.threadHistory.set(rootId, { roomId, rootId, rootStatus: 'found', root, events: [],
+      state: { mode: 'live', revision: 1, canLoadOlder: false, canLoadNewer: false } });
+    expect(root.isThreadRoot).toBe(false);
+    await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId, threadRootId: rootId });
+    test.internal.snapshotCache.threadHistory.get(rootId)!.roomId = '!other:test';
     await expect(test.controller.resolveNavigationTarget({ roomId, eventId: rootId })).resolves.toEqual({ roomId, eventId: rootId });
   });
 

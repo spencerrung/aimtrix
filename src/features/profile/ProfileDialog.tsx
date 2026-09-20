@@ -1,3 +1,4 @@
+import './profileDialog.css';
 import { Dialog, DialogClose } from '../../components/Dialog';
 import {
   Check,

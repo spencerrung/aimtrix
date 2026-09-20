@@ -192,7 +192,7 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     assertSinglePanel();
     expect(screen.queryByRole('complementary', { name: 'Buddy and room drawer' })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Synthetic thread draft' } });
+    setComposerText(screen.getByLabelText('Message thread'), 'Synthetic thread draft');
     fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
     assertSinglePanel();
     expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument();
@@ -202,7 +202,7 @@ describe('Workspace demo', () => {
     assertSinglePanel();
     expect(screen.getByRole('tab', { name: 'About' })).toHaveAttribute('aria-selected', 'true');
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
-    expect(screen.getByLabelText('Message thread')).toHaveValue('Synthetic thread draft');
+    expect(screen.getByLabelText('Message thread')).toHaveTextContent('Synthetic thread draft');
     expect(composer).toHaveTextContent('Synthetic room draft');
     fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
     expect(screen.getByPlaceholderText('Search loaded messages')).toHaveValue('Encryption');
@@ -642,8 +642,8 @@ describe('Workspace demo', () => {
     composer.focus();
     fireEvent.keyDown(composer, { key: 'ArrowUp' });
 
-    expect(composer).toHaveValue('Keep the Aqua, lose the bad UX.');
-    fireEvent.change(composer, { target: { value: 'Keep Aqua; lose the bad UX.' } });
+    expect(composer).toHaveTextContent('Keep the Aqua, lose the bad UX.');
+    setComposerText(composer, 'Keep Aqua; lose the bad UX.');
     fireEvent.keyDown(composer, { key: 'Enter' });
 
     await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2-thread-2', 'Keep Aqua; lose the bad UX.', []));
@@ -658,11 +658,11 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     const composer = within(thread).getByLabelText('Message thread');
-    fireEvent.change(composer, { target: { value: '@' } });
+    setComposerText(composer, '@');
     fireEvent.keyDown(composer, { key: 'ArrowDown' });
     expect(within(thread).getByRole('option', { name: /Mara/ })).toHaveAttribute('aria-selected', 'true');
     fireEvent.keyDown(composer, { key: 'Enter' });
-    expect(composer).toHaveValue('@Mara ');
+    expect(composer.textContent).toBe('@Mara ');
     fireEvent.keyDown(composer, { key: 'Enter' });
 
     await waitFor(() => expect(onSendReply).toHaveBeenCalledWith(
@@ -727,14 +727,18 @@ describe('Workspace demo', () => {
     fireEvent.paste(composer, { clipboardData: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }], files: [], getData: () => 'text' } });
     expect(onUploadAttachment).not.toHaveBeenCalled();
     fireEvent.paste(composer, { clipboardData: imageClipboard });
-    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', expect.objectContaining({ name: 'pasted-image.png' }), expect.any(Function), undefined));
+    fireEvent.click(await screen.findByRole('button', { name: 'Send attachments' }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', expect.objectContaining({ name: 'pasted-image.png' }), expect.any(Function), undefined, undefined, expect.any(Object)));
     fireEvent.paste(composer, { clipboardData: { items: [], files: [image], getData: () => '' } });
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send attachments' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send attachments' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const threadComposer = screen.getByLabelText('Message thread');
     fireEvent.paste(threadComposer, { clipboardData: imageClipboard });
-    await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), expect.any(String)));
+    fireEvent.click(await screen.findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), 'm2', undefined, expect.any(Object)));
   });
 
   it.each(['reply', 'edit'] as const)('clears another room’s %s context on browser Back while retaining this room’s draft', async (action) => {
@@ -756,15 +760,16 @@ describe('Workspace demo', () => {
     expect(onEditMessage).not.toHaveBeenCalled();
   });
 
-  it('reveals the main reply composer when Reply is selected from a tablet thread', async () => {
+  it('keeps reply context in the visible tablet thread composer', async () => {
     vi.stubGlobal('innerWidth', 1024);
-    const { container } = renderWorkspace();
+    renderWorkspace();
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
-    fireEvent.click(within(thread).getAllByRole('button', { name: 'Reply' })[0]);
-    await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
-    expect(container.querySelector('.composer-context')).toHaveTextContent('Replying to');
-    expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument();
+    const reply = within(thread).getAllByRole('button', { name: 'Reply' }).at(-1)!;
+    fireEvent.click(reply);
+    expect(thread).toBeVisible();
+    expect(thread.querySelector('.composer-context')).toHaveTextContent('Replying to');
+    expect(within(thread).getByLabelText('Message thread')).toBeVisible();
   });
 
   it('keeps thread attachment feedback visible and retries the original room and root after navigation', async () => {
@@ -776,12 +781,15 @@ describe('Workspace demo', () => {
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     const file = new File(['synthetic upload'], 'synthetic-thread.txt', { type: 'text/plain' });
     fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [file] } });
-    expect(onUploadAttachment).toHaveBeenCalledWith('welcome', file, expect.any(Function), 'm2');
+    expect(onUploadAttachment).not.toHaveBeenCalled();
+    fireEvent.click(await within(thread).findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', file, expect.any(Function), 'm2', undefined, expect.objectContaining({ id: expect.any(String), signal: expect.any(AbortSignal) })));
     expect(container.querySelector('.conversation')).not.toBeVisible();
-    expect(within(thread).getByText('Encrypting synthetic-thread.txt…')).toBeVisible();
-    expect(within(thread).getByRole('button', { name: 'Cancel upload' })).toBeVisible();
-    act(() => onUploadAttachment.mock.calls[0][2](5, 10));
-    expect(within(thread).getByText('Uploading synthetic-thread.txt — 50%')).toBeVisible();
+    act(() => onUploadAttachment.mock.calls[0][5].onPhase('encrypting'));
+    expect(within(thread).getByText('Encrypting…')).toBeVisible();
+    expect(within(thread).getByRole('button', { name: 'Cancel synthetic-thread.txt' })).toBeVisible();
+    act(() => { onUploadAttachment.mock.calls[0][5].onPhase('uploading'); onUploadAttachment.mock.calls[0][2](5, 10); });
+    expect(within(thread).getByText('Uploading 50%')).toBeVisible();
     await act(async () => pending.reject(new Error('Synthetic upload failure')));
     expect(within(thread).getByRole('button', { name: 'Retry synthetic-thread.txt' })).toBeVisible();
     fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
@@ -790,7 +798,7 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     fireEvent.click(within(screen.getByRole('complementary', { name: 'Thread' })).getByRole('button', { name: 'Retry synthetic-thread.txt' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
-    expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', file, expect.any(Function), 'm2');
+    expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', file, expect.any(Function), 'm2', undefined, expect.objectContaining({ id: onUploadAttachment.mock.calls[0][5].id }));
   });
 
   it('offers working upload cancellation from the visible tablet thread', async () => {
@@ -802,7 +810,9 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [new File(['synthetic'], 'synthetic-cancel.txt')] } });
-    fireEvent.click(within(thread).getByRole('button', { name: 'Cancel upload' }));
+    fireEvent.click(await within(thread).findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledOnce());
+    fireEvent.click(within(thread).getByRole('button', { name: 'Cancel synthetic-cancel.txt' }));
     await waitFor(() => expect(onCancelUpload).toHaveBeenCalledOnce());
   });
 
@@ -1193,12 +1203,12 @@ describe('Workspace demo', () => {
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendReply });
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const composer = screen.getByLabelText('Message thread');
-    fireEvent.change(composer, { target: { value: 'Submitted thread text' } });
+    setComposerText(composer, 'Submitted thread text');
     fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
-    expect(composer).toHaveValue('Submitted thread text');
-    fireEvent.change(composer, { target: { value: 'A newer thread draft' } });
+    expect(composer).toHaveTextContent('Submitted thread text');
+    setComposerText(composer, 'A newer thread draft');
     await act(async () => { if (outcome === 'accepted') pending.resolve(); else pending.reject(new MessageSendError(outcome === 'retained')); });
-    expect(composer).toHaveValue('A newer thread draft');
+    expect(composer).toHaveTextContent('A newer thread draft');
     expect(onSendReply).toHaveBeenCalledTimes(1);
   });
 
@@ -1209,12 +1219,12 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     const composer = within(thread).getByLabelText('Message thread');
-    fireEvent.change(composer, { target: { value: 'Submitted thread text' } });
+    setComposerText(composer, 'Submitted thread text');
     fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
-    fireEvent.click(within(thread).getByRole('button', { name: 'Edit message' }));
+    fireEvent.click(within(thread).getAllByRole('button', { name: 'Edit message' }).at(-1)!);
     await act(async () => pending.resolve());
     expect(within(thread).getByText('Editing message')).toBeInTheDocument();
-    expect(composer).toHaveValue('Keep the Aqua, lose the bad UX.');
+    expect(composer).toHaveTextContent('Keep the Aqua, lose the bad UX.');
     fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onEditMessage).toHaveBeenCalledWith('welcome', 'm2-thread-2', 'Keep the Aqua, lose the bad UX.', []));
   });
@@ -1223,7 +1233,7 @@ describe('Workspace demo', () => {
     const pending = pendingSend();
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendReply: () => pending.promise });
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
-    fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Submitted thread text' } });
+    setComposerText(screen.getByLabelText('Message thread'), 'Submitted thread text');
     fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
     fireEvent.click(screen.getByRole('button', { name: 'Close thread' }));
     await waitFor(() => expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument());
@@ -1235,7 +1245,7 @@ describe('Workspace demo', () => {
     await act(async () => pending.resolve());
     await act(async () => { await new Promise<void>((resolve) => requestAnimationFrame(() => resolve())); });
     expect(focusedControl).toHaveFocus();
-    expect(screen.getByLabelText('Message thread')).toHaveValue('');
+    expect(screen.getByLabelText('Message thread')).toBeEmptyDOMElement();
   });
 
   it('marks newer messages read only after a detached viewport returns to the bottom', async () => {
@@ -1536,7 +1546,7 @@ describe('Workspace demo', () => {
     renderWorkspace({ onProfilePersonalizationChange });
 
     fireEvent.click(screen.getByText('Building a better buddy list ✨').closest('button') as HTMLButtonElement);
-    expect(screen.getByRole('dialog', { name: 'My profile page' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'My profile page' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Decorate my page' }));
     fireEvent.change(screen.getByPlaceholderText('A note for your own Aimtrix page — only you can read it…'), {
       target: { value: 'Welcome to my little corner of the web.' },
@@ -1553,7 +1563,7 @@ describe('Workspace demo', () => {
     }));
   });
 
-  it('labels decoration privacy and lets users frame a custom banner', () => {
+  it('labels decoration privacy and lets users frame a custom banner', async () => {
     renderWorkspace({
       profilePersonalization: {
         ...defaultProfilePersonalization,
@@ -1562,7 +1572,7 @@ describe('Workspace demo', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Spencer/ }));
-    const dialog = screen.getByRole('dialog', { name: 'My profile page' });
+    const dialog = await screen.findByRole('dialog', { name: 'My profile page' });
     expect(within(dialog).getByText(/Only visible to you/)).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'Decorate my page' }));
     const horizontal = within(dialog).getByLabelText('Banner horizontal focus');
@@ -1571,14 +1581,14 @@ describe('Workspace demo', () => {
     expect(within(dialog).getByText('Preview matches the profile card crop.')).toBeInTheDocument();
   });
 
-  it('opens the profile decorator from settings as well as the self card', () => {
+  it('opens the profile decorator from settings as well as the self card', async () => {
     renderWorkspace();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open settings' }));
     fireEvent.click(screen.getByRole('button', { name: 'Decorate profile page' }));
 
     expect(screen.queryByRole('dialog', { name: 'Personalize Aimtrix' })).not.toBeInTheDocument();
-    expect(screen.getByRole('dialog', { name: 'My profile page' })).toBeInTheDocument();
+    expect(await screen.findByRole('dialog', { name: 'My profile page' })).toBeInTheDocument();
   });
 
   it('opens real settings and applies appearance changes', () => {
@@ -1650,7 +1660,7 @@ describe('Workspace demo', () => {
       setComposerText(composer, 'hello :smi');
 
       const listbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
-      expect(within(listbox).getByText(':smile:')).toBeInTheDocument();
+      expect(within(listbox).getByText('smile')).toBeInTheDocument();
 
       fireEvent.keyDown(composer, { key: 'Enter' });
       expect(composer).toHaveTextContent('hello 😄');
@@ -1658,7 +1668,7 @@ describe('Workspace demo', () => {
       setComposerText(composer, 'hello :bufo');
       const bufoListbox = await screen.findByRole('listbox', { name: 'Emoji and sticker suggestions' });
       expect(within(bufoListbox).getByText('bufo wave')).toBeInTheDocument();
-      expect(within(bufoListbox).getByText('inline emoji')).toBeInTheDocument();
+      expect(within(bufoListbox).getByRole('option')).toHaveTextContent('bufo wave');
       fireEvent.keyDown(composer, { key: 'Tab' });
       expect(composer).toHaveTextContent('hello');
       expect(composer.querySelector('[data-inline-composer-token="true"]')).toBeInTheDocument();
@@ -1744,7 +1754,7 @@ describe('Workspace history navigation', () => {
     const workspace = historyWorkspace('live');
     const { rerenderWorkspace } = renderWorkspace({ workspace });
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
-    fireEvent.change(screen.getByLabelText('Message thread'), { target: { value: 'Synthetic retained thread draft' } });
+    setComposerText(screen.getByLabelText('Message thread'), 'Synthetic retained thread draft');
     const removed = structuredClone(workspace);
     removed.threadsByRoot.m2.root = workspace.messagesByRoom.welcome.find((message) => message.id === 'm2');
     removed.threadsByRoot.m2.rootStatus = 'found';
@@ -1753,13 +1763,13 @@ describe('Workspace history navigation', () => {
     rerenderWorkspace(removed);
     const fallback = screen.getByRole('complementary', { name: 'Thread' });
     expect(fallback.querySelector('.thread-panel__root')).toHaveTextContent(removed.threadsByRoot.m2.root!.body);
-    expect(within(fallback).getByLabelText('Message thread')).toHaveValue('Synthetic retained thread draft');
+    expect(within(fallback).getByLabelText('Message thread')).toHaveTextContent('Synthetic retained thread draft');
     expect(within(fallback).getByRole('button', { name: 'Close thread' })).toBeVisible();
     fireEvent.click(within(fallback).getByRole('button', { name: 'Close thread' }));
     await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
     rerenderWorkspace(workspace);
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
-    expect(screen.getByLabelText('Message thread')).toHaveValue('Synthetic retained thread draft');
+    expect(screen.getByLabelText('Message thread')).toHaveTextContent('Synthetic retained thread draft');
   });
 
   it('pages in both directions explicitly, preserves a retry after failure, and reports the oldest boundary', async () => {

@@ -10,6 +10,8 @@ Step 03 deliverable: [disposable live Matrix tests](live-matrix-tests.md), with 
 
 Step 04 deliverable: [accessible interaction foundations](accessible-interactions.md), covering shared modal/picker behavior, keyboard focus, action feedback and cancellable verification. Live and assistive-technology evidence boundaries remain explicit.
 
+Steps 12–14 delivery: [shared room/thread messaging](room-thread-messaging.md) and [private local drafts](draft-storage.md), covering safe rich content/actions, durable composition and staged encrypted files in one coherent batch. Validation evidence is recorded with the delivery MR.
+
 Step 10 deliverable: [quick navigation](quick-navigation.md), covering keyboard/touch switching, standard favorites, unread filters, Matrix links, and Back/Forward reading positions. Native device and broader directory/search boundaries remain explicit.
 
 ## Product goal
@@ -127,19 +129,19 @@ Step 09 implementation and protocol semantics are documented in [read state and 
 
 September 14 working agreement: prefer one MR for related issues that share a user journey, implementation seams and validation. Issue numbers remain stable acceptance units; they do not require separate branches or MRs. Resolve dependencies inside a batch in implementation order, and preserve every included issue's scope.
 
-The next MR combines **#152, #153 and #154**: complete room/thread messaging through rich content and actions, durable drafts, shared composition, and staged encrypted attachments. All external prerequisites are complete. This covers composing, staging, sending, rendering and replying/editing in one integrated delivery.
+The first combined delivery, [MR #193](https://github.com/spencerrung/aimtrix/pull/193), covers **#152, #153 and #154**: room/thread rich content and actions, durable drafts, shared composition, and staged encrypted attachments. The next batch combines **#155 and #159** for attention and catch-up.
 
 | Delivery order | MR outcome | Issues | Reason for grouping |
 | --- | --- | --- | --- |
-| Next | Complete room/thread messaging | #152, #153, #154 | Shared content/actions, draft ownership, composer parity, attachment metadata, and send/retry behavior. |
-| Then | Attention and catch-up | #155, #159 | Home activity and notification controls share unread/mute/thread semantics and exact event routing. |
+| MR #193 | Complete room/thread messaging | #152, #153, #154 | Shared content/actions, draft ownership, composer parity, attachment metadata, and send/retry behavior. |
+| Next | Attention and catch-up | #155, #159 | Home activity and notification controls share unread/mute/thread semantics and exact event routing. |
 | Then | Collections and history retrieval | #156, #157 | Saves, pins/media/links and filtered search share results, coverage, pagination, access-loss handling and context return. |
 | Then | Private encrypted search | #158 | Integrates the preceding search surface, with a separately reviewable index, storage, backfill and deletion lifecycle. |
 | Then | First-use encryption confidence | #160, #161 | Onboarding, setup/restore and incoming verification share account health, crypto callbacks and guided recovery. |
 
-These are five planned MRs for ten issues. The next MR is the committed scope; later groupings are working boundaries to revisit after each delivery. Moving #159 alongside #155 satisfies its existing prerequisites and does not renumber the queue. Cross-browser/accessibility and profiling work under #162/#163 can still proceed independently; feature-specific checks do not close their broader acceptance gates.
+These are five combined deliveries for ten issues. Later groupings are working boundaries to revisit after each delivery. Moving #159 alongside #155 satisfies its existing prerequisites and does not renumber the queue. Cross-browser/accessibility and profiling work under #162/#163 can still proceed independently; feature-specific checks do not close their broader acceptance gates.
 
-Within the next MR, use reviewable commits for shared rendering/actions, the structured draft/storage contract, composer parity, attachment staging/queue behavior, and integrated evidence. Document draft privacy, quota/corruption, account cleanup and reload semantics before persisting content. Coordinate that storage contract with #158 without adding indexing to this MR. Attachment reload may require truthful reattachment; durable binary storage is not an implied requirement.
+The messaging delivery documents draft privacy, quota/corruption, account cleanup and reload semantics in [the draft contract](draft-storage.md). Coordinate that storage contract with #158 without treating draft persistence as a search index. Attachment reload requires explicit reattachment; durable binary storage is not an implied requirement.
 
 Run focused regressions as each substantial component lands, then the complete local and hosted gates on the integrated MR. Share the desktop/mobile visual and live Matrix journeys across the included issues, with explicit evidence for each acceptance criterion. Do not create separate MRs solely for preparatory refactors or each issue's tests. Re-run affected gates after fixes; batching does not waive validation.
 

@@ -17,6 +17,26 @@ export async function openRoom(page, name) {
   await page.getByRole('main', { name }).waitFor();
 }
 const encode = encodeURIComponent;
+async function openMatrixEvent(page, roomId, eventId) {
+  await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+  await page.getByRole('dialog', { name: 'Quick switcher', exact: true }).getByRole('button', { name: 'Open Matrix link', exact: true }).click();
+  const dialog = page.getByRole('dialog', { name: 'Open Matrix link', exact: true });
+  await dialog.getByLabel('Matrix link', { exact: true }).fill(`https://matrix.to/#/${encode(roomId)}/${encode(eventId)}`);
+  await dialog.getByRole('button', { name: 'Open link', exact: true }).click();
+  await dialog.waitFor({ state: 'hidden' });
+}
+async function verifyAttachment(scope, file, caption) {
+  const link = scope.locator('.message-file').filter({ hasText: file.name });
+  await link.waitFor({ timeout: 45000 });
+  invariant(await link.count() === 1, 'single-accepted-attachment');
+  invariant(await link.getAttribute('download') === file.name, 'attachment-filename-caption');
+  const row = scope.locator('.timeline-message').filter({ hasText: caption });
+  await row.getByText(caption, { exact: true }).waitFor();
+  await until(async () => (await link.getAttribute('href'))?.startsWith('blob:'), 'attachment-decrypted-source');
+  const received = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
+  invariant(Buffer.from(received).equals(file.buffer), 'attachment-decryption');
+}
+
 export async function runJourneys({ browser, stack, check, forceFailure, metrics }) {
   const api = matrixApi(stack);
   const accounts = {};
@@ -36,7 +56,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
   };
   const alice = await newPage(), bob = await newPage(), aliceSecond = await newPage();
   let aliceSession, bobSession, secondSession, roomId;
-  let navigationHistory, threadHistory;
+  let navigationHistory, threadHistory, attachmentThreadRootId, formattedPeer;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
   const uploads = [];
@@ -171,10 +191,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const reject = (route) => route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic thread rejection' }) });
       await alice.route(pattern, reject);
       const start = wire.length;
-      await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
-      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
-      await root.locator('.thread-summary').click();
       const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+      await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(marker);
+      await thread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
       const failed = thread.locator('.timeline-message').filter({ hasText: marker });
       await failed.getByRole('button', { name: 'Retry message', exact: true }).waitFor();
       await alice.unroute(pattern, reject);
@@ -183,12 +202,30 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const bobRoot = bob.locator('.timeline-message').filter({ hasText: 'Retry round trip' }).first();
       await bobRoot.locator('.thread-summary').click();
       const received = bob.getByRole('complementary', { name: 'Thread', exact: true }).locator('.timeline-message').filter({ hasText: marker });
-      await received.waitFor({ timeout: 45000 });
-      invariant(await received.count() === 1 && await failed.count() === 1, 'single-thread-reply');
-      threadHistory = { rootId: await root.getAttribute('data-event-id'), replyId: await failed.getAttribute('data-event-id') };
+      // HTTP acceptance and peer delivery can precede the sender's remote-echo
+      // reconciliation. Require stable convergence, not a single intermediate
+      // render; persistent duplicates or a missing accepted row still fail.
+      let settledReplyId, settledSamples = 0;
+      await until(async () => {
+        const [peerIds, senderIds] = await Promise.all([
+          received.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-event-id'))),
+          failed.evaluateAll((rows) => rows.map((row) => row.getAttribute('data-event-id'))),
+        ]);
+        const replyId = peerIds[0];
+        if (peerIds.length !== 1 || senderIds.length !== 1 || !replyId?.startsWith('$') || senderIds[0] !== replyId) {
+          settledSamples = 0; settledReplyId = undefined; return false;
+        }
+        settledSamples = settledReplyId === replyId ? settledSamples + 1 : 1;
+        settledReplyId = replyId;
+        return settledSamples >= 3;
+      }, 'single-thread-reply');
+      threadHistory = { rootId: await root.getAttribute('data-event-id'), replyId: settledReplyId };
       const attempts = wire.slice(start);
       invariant(attempts.length === 2 && attempts[0].path === attempts[1].path && JSON.stringify(attempts[0].content) === JSON.stringify(attempts[1].content), 'thread-retry-same-ciphertext-transaction');
       invariant(attempts[0].content['m.relates_to']?.rel_type === 'm.thread', 'standard-thread-relation');
+      const relations = await api(`/_matrix/client/v1/rooms/${encode(roomId)}/relations/${encode(threadHistory.rootId)}/m.thread?limit=100`, { token: aliceSession.accessToken });
+      const acceptedCopies = relations.chunk.filter((event) => event.type === 'm.room.encrypted' && event.content?.ciphertext === attempts[0].content.ciphertext);
+      invariant(acceptedCopies.length === 1 && acceptedCopies[0].event_id === settledReplyId, 'single-thread-reply');
       const cancelled = 'Synthetic cancelled thread reply';
       await alice.route(pattern, reject);
       await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(cancelled);
@@ -606,7 +643,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await composer.fill(draft);
         await thread.getByRole('button', { name: 'Load older thread replies', exact: true }).click();
         await reply.waitFor({ timeout: 45000 });
-        invariant(await composer.inputValue() === draft && await timeline.locator('.timeline-message').count() <= 250, 'old-thread-bounded-paging-retains-draft');
+        invariant(await composer.innerText() === draft && await timeline.locator('.timeline-message').count() <= 250, 'old-thread-bounded-paging-retains-draft');
         await openLink(aliceSecond, replyId);
         await until(() => reply.evaluate((element) => element === element.ownerDocument.activeElement), 'old-thread-link-focus');
         invariant((await thread.locator('.thread-panel__root').textContent()).includes('Retry round trip'), 'old-thread-root-decrypted');
@@ -640,6 +677,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       metrics.attachmentInputCount = await alice.getByLabel('Choose attachment', { exact: true }).count();
       const bytes = Buffer.from(`Disposable attachment ${randomBytes(24).toString('hex')}`);
       await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles({ name: 'synthetic.bin', mimeType: 'application/octet-stream', buffer: bytes });
+      await alice.getByRole('button', { name: 'Send attachments', exact: true }).click();
       await until(() => uploads.length > 0, 'upload-response');
       const source = uploads.at(-1).content_uri;
       invariant(source?.startsWith('mxc://aimtrix.test/'), 'mxc-upload');
@@ -654,6 +692,229 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const received = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
       invariant(Buffer.from(received).equals(bytes), 'attachment-decryption');
       invariant(wire.every((event) => event.path.includes('/m.room.encrypted/')), 'encrypted-media-event');
+    });
+    await check('encrypted-staged-attachments-and-retry', async () => {
+      const files = ['staged-alpha.bin', 'staged-beta.bin'].map((name) => ({ name, mimeType: 'application/octet-stream', buffer: randomBytes(64) }));
+      const captions = ['Synthetic first attachment caption', 'Synthetic second attachment caption'];
+      const start = wire.length;
+      await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles(files);
+      for (let index = 0; index < files.length; index++) await alice.getByLabel(`Caption for ${files[index].name}`, { exact: true }).fill(captions[index]);
+      invariant(wire.length === start, 'attachment-staging-no-send');
+      const pattern = '**/rooms/*/send/m.room.encrypted/*';
+      let requests = 0;
+      const rejectSecond = (route) => ++requests === 2
+        ? route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic attachment rejection' }) })
+        : route.continue();
+      await alice.route(pattern, rejectSecond);
+      try {
+        await alice.getByRole('button', { name: 'Send attachments', exact: true }).click();
+        const retry = alice.getByRole('button', { name: `Retry ${files[1].name}`, exact: true });
+        await retry.waitFor();
+        await verifyAttachment(bob, files[0], captions[0]);
+        await alice.unroute(pattern, rejectSecond);
+        await retry.click();
+        await alice.getByRole('region', { name: 'Attachments', exact: true }).locator('li').filter({ hasText: files[1].name }).getByText('Sent', { exact: true }).waitFor();
+        for (let index = 0; index < files.length; index++) {
+          await verifyAttachment(bob, files[index], captions[index]);
+          invariant(await alice.locator('.timeline-message').filter({ has: alice.locator('.message-file').filter({ hasText: files[index].name }) }).count() === 1, 'single-accepted-attachment');
+        }
+        const attempts = wire.slice(start);
+        invariant(attempts.length === 3 && attempts.every((event) => event.path.includes('/m.room.encrypted/')), 'attachment-retry-transaction');
+        invariant(attempts[0].path !== attempts[1].path && attempts[1].path === attempts[2].path && JSON.stringify(attempts[1].content) === JSON.stringify(attempts[2].content), 'attachment-retry-transaction');
+      } finally { await alice.unroute(pattern, rejectSecond); }
+    });
+    await check('encrypted-thread-attachment', async () => {
+      const marker = `Synthetic attachment thread ${randomBytes(10).toString('hex')}`;
+      await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      const root = alice.locator('.timeline-message').filter({ hasText: marker });
+      await root.getByText('Accepted by server', { exact: true }).waitFor();
+      attachmentThreadRootId = await root.getAttribute('data-event-id');
+      await root.getByRole('button', { name: 'Reply in thread', exact: true }).click();
+      const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+      const file = { name: 'thread-attachment.bin', mimeType: 'application/octet-stream', buffer: randomBytes(96) };
+      const caption = 'Synthetic threaded attachment caption';
+      const start = wire.length;
+      await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(file);
+      await thread.getByLabel(`Caption for ${file.name}`, { exact: true }).fill(caption);
+      await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
+      await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Sent', { exact: true }).waitFor();
+      await bob.locator('.timeline-message').filter({ hasText: marker }).locator('.thread-summary').click();
+      const peerThread = bob.getByRole('complementary', { name: 'Thread', exact: true });
+      await verifyAttachment(peerThread, file, caption);
+      const attempts = wire.slice(start);
+      invariant(attempts.length === 1 && attempts[0].path.includes('/m.room.encrypted/') && attempts[0].content['m.relates_to']?.rel_type === 'm.thread' && attempts[0].content['m.relates_to']?.event_id === attachmentThreadRootId, 'standard-thread-attachment');
+      await thread.getByRole('button', { name: 'Close thread', exact: true }).click();
+      await peerThread.getByRole('button', { name: 'Close thread', exact: true }).click();
+    });
+    await check('durable-room-thread-drafts-and-reattach', async () => {
+      let stage = 'draft-stage-room';
+      try {
+        const roomDraft = 'Synthetic durable room draft';
+        const threadDraft = 'Synthetic durable thread draft';
+        const roomFile = { name: 'room-draft.bin', mimeType: 'application/octet-stream', buffer: randomBytes(40) };
+        const threadFile = { name: 'thread-draft.bin', mimeType: 'application/octet-stream', buffer: randomBytes(48) };
+        const roomCaption = 'Synthetic durable room caption', threadCaption = 'Synthetic durable thread caption';
+        const start = wire.length;
+        await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(roomDraft);
+        await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles(roomFile);
+        await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).fill(roomCaption);
+        stage = 'draft-stage-thread';
+        await openMatrixEvent(alice, roomId, attachmentThreadRootId);
+        stage = 'draft-thread-composer';
+        const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+        await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(threadDraft);
+        stage = 'draft-thread-file';
+        await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(threadFile);
+        stage = 'draft-thread-caption';
+        await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).fill(threadCaption);
+        stage = 'draft-thread-persistence';
+        // Observe only synthetic draft strings in memory; do not persist a storage snapshot.
+        await until(() => alice.evaluate(({ roomDraft, threadDraft, roomCaption, threadCaption }) => {
+          const drafts = Object.keys(localStorage).filter((key) => key.startsWith('aimtrix.private-drafts.v1:')).map((key) => localStorage.getItem(key)).join('');
+          return [roomDraft, threadDraft, roomCaption, threadCaption].every((value) => drafts.includes(value));
+        }, { roomDraft, threadDraft, roomCaption, threadCaption }), 'drafts-persisted');
+        stage = 'draft-reload-room';
+        await alice.reload();
+        await openRoom(alice, roomName);
+        const roomComposer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
+        await until(async () => await roomComposer.innerText() === roomDraft, 'room-draft-restored');
+        await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).waitFor();
+        invariant(await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).inputValue() === roomCaption && await alice.getByRole('button', { name: 'Send attachments', exact: true }).isDisabled(), 'draft-reattach-required');
+        stage = 'draft-reload-thread';
+        await openMatrixEvent(alice, roomId, attachmentThreadRootId);
+        await until(async () => await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft, 'thread-draft-restored');
+        stage = 'draft-reattach-thread';
+        await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).waitFor();
+        invariant(await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).inputValue() === threadCaption && await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).isDisabled(), 'draft-reattach-required');
+        invariant(wire.length === start, 'draft-reload-no-send');
+        stage = 'draft-send-reattached';
+        await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).setInputFiles(threadFile);
+        await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
+        await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Sent', { exact: true }).waitFor();
+        stage = 'draft-receive-reattached';
+        await openMatrixEvent(bob, roomId, attachmentThreadRootId);
+        await verifyAttachment(bob.getByRole('complementary', { name: 'Thread', exact: true }), threadFile, threadCaption);
+        invariant(await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft && await roomComposer.innerText() === roomDraft, 'independent-draft-contexts');
+        stage = 'draft-cleanup-contexts';
+        await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill('');
+        await thread.getByRole('button', { name: 'Close thread', exact: true }).click();
+        await bob.getByRole('button', { name: 'Close thread', exact: true }).click();
+        await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).setInputFiles(roomFile);
+        await alice.getByRole('region', { name: 'Attachments', exact: true }).getByText('Ready to send', { exact: true }).waitFor();
+        await alice.getByRole('button', { name: `Remove ${roomFile.name}`, exact: true }).click();
+        await roomComposer.fill('');
+      } catch { throw new Error(stage); }
+    });
+    await check('formatted-api-peer-interoperability', async () => {
+      // This is a standard Matrix API peer, not a third-party client UI claim.
+      const name = 'Disposable formatted API peer';
+      const created = await api('/_matrix/client/v3/createRoom', { token: aliceSession.accessToken, method: 'POST', body: { name, preset: 'private_chat', invite: [accounts.bob.user_id] } });
+      const formattedRoomId = created.room_id;
+      await api(`/_matrix/client/v3/rooms/${encode(formattedRoomId)}/join`, { token: bobSession.accessToken, method: 'POST', body: {} });
+      const send = (content) => api(`/_matrix/client/v3/rooms/${encode(formattedRoomId)}/send/m.room.message/${randomBytes(12).toString('hex')}`, { token: bobSession.accessToken, method: 'PUT', body: content });
+      const root = await send({ msgtype: 'm.text', body: 'Synthetic formatted root fallback', format: 'org.matrix.custom.html', formatted_body: '<mx-reply><blockquote>Discard synthetic quoted fallback</blockquote></mx-reply><p>Synthetic <strong>API peer root</strong> with <em>emphasis</em>.</p><blockquote>Preserved quotation</blockquote><ul><li>List item</li></ul><pre><code class="language-javascript">const safe = true;</code></pre><p><a href="https://example.invalid/">Safe link</a> <span data-mx-spoiler="synthetic reason">Hidden synthetic detail</span></p>' });
+      const reply = await send({ msgtype: 'm.notice', body: 'Synthetic formatted thread fallback', format: 'org.matrix.custom.html', formatted_body: '<p>Synthetic <strong>API peer thread</strong> and <code>inline code</code>.</p>', 'm.relates_to': { rel_type: 'm.thread', event_id: root.event_id, is_falling_back: true, 'm.in_reply_to': { event_id: root.event_id } } });
+      for (const page of [alice, bob]) await openRoom(page, name);
+      const rootRow = alice.locator(`[data-event-id=${JSON.stringify(root.event_id)}]`);
+      await rootRow.locator('strong').filter({ hasText: /^API peer root$/ }).waitFor();
+      await rootRow.locator('blockquote').filter({ hasText: /^Preserved quotation$/ }).waitFor();
+      await rootRow.locator('li').filter({ hasText: /^List item$/ }).waitFor();
+      invariant(!(await rootRow.textContent()).includes('Discard synthetic quoted fallback'), 'formatted-api-peer-subset');
+      await rootRow.getByRole('button', { name: 'Reveal spoiler: synthetic reason', exact: true }).click();
+      await rootRow.getByText('Hidden synthetic detail', { exact: true }).waitFor();
+      await rootRow.getByRole('link', { name: 'Safe link', exact: true }).waitFor();
+      await rootRow.locator('.thread-summary').click();
+      const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+      await thread.locator('.thread-panel__root strong').filter({ hasText: /^API peer root$/ }).waitFor();
+      await thread.locator(`[data-event-id=${JSON.stringify(reply.event_id)}] strong`).filter({ hasText: /^API peer thread$/ }).waitFor();
+      const start = wire.length;
+      const outbound = '**Synthetic outbound formatting**';
+      await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(outbound);
+      await thread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
+      const accepted = thread.locator('.timeline-message').filter({ hasText: 'Synthetic outbound formatting' });
+      await accepted.getByText('Accepted by server', { exact: true }).waitFor();
+      const eventId = await accepted.getAttribute('data-event-id');
+      const stored = await api(`/_matrix/client/v3/rooms/${encode(formattedRoomId)}/event/${encode(eventId)}`, { token: bobSession.accessToken });
+      invariant(stored.type === 'm.room.message' && stored.content.format === 'org.matrix.custom.html' && stored.content.formatted_body.includes('<strong>Synthetic outbound formatting</strong>') && stored.content['m.relates_to']?.event_id === root.event_id && wire.length === start + 1, 'formatted-outbound-roundtrip');
+      await openMatrixEvent(bob, formattedRoomId, root.event_id);
+      await bob.getByRole('complementary', { name: 'Thread', exact: true }).locator(`[data-event-id=${JSON.stringify(eventId)}] strong`).filter({ hasText: /^Synthetic outbound formatting$/ }).waitFor();
+      for (const page of [alice, bob]) await page.getByRole('button', { name: 'Close thread', exact: true }).click();
+      await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).fill('**Synthetic outbound room formatting** with _emphasis_ and `inline code`.');
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      const roomOutbound = alice.locator('.timeline-message').filter({ hasText: 'Synthetic outbound room formatting' });
+      await roomOutbound.getByText('Accepted by server', { exact: true }).waitFor();
+      formattedPeer = { roomId: formattedRoomId, rootId: root.event_id, replyId: reply.event_id, outboundId: await roomOutbound.getAttribute('data-event-id') };
+      for (const page of [alice, bob]) await openRoom(page, roomName);
+    });
+    if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {
+      let stage = 'element-login-ui';
+      try {
+        // An actual separately distributed Element UI reads the server's events.
+        // Only this disposable browser context holds its login/session data.
+        const peer = await newPage();
+        await peer.goto(`${stack.origins.element}/#/login`);
+        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.bob.user_id);
+        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        await until(async () => !(new URL(peer.url()).hash.startsWith('#/login')), 'element-login');
+        stage = 'element-room-timeline';
+        await peer.goto(`${stack.origins.element}/#/room/${encode(formattedPeer.roomId)}`);
+        // Startup prompts can arrive after navigation; wait for the actual tile
+        // while dismissing only the optional verification deferral control.
+        const skip = peer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
+        const outbound = peer.locator('.mx_EventTile').filter({ hasText: 'Synthetic outbound room formatting' });
+        await until(async () => {
+          if (await skip.isVisible()) await skip.click();
+          return outbound.locator('strong').filter({ hasText: /^Synthetic outbound room formatting$/ }).isVisible();
+        }, 'element-timeline', 60000);
+        stage = 'element-outbound-emphasis';
+        await outbound.locator('em').filter({ hasText: /^emphasis$/ }).waitFor();
+        await outbound.locator('code').filter({ hasText: /^inline code$/ }).waitFor();
+        stage = 'element-root-format';
+        const root = peer.locator('.mx_EventTile').filter({ has: peer.locator('strong').filter({ hasText: /^API peer root$/ }) });
+        await root.locator('strong').filter({ hasText: /^API peer root$/ }).waitFor();
+        stage = 'element-root-quote';
+        await root.locator('blockquote').filter({ hasText: /^Preserved quotation$/ }).waitFor();
+        stage = 'element-root-list';
+        await root.locator('li').filter({ hasText: /^List item$/ }).waitFor();
+        stage = 'element-return-room';
+        await openRoom(alice, 'Disposable formatted API peer');
+        // Returning to a room preserves its reading position. Opt into live here
+        // before asserting that a newly arriving peer message is visible.
+        const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.isVisible()) { await latest.click(); await latest.waitFor({ state: 'hidden' }); }
+        stage = 'element-return-composer';
+        const composer = peer.getByRole('textbox', { name: 'Send an unencrypted message…', exact: true });
+        await composer.fill('**Synthetic Element return** with _peer emphasis_ and `peer code`.');
+        const [response] = await Promise.all([
+          peer.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes(`/rooms/${encode(formattedPeer.roomId)}/send/m.room.message/`)),
+          composer.press('Enter'),
+        ]);
+        invariant(response.ok(), 'element-formatted-send');
+        const content = response.request().postDataJSON();
+        invariant(content.format === 'org.matrix.custom.html' && content.formatted_body?.includes('<strong>Synthetic Element return</strong>'), 'element-formatted-send');
+        stage = 'element-return-receive';
+        const eventId = (await response.json()).event_id;
+        const stored = await api(`/_matrix/client/v3/rooms/${encode(formattedPeer.roomId)}/event/${encode(eventId)}`, { token: aliceSession.accessToken });
+        invariant(stored.type === 'm.room.message' && stored.content.msgtype === 'm.text' && stored.content['m.relates_to']?.rel_type !== 'm.thread', 'element-return-main-event');
+        await alice.bringToFront();
+        const received = alice.locator(`[data-event-id=${JSON.stringify(eventId)}]`);
+        try { await received.waitFor(); } catch {
+          const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
+          if (await latest.isVisible()) stage = 'element-return-detached';
+          else if (await alice.locator('.timeline-message').filter({ hasText: 'Synthetic Element return' }).count()) stage = 'element-return-id-mismatch';
+          throw new Error(stage);
+        }
+        stage = 'element-return-strong';
+        await received.locator('strong').filter({ hasText: /^Synthetic Element return$/ }).waitFor();
+        stage = 'element-return-emphasis';
+        await received.locator('em').filter({ hasText: /^peer emphasis$/ }).waitFor();
+        stage = 'element-return-code';
+        await received.locator('code').filter({ hasText: /^peer code$/ }).waitFor();
+        await openRoom(alice, roomName);
+        await peer.close();
+      } catch { throw new Error(stage); }
     });
     await check('shared-backdrop-and-permissions', async () => {
       const start = Date.now();

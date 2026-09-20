@@ -197,12 +197,19 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
 
   if (!(await page.getByRole('button', { name: 'Insert code block' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Insert code block' }).click();
+  await page.getByRole('combobox', { name: 'Code language' }).selectOption('javascript');
   await composer.fill('line one\nline two\nline three\nline four\nline five\nline six');
   await page.getByRole('button', { name: 'Send code as file' }).click();
+  await expect(page.getByRole('region', { name: 'Attachments', exact: true })).toContainText('snippet.js');
+  await page.getByRole('button', { name: 'Send attachments', exact: true }).click();
   const codeFile = page.getByRole('region', { name: /snippet\.js code file/ });
   await expect(codeFile).toBeVisible();
   await codeFile.getByRole('button', { name: 'Expand' }).click();
   await expect(codeFile).toContainText('line six');
+  await expect(composer).toContainText('line six');
+  await composer.fill('');
+  if (!(await page.getByRole('button', { name: 'Exit code mode' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
+  await page.getByRole('button', { name: 'Exit code mode' }).click();
 
   if (!(await page.getByRole('button', { name: 'Add emoji' }).isVisible())) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Add emoji' }).click();
@@ -350,7 +357,7 @@ test('thread summaries open a resizable conversation with its own composer', asy
   await expect(thread.getByText('Thread browser test message')).toBeVisible();
   await expect(threadComposer).toBeFocused();
   await threadComposer.press('ArrowUp');
-  await expect(threadComposer).toHaveValue('Thread browser test message');
+  await expect(threadComposer).toHaveText('Thread browser test message');
   await threadComposer.fill('Edited thread browser test message');
   await threadComposer.press('Enter');
   await expect(thread.getByText('Edited thread browser test message')).toBeVisible();

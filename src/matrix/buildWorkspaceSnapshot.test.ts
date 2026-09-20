@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk';
 import { inMainTimelineForReceipt } from 'matrix-js-sdk';
+import { MatrixEvent as SDKEvent, RoomState } from 'matrix-js-sdk';
 import { HISTORY_MESSAGE_LIMIT } from './historyEvents';
 import {
   buildWorkspaceSnapshot,
@@ -290,6 +291,101 @@ describe('buildWorkspaceSnapshot stickers', () => {
       codeLanguage: 'typescript',
       mediaUrl: 'mxc://test/snippet',
     });
+  });
+});
+
+describe('safe rich content and action capabilities', () => {
+  it.each(['m.image', 'm.video', 'm.audio', 'm.file'])('keeps a %s caption separate from its safe download filename', (msgtype) => {
+    const [captioned, legacy] = buildWorkspaceSnapshot(fakeClient([
+      fakeEvent('m.room.message', { msgtype, body: 'A readable caption', filename: '../folder/report\u0000.txt', url: 'mxc://test/file' }, '$captioned'),
+      fakeEvent('m.room.message', { msgtype, body: 'legacy.txt', url: 'mxc://test/legacy' }, '$legacy'),
+    ]), 'online').messagesByRoom['!room:test'];
+    expect(captioned).toMatchObject({ body: 'A readable caption', fileName: 'report.txt' });
+    expect(legacy).toMatchObject({ body: 'legacy.txt', fileName: 'legacy.txt' });
+  });
+  it.each(['m.text', 'm.notice', 'm.emote'])('preserves formatted replacement and mention parity for %s', (msgtype) => {
+    const original = fakeEvent('m.room.message', { msgtype, body: 'Before' }, '$original');
+    const edit = fakeEvent('m.room.message', {
+      msgtype, body: '* After', 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' },
+      'm.new_content': { msgtype, body: 'Alice after', format: 'org.matrix.custom.html', formatted_body: '<p><a href="https://matrix.to/#/@alice:test">Alice</a> <strong>after</strong></p>', 'm.mentions': { user_ids: ['@alice:test'] } },
+    }, '$edit');
+    const [message] = buildWorkspaceSnapshot(fakeClient([original, edit]), 'online').messagesByRoom['!room:test'];
+    expect(message).toMatchObject({ body: 'Alice after', kind: msgtype.slice(2), edited: true, mentionUserIds: ['@alice:test'], mentions: [{ userId: '@alice:test', label: 'Alice' }] });
+    expect(message.formatted).toEqual([{ type: 'element', tag: 'p', children: [
+      { type: 'link', href: 'https://matrix.to/#/@alice:test', userId: '@alice:test', children: [{ type: 'text', text: 'Alice' }] },
+      { type: 'text', text: ' ' }, { type: 'element', tag: 'strong', children: [{ type: 'text', text: 'after' }] },
+    ] }]);
+  });
+
+  it('ignores malformed replacement content and keeps a truthful fallback for unknown message kinds', () => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Original' }, '$original');
+    const edit = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* Invalid', 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' }, 'm.new_content': { msgtype: 'm.text' } }, '$edit');
+    const unknown = fakeEvent('m.room.message', { msgtype: 'org.example.future', body: 'Plain fallback', format: 'org.matrix.custom.html', formatted_body: '<script>never render</script>' }, '$future');
+    const empty = fakeEvent('m.room.message', { msgtype: 'org.example.future' }, '$empty');
+    const rows = buildWorkspaceSnapshot(fakeClient([original, edit, unknown, empty]), 'online').messagesByRoom['!room:test'];
+    expect(rows.map((message) => message.body)).toEqual(['Original', 'Plain fallback', 'This message type is not supported yet.']);
+    expect(rows[1]).toMatchObject({ kind: 'unsupported', fallbackType: 'org.example.future', formatted: undefined });
+  });
+
+  it('uses actual SDK event permissions instead of a fixed moderator power threshold', () => {
+    const own = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Own' }, '$own', '@me:test');
+    const peer = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Peer' }, '$peer');
+    const client = fakeClient([own, peer]);
+    const room = client.getVisibleRooms()[0];
+    const state = new RoomState(room.roomId);
+    state.setStateEvents([new SDKEvent({ room_id: room.roomId, type: 'm.room.create', state_key: '', sender: '@creator:test', content: { room_version: '10', creator: '@creator:test' } })]);
+    state.setStateEvents([new SDKEvent({ room_id: room.roomId, type: 'm.room.member', state_key: '@me:test', sender: '@me:test', content: { membership: 'join' } })]);
+    Object.assign(room, { currentState: state });
+    let revision = 0;
+    const levels = (events: Record<string, number>, power = 10, redact = 100) => state.setStateEvents([new SDKEvent({
+      room_id: room.roomId, type: 'm.room.power_levels', state_key: '', sender: '@me:test', event_id: `$power-${++revision}`,
+      content: { users: { '@me:test': power }, events, events_default: 0, state_default: 99, redact },
+    })]);
+    levels({ 'm.room.pinned_events': 5, 'm.reaction': 20 });
+    let rows = buildWorkspaceSnapshot(client, 'online').messagesByRoom[room.roomId];
+    expect(rows[0].actions).toEqual({ reply: true, thread: true, edit: true, pin: true, react: false, redact: true });
+    expect(rows[1].actions?.redact).toBe(false);
+    levels({ 'm.room.pinned_events': 100, 'm.room.redaction': 100, 'm.room.encrypted': 100 }, 90);
+    rows = buildWorkspaceSnapshot(client, 'online').messagesByRoom[room.roomId];
+    expect(rows[0].actions).toEqual({ reply: false, thread: false, edit: false, pin: false, react: true, redact: false });
+    levels({ 'm.room.encrypted': 100 }, 90, 50);
+    rows = buildWorkspaceSnapshot(client, 'online').messagesByRoom[room.roomId];
+    expect(rows[0].actions?.react).toBe(true);
+    expect(rows[0].actions?.reply).toBe(false);
+    expect(rows[1].actions?.redact).toBe(true);
+    Object.assign(room, { getMyMembership: () => 'invite' });
+    rows = buildWorkspaceSnapshot(client, 'online').messagesByRoom[room.roomId];
+    expect(Object.values(rows[0].actions!)).toEqual([false, false, false, false, false, false]);
+  });
+
+  it('gates pending message actions and keeps room/thread/root formatted content equivalent', () => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Root', format: 'org.matrix.custom.html', formatted_body: '<b>Root</b>' }, '$root');
+    const reply = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Reply', format: 'org.matrix.custom.html', formatted_body: '<b>Reply</b>', 'm.relates_to': { rel_type: 'm.thread', event_id: '$root' } }, '$reply');
+    const pending = Object.assign(fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Pending' }, '$pending', '@me:test'), { status: 'sent' });
+    const client = fakeClient([root, pending], { threads: [{ id: '$root', length: 1, rootEvent: root, events: [root, reply] }] });
+    Object.assign(client.getVisibleRooms()[0].currentState, { maySendEvent: () => true, maySendStateEvent: () => true, maySendRedactionForEvent: () => true });
+    const snapshot = buildWorkspaceSnapshot(client, 'online');
+    expect(snapshot.threadsByRoot.$root.root?.formatted).toEqual(snapshot.messagesByRoom['!room:test'][0].formatted);
+    expect(snapshot.threadsByRoot.$root.messages[0].formatted).toEqual([{ type: 'element', tag: 'strong', children: [{ type: 'text', text: 'Reply' }] }]);
+    expect(Object.values(snapshot.messagesByRoom['!room:test'][1].actions!)).toEqual([false, false, false, false, false, false]);
+  });
+
+  it('keeps own reaction removal separate from adding denied reactions and refreshes capability changes', () => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Message' }, '$original');
+    const reaction = fakeEvent('m.reaction', { 'm.relates_to': { rel_type: 'm.annotation', event_id: '$original', key: '✨' } }, '$reaction', '@me:test');
+    const client = fakeClient([original, reaction]);
+    const state = client.getVisibleRooms()[0].currentState;
+    Object.assign(state, { maySendEvent: () => false, maySendRedactionForEvent: () => true });
+    const cache = createWorkspaceSnapshotCache();
+    const before = buildWorkspaceSnapshot(client, 'online', [], [], cache).messagesByRoom['!room:test'][0];
+    expect(before.actions?.react).toBe(false);
+    expect(before.reactions?.[0]).toMatchObject({ reacted: true, canRemove: true });
+    Object.assign(state, { maySendRedactionForEvent: () => false });
+    cache.roomVersions.set('!room:test', 1);
+    const after = buildWorkspaceSnapshot(client, 'online', [], [], cache).messagesByRoom['!room:test'][0];
+    expect(after).not.toBe(before);
+    expect(after.reactions?.[0].canRemove).toBe(false);
+    expect(before.reactions?.[0].canRemove).toBe(true);
   });
 });
 

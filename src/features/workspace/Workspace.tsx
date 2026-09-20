@@ -1,4 +1,5 @@
 import { MemberActions } from './MemberActions';
+import '../auth/sessionRecovery.css';
 import { useShellNavigation, type ShellReadingPosition } from './useShellNavigation';
 import { useThreadViewport } from './useThreadViewport';
 import { QuickSwitcher } from './QuickSwitcher';
@@ -6,7 +7,16 @@ import { NavigationDialogs } from './NavigationDialogs';
 import { getNavigationShortcut, type NavigationTarget } from './quickNavigation';
 import { parseMatrixLink, type MatrixNavigationTarget } from '../../matrix/matrixLinks';
 import type { VolatileDrafts } from './volatileDrafts';
-import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
+import type { MessageDeliveryActions } from './MessageDeliveryStatus';
+import { TimelineMessage } from './TimelineMessage';
+import { type LinkPreview } from './MessageContent';
+import { SharedComposer, type SharedComposerHandle } from './SharedComposer';
+import { AttachmentTray } from './AttachmentTray';
+import { DraftList } from './DraftList';
+import { useWorkspaceDrafts } from './useWorkspaceDrafts';
+import { StagedAttachments } from './stagedAttachments';
+import type { StructuredDraft, DraftContext, DraftMention, DraftInlineEmoji, DraftScope, StructuredDraftStore, DraftStateSummary } from './structuredDrafts';
+import type { AttachmentSendOptions } from '../../matrix/AttachmentSender';
 import { useDialogBusy } from '../../components/dialogContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Popover } from '../../components/Popover';
@@ -18,13 +28,11 @@ import {
   ArrowRight,
   Star,
   ArrowUp,
-  BellRing,
   Check,
   ChevronDown,
   ChevronRight,
   Copy,
   DoorOpen,
-  Film,
   Folder,
   FolderOpen,
   GripVertical,
@@ -34,21 +42,12 @@ import {
   MessageCircle,
   Paintbrush,
   PanelRight,
-  Paperclip,
-  Pencil,
   Phone,
-  Pin,
   Plus,
-  Reply,
   Search,
-  Send,
   Settings,
   ShieldCheck,
-  Smile,
-  SmilePlus,
   Sparkles,
-  Sticker,
-  Trash2,
   UserPlus,
   Users,
   Video,
@@ -57,6 +56,8 @@ import {
 } from 'lucide-react';
 import {
   Fragment,
+  createContext,
+  useContext,
   memo,
   useCallback,
   useEffect,
@@ -65,10 +66,7 @@ import {
   useRef,
   useState,
   type CSSProperties,
-  type ClipboardEvent,
   type DragEvent,
-  type FormEvent,
-  type KeyboardEvent,
   type PointerEvent,
   type ReactNode,
 } from 'react';
@@ -78,15 +76,14 @@ import { captureTimelineAnchor, historyRows, restoreTimelineAnchor, type Timelin
 import type { HistorySummary } from '../../matrix/viewModels';
 import { CallShelf } from '../calls/CallShelf';
 import {
-  emojiReactionKey,
   loadEmojiPacks,
   selectEmojiPacks,
   type EmojiPackDefinition,
   type EmojiPackEntry,
 } from '../media/emojiPacks';
-import { GifPicker, type GifChoice } from '../media/GifPicker';
-import { loadStickerPack, mergeStickerPacks } from '../media/stickerPacks';
-import { ProfileDialog } from '../profile/ProfileDialog';
+import { type GifChoice } from '../media/GifPicker';
+import { mergeStickerPacks } from '../media/stickerPacks';
+import { LazyProfileDialog as ProfileDialog } from '../profile/LazyProfileDialog';
 import { BrandMark } from '../../components/BrandMark';
 import { RoomDialog, type PublicRoomChoice } from '../rooms/RoomDialog';
 import type { MatrixSettingsActions } from '../settings/MatrixSettingsPanel';
@@ -106,14 +103,7 @@ import {
 import type { UserPreferences } from '../../settings/preferences';
 import type { PushRoute } from '../../pwa/pushRouting';
 import type { InstallAndUpdate } from '../../platform/platform';
-import { readNativeClipboardImage } from '../../platform/clipboardImage';
 import { deriveTimelineDaySeparators } from './timelineGrouping';
-import {
-  InlineComposer,
-  type InlineComposerHandle,
-  type InlineComposerSelection,
-  type InlineComposerTokenOccurrence,
-} from './InlineComposer';
 import {
   defaultProfilePersonalization,
   type ProfilePersonalization,
@@ -129,271 +119,15 @@ import {
   type WorkspaceSnapshot,
 } from '../../matrix/viewModels';
 
-type LinkPreview = {
-  title?: string;
-  description?: string;
-  imageUrl?: string;
-  siteName?: string;
-};
-
-type ComposerMention = {
-  userId: string;
-  label: string;
-};
-
-type ComposerInlineEmoji = InlineComposerTokenOccurrence & {
-  shortcode: string;
-  id: string;
-  name: string;
-  src: string;
-};
-
-function hasVisibleComposerMention(body: string, label: string): boolean {
-  const escaped = `@${label}`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return new RegExp(`(^|[^\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'u').test(body);
-}
-
-
-const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
-const MAX_VISIBLE_EMOJI_RESULTS = 240;
-
-function EmojiAsset({
-  entry,
-  alt = '',
-  title,
-  style,
-}: {
-  entry: Pick<EmojiPackEntry, 'emoji' | 'name' | 'previewSrc' | 'src'>;
-  alt?: string;
-  title?: string;
-  style?: CSSProperties;
-}) {
-  const [animated, setAnimated] = useState(false);
-  if (!entry.src) return entry.emoji;
-  const canAnimate = Boolean(entry.previewSrc && entry.previewSrc !== entry.src);
-  return <img
-    className="emoji-asset"
-    src={animated ? entry.src : entry.previewSrc ?? entry.src}
-    alt={alt}
-    title={title}
-    style={style}
-    loading="lazy"
-    onPointerEnter={canAnimate ? () => setAnimated(true) : undefined}
-    onPointerLeave={canAnimate ? () => setAnimated(false) : undefined}
-  />;
-}
-
-type TextEmojiEntry = EmojiPackEntry & { emoji: string };
-
-const URL_PATTERN = /https?:\/\/[^\s<>()]+/gi;
-const linkPreviewRequests = new Map<string, Promise<LinkPreview | undefined>>();
-
-function firstSharedUrl(body: string): string | undefined {
-  const match = body.match(URL_PATTERN)?.[0];
-  return match?.replace(/[),.!?]+$/, '');
-}
-
-function LinkifiedText({ body }: { body: string }) {
-  const parts = body.split(/(?:https?:\/\/|matrix:)[^\s<>()]+/gi);
-  const links = body.match(/(?:https?:\/\/|matrix:)[^\s<>()]+/gi) ?? [];
-  return <>{parts.flatMap((part, index) => {
-    const link = links[index];
-    const url = link && (/^(?:matrix:|https:\/\/matrix\.to\/)/i.test(link) ? link : link.replace(/[),.!?]+$/, ''));
-    return [part, url ? <a href={url} target="_blank" rel="noreferrer" key={`${url}:${index}`}>{url}</a> : null];
-  })}</>;
-}
-
-const codeKeywords: Record<string, string[]> = {
-  typescript: ['as', 'async', 'await', 'class', 'const', 'else', 'export', 'extends', 'false', 'for', 'from', 'function', 'if', 'import', 'interface', 'let', 'new', 'null', 'of', 'return', 'this', 'throw', 'true', 'type', 'undefined', 'while'],
-  javascript: ['async', 'await', 'class', 'const', 'else', 'export', 'extends', 'false', 'for', 'from', 'function', 'if', 'import', 'let', 'new', 'null', 'of', 'return', 'this', 'throw', 'true', 'undefined', 'while'],
-  python: ['and', 'as', 'class', 'def', 'elif', 'else', 'False', 'for', 'from', 'if', 'import', 'in', 'is', 'None', 'not', 'or', 'return', 'True', 'while', 'with'],
-  rust: ['as', 'async', 'const', 'else', 'enum', 'fn', 'for', 'if', 'impl', 'in', 'let', 'loop', 'match', 'mod', 'move', 'pub', 'return', 'self', 'struct', 'trait', 'true', 'type', 'use', 'while'],
-  bash: ['case', 'do', 'done', 'elif', 'else', 'esac', 'fi', 'for', 'function', 'if', 'in', 'then', 'while'],
-  json: [],
-  yaml: [],
-  text: [],
-};
-const codeTokenPattern = /(\/\/[^\n]*|#[^\n]*|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b\d+(?:\.\d+)?\b|[A-Za-z_$][\w$]*)/g;
-
-function HighlightedCode({ code, language }: { code: string; language: string }) {
-  const keywords = new Set(codeKeywords[language] ?? []);
-  const hashComments = ['bash', 'python', 'yaml'].includes(language);
-  let cursor = 0;
-  const parts: ReactNode[] = [];
-  for (const match of code.matchAll(codeTokenPattern)) {
-    const token = match[0];
-    const index = match.index ?? 0;
-    if (index > cursor) parts.push(code.slice(cursor, index));
-    const isComment = token.startsWith('//') || (hashComments && token.startsWith('#'));
-    const className = isComment
-      ? 'code-token--comment'
-      : token.startsWith('"') || token.startsWith("'")
-        ? 'code-token--string'
-        : /^\d/.test(token)
-          ? 'code-token--number'
-          : keywords.has(token)
-            ? 'code-token--keyword'
-            : undefined;
-    const color = className === 'code-token--keyword' ? '#a044a9' : className === 'code-token--string' ? '#b85c18' : undefined;
-    parts.push(className ? <span className={className} style={color ? { color } : undefined} key={`${index}:${token}`}>{token}</span> : token);
-    cursor = index + token.length;
-  }
-  if (cursor < code.length) parts.push(code.slice(cursor));
-  return <>{parts}</>;
-}
-
-async function copyText(text: string): Promise<boolean> {
-  try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
-  } catch {
-    // Fall through to the legacy clipboard path.
-  }
-  const input = document.createElement('textarea');
-  input.value = text;
-  input.setAttribute('readonly', '');
-  input.style.position = 'fixed';
-  input.style.opacity = '0';
-  document.body.appendChild(input);
-  input.select();
-  try {
-    return document.execCommand('copy');
-  } catch {
-    return false;
-  } finally {
-    input.remove();
-  }
-}
-
-function CodeSnippet({ code, language }: { code: string; language: string }) {
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  const copy = async () => {
-    setCopyState(await copyText(code) ? 'copied' : 'failed');
-    window.setTimeout(() => setCopyState('idle'), 1800);
-  };
-  return <section className="message-code" aria-label={`${language} code block`}>
-    <header><span>{language}</span><button type="button" onClick={() => void copy()}>{copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}</button></header>
-    <pre><code><HighlightedCode code={code} language={language} /></code></pre>
-  </section>;
-}
-
-function CodeFileMessage({ message, source }: { message: MessageSummary; source: string }) {
-  const [expanded, setExpanded] = useState(false);
-  const [contents, setContents] = useState<string>();
-  const [loadFailed, setLoadFailed] = useState(false);
-  const [copyState, setCopyState] = useState<'idle' | 'copied' | 'failed'>('idle');
-  useEffect(() => {
-    let active = true;
-    void fetch(source).then((response) => response.text()).then((text) => {
-      if (active) setContents(text);
-    }).catch(() => {
-      if (active) setLoadFailed(true);
-    });
-    return () => { active = false; };
-  }, [source]);
-  const language = message.codeLanguage ?? 'text';
-  const preview = contents?.split('\n').slice(0, 5).join('\n') ?? '';
-  const copy = async () => {
-    setCopyState(await copyText(contents ?? '') ? 'copied' : 'failed');
-    window.setTimeout(() => setCopyState('idle'), 1800);
-  };
-  return <section className="message-code code-file" aria-label={`${message.body} code file`}>
-    <header style={{ gap: 8 }}><span style={{ display: 'grid', minWidth: 0, gap: 2 }}><strong style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontSize: '0.72rem' }}>{message.body}</strong><small style={{ color: 'var(--text-faint)', font: '700 0.58rem ui-monospace, monospace', textTransform: 'uppercase' }}>{language}</small></span><span style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'flex-end', gap: 4 }}>
-      <button type="button" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>{expanded ? 'Collapse' : 'Expand'}</button>
-      <button type="button" onClick={() => void copy()} disabled={!contents}>{copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy'}</button>
-      <a href={source} download={message.body} style={{ padding: '2px 5px', color: 'var(--blue-deep)', border: '1px solid var(--border)', borderRadius: 4, background: 'var(--surface-raised)', font: 'inherit', textDecoration: 'none' }}>Download</a>
-    </span></header>
-    {loadFailed ? <p role="status">This code file could not be loaded.</p> : <pre><code><HighlightedCode code={expanded ? contents ?? '' : preview} language={language} /></code></pre>}
-    {!expanded && contents && contents.split('\n').length > 5 ? <button type="button" style={{ margin: '0 9px 8px' }} onClick={() => setExpanded(true)}>Show full file</button> : null}
-  </section>;
-}
-
-const CUSTOM_EMOJI_PATTERN = /(:[a-z0-9][a-z0-9_+-]*:)/gi;
-
-function MentionedText({ body, mentions, keyPrefix }: { body: string; mentions: NonNullable<MessageSummary['mentions']>; keyPrefix: string }) {
-  const segments: ReactNode[] = [];
-  let cursor = 0;
-  const candidates = mentions
-    .filter((mention) => mention.label && body.includes(mention.label))
-    .sort((left, right) => right.label.length - left.label.length);
-  while (cursor < body.length) {
-    let selected: (typeof candidates)[number] | undefined;
-    let selectedIndex = -1;
-    for (const candidate of candidates) {
-      let index = body.indexOf(candidate.label, cursor);
-      while (index >= 0) {
-        const previous = body.slice(0, index).match(/.$/u)?.[0];
-        const next = body.slice(index + candidate.label.length).match(/^./u)?.[0];
-        if (
-          (!previous || !/[\p{L}\p{N}_]/u.test(previous)) &&
-          (!next || !/[\p{L}\p{N}_]/u.test(next))
-        ) break;
-        index = body.indexOf(candidate.label, index + candidate.label.length);
-      }
-      if (index >= 0 && (selectedIndex < 0 || index < selectedIndex)) {
-        selected = candidate;
-        selectedIndex = index;
-      }
-    }
-    if (!selected || selectedIndex < 0) {
-      segments.push(<LinkifiedText body={body.slice(cursor)} key={`${keyPrefix}:tail`} />);
-      break;
-    }
-    if (selectedIndex > cursor) {
-      segments.push(<LinkifiedText body={body.slice(cursor, selectedIndex)} key={`${keyPrefix}:text:${cursor}`} />);
-    }
-    segments.push(
-      <a
-        className="message-mention"
-        href={`https://matrix.to/#/${encodeURIComponent(selected.userId)}`}
-        target="_blank"
-        rel="noreferrer"
-        key={`${keyPrefix}:mention:${selected.userId}:${selectedIndex}`}
-      >{selected.label}</a>,
-    );
-    cursor = selectedIndex + selected.label.length;
-  }
-  return <>{segments}</>;
-}
-
-function InlineMessageText({ body, emojiCatalog, mentions = [] }: { body: string; emojiCatalog: EmojiPackEntry[]; mentions?: MessageSummary['mentions'] }) {
-  const renderPlainText = (text: string, keyPrefix: string) => text.split(CUSTOM_EMOJI_PATTERN).map((token, tokenIndex) => {
-    const entry = token.startsWith(':') && token.endsWith(':')
-      ? emojiCatalog.find((candidate) => candidate.src && emojiReactionKey(candidate).toLowerCase() === token.toLowerCase())
-      : undefined;
-    if (entry?.src) {
-      return <EmojiAsset entry={entry} style={{ verticalAlign: 'middle' }} alt={entry.name} title={entry.name} key={`${keyPrefix}:emoji:${tokenIndex}`} />;
-    }
-    if (!mentions.length) return <LinkifiedText body={token} key={`${keyPrefix}:text:${tokenIndex}`} />;
-    return <MentionedText body={token} mentions={mentions} keyPrefix={`${keyPrefix}:${tokenIndex}`} key={`${keyPrefix}:mentions:${tokenIndex}`} />;
-  });
-  return <>{renderPlainText(body, 'inline')}</>;
-}
-
-function MessageText({ body, emojiCatalog, mentions }: { body: string; emojiCatalog: EmojiPackEntry[]; mentions?: MessageSummary['mentions'] }) {
-  const blocks = body.split(/```(?:(typescript|javascript|python|rust|bash|json|yaml)\n)?([\s\S]*?)```/gi);
-  return <>{blocks.map((block, index) => {
-    if (index % 3 === 1) return null;
-    if (index % 3 === 2) {
-      const language = blocks[index - 1] || 'text';
-      return <CodeSnippet code={block} language={language} key={`code:${index}`} />;
-    }
-    if (!block) return null;
-    const inline = block.split(/(`[^`]+`|\*\*[^*]+\*\*|_[^_\n]+_)/g);
-    return <p key={`text:${index}`}>{inline.map((part, partIndex) => {
-      if (part.startsWith('`') && part.endsWith('`')) return <code key={partIndex}>{part.slice(1, -1)}</code>;
-      if (part.startsWith('**') && part.endsWith('**')) return <strong key={partIndex}>{part.slice(2, -2)}</strong>;
-      if (part.startsWith('_') && part.endsWith('_')) return <em key={partIndex}>{part.slice(1, -1)}</em>;
-      return <InlineMessageText body={part} emojiCatalog={emojiCatalog} mentions={mentions} key={partIndex} />;
-    })}</p>;
-  })}</>;
-}
+type ComposerMention = DraftMention;
+type ComposerInlineEmoji = DraftInlineEmoji;
 
 interface WorkspaceProps extends MessageDeliveryActions {
   workspace: WorkspaceSnapshot;
   draftStore?: VolatileDrafts;
+  structuredDraftStore?: StructuredDraftStore;
+  draftScope?: DraftScope;
+  onDraftStateChange?: (state: DraftStateSummary) => void;
   connectionNotice?: ReactNode;
   config: RuntimeConfig;
   theme: ThemeName;
@@ -420,7 +154,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onReturnThreadToLive?: (roomId: string, rootId: string) => Promise<void>;
   onThreadHistoryDetached?: (roomId: string, rootId: string, detached: boolean) => void;
   onCloseThreadHistory?: () => void;
-  onSendThreadMessage?: (roomId: string, rootId: string, body: string, mentions?: ComposerMention[]) => Promise<void>;
+  onSendThreadMessage?: (roomId: string, rootId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onSpaceSelected?: (spaceId: string) => Promise<void>;
   onReorganizeSpaceChildren?: (update: {
     childId: string;
@@ -450,10 +184,11 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onSendSticker?: (
     roomId: string,
     sticker: { id: string; name: string; src: string },
+    threadRootId?: string,
   ) => Promise<void>;
-  onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string, codeLanguage?: string) => Promise<void>;
-  onCancelUpload?: () => void;
-  onSendGif?: (roomId: string, gif: GifChoice) => Promise<void>;
+  onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string, codeLanguage?: string, options?: AttachmentSendOptions) => Promise<void>;
+  onCancelUpload?: (id?: string) => void;
+  onSendGif?: (roomId: string, gif: GifChoice, threadRootId?: string) => Promise<void>;
   onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
   onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
   onResolveNavigationTarget?: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string; threadRootId?: string }>;
@@ -497,10 +232,6 @@ const themes: Array<{ id: ThemeName; label: string }> = [
   { id: 'graphite', label: 'Graphite' },
   { id: 'midnight', label: 'Midnight' },
 ];
-
-function formatTime(timestamp: number): string {
-  return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(timestamp);
-}
 
 function groupLabel(group: RoomSummary['group']): string {
   if (group === 'Favorites') return 'New & Favorite';
@@ -816,6 +547,8 @@ interface BuddyRoomRowProps {
   arrangement?: SpaceChildArrangement;
 }
 
+const DraftRoomsContext = createContext<ReadonlySet<string>>(new Set());
+
 const BuddyRoomRow = memo(function BuddyRoomRow({
   room,
   selected,
@@ -825,6 +558,7 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
   onRejectInvite,
   arrangement,
 }: BuddyRoomRowProps) {
+  const hasDraft = useContext(DraftRoomsContext).has(room.id);
   const style = { '--space-depth': depth } as CSSProperties;
   const reminderOnly = room.markedUnread && !(room.muted ? room.highlightCount : room.unreadCount);
   if (room.membership === 'invite') {
@@ -878,7 +612,7 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
       />
       <span className="buddy-row__copy">
         <strong>{room.name}</strong>
-        <span>{room.statusMessage || room.lastMessage}</span>
+        <span>{hasDraft ? <strong>Draft · </strong> : null}{room.statusMessage || room.lastMessage}</span>
       </span>
       <span className="buddy-row__meta">
         {room.encrypted ? <Lock size={10} aria-label="Encrypted" /> : null}
@@ -1128,6 +862,7 @@ function SpaceBranch({
 
 function BuddyPanel({
   workspace,
+  draftRoomIds,
   selectedRoomId,
   query,
   onQueryChange,
@@ -1144,6 +879,7 @@ function BuddyPanel({
   onFilterChange,
 }: {
   workspace: WorkspaceSnapshot;
+  draftRoomIds?: ReadonlySet<string>;
   selectedRoomId?: string;
   filter: 'all' | 'unread' | 'favorites';
   onFilterChange: (filter: 'all' | 'unread' | 'favorites') => void;
@@ -1335,7 +1071,7 @@ function BuddyPanel({
   };
 
   return (
-    <aside className="buddy-panel" aria-label="Buddy list">
+    <DraftRoomsContext.Provider value={draftRoomIds ?? new Set()}><aside className="buddy-panel" aria-label="Buddy list">
       <div className="buddy-panel__heading">
         <div>
           <p className="eyebrow">Buddy List</p>
@@ -1507,285 +1243,9 @@ function BuddyPanel({
           <Settings size={17} />
         </button>
       </div>
-    </aside>
+    </aside></DraftRoomsContext.Provider>
   );
 }
-
-function LinkPreviewCard({ message, onLoad }: { message: MessageSummary; onLoad?: (url: string) => Promise<LinkPreview | undefined> }) {
-  const url = firstSharedUrl(message.body);
-  const [preview, setPreview] = useState<LinkPreview>();
-  const [dismissed, setDismissed] = useState(() => localStorage.getItem(`aimtrix.dismissed-link-preview.v1:${message.id}`) === '1');
-
-  useEffect(() => {
-    if (!url || !onLoad || dismissed) return;
-    let active = true;
-    const request = linkPreviewRequests.get(url) ?? onLoad(url);
-    linkPreviewRequests.set(url, request);
-    void request.then((result) => { if (active) setPreview(result); });
-    return () => { active = false; };
-  }, [dismissed, onLoad, url]);
-
-  if (!url || dismissed || !preview || (!preview.title && !preview.description && !preview.imageUrl)) return null;
-  return (
-    <article className="link-preview">
-      {preview.imageUrl ? <img src={preview.imageUrl} alt="" loading="lazy" /> : null}
-      <div>
-        <small>{preview.siteName || new URL(url).hostname}</small>
-        {preview.title ? <a href={url} target="_blank" rel="noreferrer">{preview.title}</a> : null}
-        {preview.description ? <p>{preview.description}</p> : null}
-      </div>
-      <button type="button" aria-label="Hide link preview" title="Hide preview" onClick={() => {
-        localStorage.setItem(`aimtrix.dismissed-link-preview.v1:${message.id}`, '1');
-        setDismissed(true);
-      }}><X size={14} /></button>
-    </article>
-  );
-}
-
-const TimelineMessage = memo(function TimelineMessage({
-  message,
-  dataSaver,
-  autoplayMedia,
-  onLoadLinkPreview,
-  onReply,
-  onOpenThread,
-  onStartThread,
-  onEdit,
-  onDelete,
-  onRetryMessage,
-  onCancelMessage,
-  onPin,
-  canPin,
-  onReact,
-  emojiCatalog,
-  recentEmojis,
-  onLoadEmojiCatalog,
-  onEmojiUsed,
-  onMediaLoad,
-  onJumpToEvent,
-  highlighted = false,
-}: {
-  message: MessageSummary;
-  dataSaver: boolean;
-  autoplayMedia: boolean;
-  onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
-  onReply: (message: MessageSummary) => void;
-  onOpenThread: (message: MessageSummary) => void;
-  onStartThread: (message: MessageSummary) => void;
-  onEdit: (message: MessageSummary) => void;
-  onDelete: (message: MessageSummary) => void;
-  onRetryMessage?: MessageDeliveryActions['onRetryMessage'];
-  onCancelMessage?: MessageDeliveryActions['onCancelMessage'];
-  onPin: (message: MessageSummary) => void;
-  canPin: boolean;
-  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
-  emojiCatalog: EmojiPackEntry[];
-  recentEmojis: string[];
-  onLoadEmojiCatalog: () => void;
-  onEmojiUsed: (emoji: string) => void;
-  onMediaLoad: () => void;
-  onJumpToEvent?: (eventId: string) => void;
-  highlighted?: boolean;
-}) {
-  const gatedMedia =
-    Boolean(message.mediaUrl) &&
-    (dataSaver || (!autoplayMedia && message.mimeType === 'image/gif'));
-  const [mediaRevealed, setMediaRevealed] = useState(!gatedMedia);
-  const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
-  const [reactionQuery, setReactionQuery] = useState('');
-  const [reactionPickerPosition, setReactionPickerPosition] = useState({ top: 0, left: 0 });
-  const [mediaViewerOpen, setMediaViewerOpen] = useState(false);
-  const [actualSize, setActualSize] = useState(false);
-  const reactionActions = useRef<HTMLDivElement>(null);
-  const reactionTrigger = useRef<HTMLButtonElement>(null);
-  const reactionPicker = useRef<HTMLDivElement>(null);
-  const mediaTrigger = useRef<HTMLButtonElement>(null);
-  const mediaSrc = useMediaSource(
-    mediaRevealed ? message.mediaUrl : undefined,
-    message.kind === 'sticker' ? 320 : 720,
-    message.encryptedFile,
-    message.mimeType,
-  );
-  const viewerSource = useMediaSource(
-    mediaViewerOpen ? message.mediaUrl : undefined,
-    2400,
-    message.encryptedFile,
-    message.mimeType,
-  );
-  const canViewImage = message.mediaKind === 'image' && message.kind !== 'sticker';
-  const reactionEmojis = useMemo(() => {
-    const fallback = reactionFallback.map<EmojiPackEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
-    const portableCatalog = emojiCatalog.filter((entry): entry is TextEmojiEntry => Boolean(entry.emoji));
-    const source = portableCatalog.length
-      ? [...portableCatalog, ...fallback.filter((fallbackEntry) => !portableCatalog.some((entry) => entry.emoji === fallbackEntry.emoji))]
-      : fallback;
-    const query = reactionQuery.trim().toLowerCase().replace(/^:/, '').replace(/:$/, '').replace(/[_-]+/g, ' ');
-    const matches = source.filter((entry) =>
-      !query || `${entry.name} ${entry.emoji ?? ''} ${entry.aliases?.join(' ') ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ').includes(query),
-    );
-    if (query) return { quick: [], matches: matches.slice(0, MAX_VISIBLE_EMOJI_RESULTS) };
-    const quick = [...recentEmojis, ...reactionFallback]
-      .map((emoji) => source.find((entry) => emojiReactionKey(entry) === emoji))
-      .filter((entry): entry is EmojiPackEntry => Boolean(entry));
-    const uniqueQuick = quick.filter((entry, index) => quick.findIndex((candidate) => candidate.id === entry.id) === index);
-    const quickEmojis = new Set(uniqueQuick.map((entry) => emojiReactionKey(entry)));
-    return {
-      quick: uniqueQuick,
-      matches: (uniqueQuick.length ? matches.filter((entry) => !quickEmojis.has(emojiReactionKey(entry))) : matches)
-        .slice(0, MAX_VISIBLE_EMOJI_RESULTS),
-    };
-  }, [emojiCatalog, reactionQuery, recentEmojis]);
-  const closeMediaViewer = () => {
-    setMediaViewerOpen(false);
-    setActualSize(false);
-  };
-
-  useLayoutEffect(() => {
-    if (!reactionPickerOpen || !reactionPicker.current || !reactionTrigger.current) return;
-    const trigger = reactionTrigger.current.getBoundingClientRect();
-    const picker = reactionPicker.current.getBoundingClientRect();
-    const left = Math.min(
-      Math.max(12, trigger.right - picker.width),
-      Math.max(12, window.innerWidth - picker.width - 12),
-    );
-    const below = trigger.bottom + 8;
-    const top = below + picker.height <= window.innerHeight - 12
-      ? below
-      : Math.max(12, trigger.top - picker.height - 8);
-    setReactionPickerPosition({ top, left });
-  }, [reactionPickerOpen, reactionQuery, emojiCatalog]);
-
-  const chooseReaction = (reaction: string) => {
-    onEmojiUsed(reaction);
-    onReact(message, reaction);
-    setReactionPickerOpen(false);
-    setReactionQuery('');
-  };
-  return (
-    <article className={`timeline-message${message.isOwn ? ' timeline-message--own' : ''}${highlighted ? ' timeline-message--target' : ''}`} data-event-id={message.id} data-message-key={message.transactionId ?? message.id} tabIndex={-1}>
-      <Avatar
-        name={message.senderName}
-        src={message.senderAvatarUrl}
-        color={colorForId(message.senderId)}
-        size="small"
-      />
-      <div className="timeline-message__content">
-        <header>
-          <strong style={{ '--sender-color': colorForId(message.senderId) } as CSSProperties}>
-            {message.senderName}
-          </strong>
-          <time dateTime={new Date(message.timestamp).toISOString()}>{formatTime(message.timestamp)}</time>
-          {message.edited ? <span className="sending-label edited-label" aria-label="Edited message">edited</span> : null}
-          {message.pinned ? <span className="sending-label pinned-label"><Pin size={10} /> pinned</span> : null}
-
-        </header>
-        {message.replyTo ? (
-          <button type="button" className="message-reply-context" aria-label={`Jump to replied message from ${message.replyTo.senderName}`} onClick={() => onJumpToEvent?.(message.replyTo!.eventId)}>
-            <strong>{message.replyTo.senderName}</strong>
-            <span>{message.replyTo.body}</span>
-          </button>
-        ) : null}
-        {!mediaRevealed && message.mediaUrl ? (
-          <button className="message-media-gate" type="button" onClick={() => setMediaRevealed(true)}><Images size={16} /> Load {message.mimeType === 'image/gif' ? 'animated media' : 'media'}</button>
-        ) : mediaSrc && message.mediaKind === 'video' ? (
-          <video className="message-media" src={mediaSrc} controls preload="metadata" onLoadedMetadata={onMediaLoad} />
-        ) : mediaSrc && message.mediaKind === 'audio' ? (
-          <audio className="message-audio" src={mediaSrc} controls preload="metadata" />
-        ) : mediaSrc && message.mediaKind === 'file' ? (
-          message.codeFile ? <CodeFileMessage message={message} source={mediaSrc} /> : <a className="message-file" href={mediaSrc} download={message.body}><Paperclip size={15} /> {message.body}</a>
-        ) : mediaSrc ? (
-          canViewImage ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => setMediaViewerOpen(true)}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button> : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
-        ) : (
-          <div className={`message-kind--${message.kind}`}>
-            {message.kind === 'emote' ? `${message.senderName} ` : ''}<MessageText body={message.body} emojiCatalog={emojiCatalog} mentions={message.mentions} />
-          </div>
-        )}
-        <MessageDeliveryStatus message={message} onRetryMessage={onRetryMessage} onCancelMessage={onCancelMessage} />
-        <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
-        {message.reactions?.length ? (
-          <div className="reaction-row" aria-label="Message reactions">
-            {message.reactions.map((reaction) => (
-              <button
-                type="button"
-                className={reaction.reacted ? 'reaction reaction--mine' : 'reaction'}
-                key={reaction.key}
-                aria-label={`${reaction.key}, ${reaction.count} reactions`}
-                onClick={() => onReact(message, reaction.key, reaction.ownEventId)}
-              >
-                {emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key) ? (
-                  <EmojiAsset entry={emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key)!} />
-                ) : reaction.key} <span>{reaction.count}</span>
-              </button>
-            ))}
-          </div>
-        ) : null}
-        {message.readBy?.length ? (
-          <div
-            className="read-indicators"
-            role="img"
-            aria-label={`Read by ${message.readBy.map((reader) => reader.displayName).join(', ')}`}
-            title={`Read by ${message.readBy.map((reader) => reader.displayName).join(', ')}`}
-          >
-            {message.readBy.slice(0, 5).map((reader) => (
-              <span className="read-indicator" key={reader.id}>
-                <Avatar
-                  name={reader.displayName}
-                  src={reader.avatarUrl}
-                  color={colorForId(reader.id)}
-                  size="small"
-                />
-              </span>
-            ))}
-            {message.readBy.length > 5 ? <b>+{message.readBy.length - 5}</b> : null}
-          </div>
-        ) : null}
-        {message.thread ? (
-          <button
-            className="thread-summary"
-            type="button"
-            onClick={() => onOpenThread(message)}
-          >
-            <MessageCircle size={14} />
-            <strong>{message.thread.replyCount}{message.thread.replyCountIsLowerBound ? '+' : ''} {message.thread.replyCount === 1 && !message.thread.replyCountIsLowerBound ? 'reply' : 'replies'}</strong>
-            {message.thread.unreadCount ? <b aria-label={`${message.thread.unreadCount} unread thread notifications`}>{message.thread.unreadCount} unread</b> : null}
-            {message.thread.latestReply ? <span>Latest from {message.thread.latestReply.senderName}</span> : null}
-          </button>
-        ) : null}
-      </div>
-      {mediaViewerOpen ? <Dialog className="media-viewer" backdropClassName="media-viewer-backdrop" aria-label={`Viewing ${message.body}`} onClose={closeMediaViewer}>
-          <header><strong>{message.body}</strong><span><button type="button" aria-pressed={actualSize} onClick={() => setActualSize((value) => !value)}>{actualSize ? 'Fit image' : 'Actual size'}</button><DialogClose aria-label="Close image viewer"><X size={18} /></DialogClose></span></header>
-          {viewerSource ? <img className={actualSize ? 'is-actual-size' : undefined} src={viewerSource} alt={message.body} /> : <p role="status">Loading image…</p>}
-      </Dialog> : null}
-      {(!message.delivery || message.delivery === 'accepted') && !message.pendingEdit ? <div className="message-actions" ref={reactionActions}>
-        <button type="button" aria-label="Reply" title="Reply" onClick={() => onReply(message)}><Reply size={14} /></button>
-        <button type="button" aria-label="Reply in thread" title="Reply in thread" onClick={() => onStartThread(message)}><MessageCircle size={14} /></button>
-        {message.isThreadRoot ? <button type="button" aria-label="Open thread" title="Open thread" onClick={() => onOpenThread(message)}><MessageCircle size={14} /></button> : null}
-        <button ref={reactionTrigger} type="button" aria-label="Add reaction" aria-haspopup="dialog" aria-expanded={reactionPickerOpen} title="React" onClick={() => {
-          setReactionPickerOpen((open) => !open);
-          if (!reactionPickerOpen) onLoadEmojiCatalog();
-        }}><SmilePlus size={14} /></button>
-        {reactionPickerOpen ? createPortal(<Popover surfaceRef={reactionPicker} trigger={reactionTrigger} onClose={() => setReactionPickerOpen(false)} className="reaction-picker emoji-tray" label="Choose a reaction" style={{ top: reactionPickerPosition.top, left: reactionPickerPosition.left }}>
-          <header><strong>React</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
-          <label className="emoji-search"><Search size={13} /><span className="sr-only">Search reaction emoji</span><input value={reactionQuery} placeholder="Search emoji" onChange={(event) => setReactionQuery(event.target.value)} /></label>
-          {reactionEmojis.quick.length ? <>
-            <span className="reaction-picker__section">{recentEmojis.length ? 'Recent' : 'Quick picks'}</span>
-            <div className="reaction-picker__grid reaction-picker__grid--quick">
-              {reactionEmojis.quick.map((entry) => <button type="button" key={emojiReactionKey(entry)} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
-            </div>
-          </> : null}
-          <div className="reaction-picker__grid">
-            {reactionEmojis.matches.map((entry) => <button type="button" key={entry.id} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
-          </div>
-          {!reactionEmojis.quick.length && !reactionEmojis.matches.length ? <p className="reaction-picker__empty">No emoji match that search.</p> : null}
-        </Popover>, document.body) : null}
-        {canPin ? <button type="button" aria-label={message.pinned ? 'Unpin message' : 'Pin message'} title={message.pinned ? 'Unpin' : 'Pin'} onClick={() => onPin(message)}><Pin size={14} /></button> : null}
-        {message.isOwn && message.kind === 'text' ? (
-          <><button type="button" aria-label="Edit message" title="Edit" onClick={() => onEdit(message)}><Pencil size={14} /></button><button type="button" aria-label="Delete message" title="Delete" onClick={() => onDelete(message)}><Trash2 size={14} /></button></>
-        ) : null}
-      </div> : null}
-    </article>
-  );
-});
 
 interface EntryUnreadMarker {
   roomId: string;
@@ -1845,21 +1305,13 @@ function Conversation({
   activeThread,
   threadRoot,
   threadCollapsed,
-  draft,
-  threadDraft,
-  draftRevision,
-  threadDraftRevision,
+  composition, threadComposition, onCompositionChange, onThreadCompositionChange, attachmentQueue, onStageFiles,
   sending,
   threadSending,
   notice,
-  uploadInProgress,
-  failedUploadName,
-  replyTarget,
   editingMessage,
   editingThreadMessage,
   onBack,
-  onDraftChange,
-  onThreadDraftChange,
   onSubmit,
   onThreadSubmit,
   onToggleDetails,
@@ -1882,9 +1334,6 @@ function Conversation({
   emojiPacks,
   emojiAssetBaseUrl,
   onSendSticker,
-  onUploadAttachment,
-  onCancelUpload,
-  onRetryUpload,
   onLoadMore,
   onOpenContext,
   onReturnToLive,
@@ -1929,27 +1378,24 @@ function Conversation({
   activeThread?: ThreadSummary;
   threadRoot?: MessageSummary;
   threadCollapsed: boolean;
-  draft: string;
-  threadDraft: string;
-  draftRevision: number;
-  threadDraftRevision: number;
+  composition: StructuredDraft;
+  threadComposition: StructuredDraft;
+  onCompositionChange: (value: StructuredDraft) => void;
+  onThreadCompositionChange: (value: StructuredDraft) => void;
+  attachmentQueue: StagedAttachments;
+  onStageFiles: (files: File[], threadRootId?: string, codeLanguage?: string) => void | Promise<void>;
   sending: boolean;
   threadSending: boolean;
   notice?: string;
-  uploadInProgress: boolean;
-  failedUploadName?: string;
-  replyTarget?: MessageSummary;
   editingMessage?: MessageSummary;
   editingThreadMessage?: MessageSummary;
   onBack: () => void;
-  onDraftChange: (draft: string) => void;
-  onThreadDraftChange: (draft: string) => void;
   onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
-  onThreadSubmit: (mentions?: ComposerMention[]) => Promise<ComposerSubmitResult>;
+  onThreadSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
   onToggleDetails: () => void;
   onCollapseConversation: () => void;
   onOpenBackground: () => void;
-  onStartReply: (message: MessageSummary) => void;
+  onStartReply: (message: MessageSummary, threadRootId?: string) => void;
   onOpenThread: (message: MessageSummary) => void;
   onStartThread: (message: MessageSummary) => void;
   onCloseThread: () => void;
@@ -1959,16 +1405,13 @@ function Conversation({
   onDeleteMessage: (message: MessageSummary) => void;
   onRetryMessage?: MessageDeliveryActions['onRetryMessage'];
   onCancelMessage?: MessageDeliveryActions['onCancelMessage'];
-  onTogglePin: (message: MessageSummary) => void;
+  onTogglePin: (message: MessageSummary) => void | Promise<void>;
   onCancelContext: () => void;
   onCancelThreadEdit: () => void;
-  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void;
+  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void | Promise<void>;
   emojiPacks: EmojiPackDefinition[];
   emojiAssetBaseUrl?: string;
-  onSendSticker: (sticker: { id: string; name: string; src: string }) => Promise<boolean>;
-  onUploadAttachment: (file: File, threadRootId?: string, codeLanguage?: string) => Promise<boolean>;
-  onCancelUpload: () => void;
-  onRetryUpload: () => void;
+  onSendSticker: (sticker: { id: string; name: string; src: string }, threadRootId?: string) => Promise<unknown>;
   onLoadMore?: (direction: 'backward' | 'forward') => Promise<void>;
   onOpenContext?: (eventId: string) => Promise<void>;
   onReturnToLive?: () => Promise<void>;
@@ -1998,7 +1441,7 @@ function Conversation({
   gifEndpoint?: string;
   stickerPacks: Array<{ name: string; manifestUrl: string }>;
   defaultStickerPack?: string;
-  onSendGif: (gif: GifChoice) => void;
+  onSendGif: (gif: GifChoice, threadRootId?: string) => void | Promise<unknown>;
   callsEnabled: boolean;
   onStartCall: (video: boolean) => void;
   dataSaver: boolean;
@@ -2050,85 +1493,12 @@ function Conversation({
   const previousRoomId = useRef<string | undefined>(undefined);
   const reportedRead = useRef<{ roomId: string; eventId: string } | undefined>(undefined);
   const catalogRequested = useRef(false);
-  const [colonIndex, setColonIndex] = useState(0);
-  const [colonDismissed, setColonDismissed] = useState<string>();
-  const [composerCaret, setComposerCaret] = useState(0);
-  const [composerFocused, setComposerFocused] = useState(false);
   const [timelineDetached, setTimelineDetached] = useState(false);
   const threadPanelWidth = contextWidth;
   const resizeStart = useRef<{ x: number; width: number } | undefined>(undefined);
-  const [stickerCache, setStickerCache] = useState<Record<string, Array<{ id: string; name: string; src: string }>>>({});
-  const fileInput = useRef<HTMLInputElement>(null);
-  const mainComposer = useRef<InlineComposerHandle>(null);
-  const composerForm = useRef<HTMLFormElement>(null);
-  const threadComposer = useRef<HTMLTextAreaElement>(null);
-  const threadFileInput = useRef<HTMLInputElement>(null);
-  const [threadMoreOpen, setThreadMoreOpen] = useState(false);
+  const mainComposer = useRef<SharedComposerHandle>(null);
+  const threadComposer = useRef<SharedComposerHandle>(null);
   const [pendingSearchEvent, setPendingSearchEvent] = useState<{ roomId?: string; eventId: string }>();
-  const [emojiOpen, setEmojiOpen] = useState(false);
-  const [codeLanguage, setCodeLanguage] = useState('text');
-  const [codeDraftMode, setCodeDraftMode] = useState(false);
-  const composerNavigation = useRef(0);
-  useLayoutEffect(() => { composerNavigation.current += 1; }, [room?.id, activeThread?.rootId, contextPanel, conversationVisible]);
-  const currentComposition = useRef({ draftRevision, threadDraftRevision, codeLanguage, codeDraftMode });
-  useLayoutEffect(() => { currentComposition.current = { draftRevision, threadDraftRevision, codeLanguage, codeDraftMode }; });
-  const [mentionsByRoom, setMentionsByRoom] = useState<Record<string, ComposerMention[]>>({});
-  const selectedMentions = room?.id ? mentionsByRoom[room.id] ?? [] : [];
-  const mentionsBeforeEdit = useRef<ComposerMention[]>([]);
-  const inlineEmojisBeforeEdit = useRef<ComposerInlineEmoji[]>([]);
-  const setSelectedMentions = (update: ComposerMention[] | ((current: ComposerMention[]) => ComposerMention[])) => {
-    if (!room?.id) return;
-    setMentionsByRoom((current) => {
-      const next = typeof update === 'function' ? update(current[room.id] ?? []) : update;
-      return { ...current, [room.id]: next };
-    });
-  };
-  const [inlineEmojisByRoom, setInlineEmojisByRoom] = useState<Record<string, ComposerInlineEmoji[]>>({});
-  const inlineEmojiSendInFlight = useRef(false);
-  const [sendingInlineEmojis, setSendingInlineEmojis] = useState(false);
-  const inlineEmojis = room?.id ? inlineEmojisByRoom[room.id] ?? [] : [];
-  const setInlineEmojis = (
-    update: ComposerInlineEmoji[] | ((current: ComposerInlineEmoji[]) => ComposerInlineEmoji[]),
-  ) => {
-    if (!room?.id) return;
-    setInlineEmojisByRoom((current) => {
-      const next = typeof update === 'function' ? update(current[room.id] ?? []) : update;
-      return { ...current, [room.id]: next };
-    });
-  };
-  const mentionQuery = draft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
-  const [mentionIndex, setMentionIndex] = useState(0);
-  const [mentionDismissed, setMentionDismissed] = useState<string>();
-  const mentionMatches = mentionQuery === undefined || mentionDismissed === mentionQuery ? [] : members.filter((member) =>
-    member.id.toLowerCase().includes(mentionQuery) || member.displayName.toLowerCase().includes(mentionQuery),
-  ).slice(0, 6);
-  const [lastMentionQuery, setLastMentionQuery] = useState(mentionQuery);
-  if (lastMentionQuery !== mentionQuery) {
-    setLastMentionQuery(mentionQuery);
-    setMentionIndex(0);
-  }
-  const [threadMentionsByRoot, setThreadMentionsByRoot] = useState<Record<string, ComposerMention[]>>({});
-  const selectedThreadMentions = activeThread?.rootId ? threadMentionsByRoot[activeThread.rootId] ?? [] : [];
-  const threadMentionsBeforeEdit = useRef<ComposerMention[]>([]);
-  const setSelectedThreadMentions = (update: ComposerMention[] | ((current: ComposerMention[]) => ComposerMention[])) => {
-    if (!activeThread?.rootId) return;
-    setThreadMentionsByRoot((current) => {
-      const next = typeof update === 'function' ? update(current[activeThread.rootId] ?? []) : update;
-      return { ...current, [activeThread.rootId]: next };
-    });
-  };
-  const threadMentionQuery = threadDraft.match(/(?:^|\s)@([^\s@]*)$/)?.[1]?.toLowerCase();
-  const [threadMentionIndex, setThreadMentionIndex] = useState(0);
-  const [threadMentionDismissed, setThreadMentionDismissed] = useState<string>();
-  const threadMentionMatches = threadMentionQuery === undefined || threadMentionDismissed === threadMentionQuery ? [] : members.filter((member) =>
-    member.id.toLowerCase().includes(threadMentionQuery) || member.displayName.toLowerCase().includes(threadMentionQuery),
-  ).slice(0, 6);
-  const [lastThreadMentionQuery, setLastThreadMentionQuery] = useState(threadMentionQuery);
-  if (lastThreadMentionQuery !== threadMentionQuery) {
-    setLastThreadMentionQuery(threadMentionQuery);
-    setThreadMentionIndex(0);
-  }
-  const [emojiQuery, setEmojiQuery] = useState('');
   const [emojiCatalog, setEmojiCatalog] = useState<EmojiPackEntry[]>([]);
   const [recentEmojis, setRecentEmojis] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]') as string[]; } catch { return []; }
@@ -2136,18 +1506,12 @@ function Conversation({
   const rememberEmoji = useCallback((emoji: string) => {
     setRecentEmojis((current) => {
       const next = [emoji, ...current.filter((recent) => recent !== emoji)].slice(0, 18);
-      localStorage.setItem('aimtrix.recent-emoji.v1', JSON.stringify(next));
+      try { localStorage.setItem('aimtrix.recent-emoji.v1', JSON.stringify(next)); } catch { /* Recents can remain in memory. */ }
       return next;
     });
   }, []);
   const searchOpen = contextPanel === 'search';
-  const [moreOpen, setMoreOpen] = useState(false);
-  const [gifOpen, setGifOpen] = useState(false);
   const [messageQuery, setMessageQuery] = useState('');
-  const [stickerOpen, setStickerOpen] = useState(false);
-  const [stickerPack, setStickerPack] = useState<Array<{ id: string; name: string; src: string }>>([]);
-  const [stickerStatus, setStickerStatus] = useState<'idle' | 'loading' | 'error'>('idle');
-  const [stickerManifest, setStickerManifest] = useState(defaultStickerPack ?? stickerPacks[0]?.manifestUrl ?? '');
   useEffect(() => {
     if (!room?.id || window.matchMedia?.('(max-width: 767px)').matches) return;
     const frame = requestAnimationFrame(() => {
@@ -2156,11 +1520,21 @@ function Conversation({
     return () => cancelAnimationFrame(frame);
   }, [room?.id]);
   useEffect(() => {
-    if (editingMessage) requestAnimationFrame(() => mainComposer.current?.focus());
-  }, [editingMessage]);
+    if (!editingMessage?.id || !conversationVisible) return;
+    const previousFocus = document.activeElement;
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement === previousFocus || document.activeElement === document.body) mainComposer.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editingMessage?.id, room?.id, conversationVisible]);
   useEffect(() => {
-    if (editingThreadMessage) requestAnimationFrame(() => threadComposer.current?.focus());
-  }, [editingThreadMessage]);
+    if (!editingThreadMessage?.id || contextPanel !== 'thread' || threadCollapsed) return;
+    const previousFocus = document.activeElement;
+    const frame = requestAnimationFrame(() => {
+      if (document.activeElement === previousFocus || document.activeElement === document.body) threadComposer.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [editingThreadMessage?.id, room?.id, activeThread?.rootId, contextPanel, threadCollapsed]);
   const roomBackgroundSource = useMediaSource(
     dataSaver ? undefined : room?.background?.mxcUrl,
     1600,
@@ -2226,269 +1600,8 @@ function Conversation({
     }
   }
   const activeEntryUnreadMarker = entryUnreadState.marker;
-  const fallbackEmojis = ['😀', '😂', '🥹', '😍', '😎', '🤔', '😭', '😡', '👍', '👀', '✨', '💙', '🎉', '🔥', '🫧', '☕', '💾', '🌈'];
-  const fallbackEmojiEntries = fallbackEmojis.map<TextEmojiEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
-  const visibleEmojis = ([
-    ...fallbackEmojiEntries,
-    ...emojiCatalog.filter((entry) => !entry.emoji || !fallbackEmojis.includes(entry.emoji)),
-  ])
-    .filter((item) => !emojiQuery.trim() || `${item.name} ${item.emoji ?? ''} ${item.aliases?.join(' ') ?? ''}`.toLowerCase().includes(emojiQuery.toLowerCase()))
-    .sort((left, right) => {
-      const leftRank = recentEmojis.indexOf(emojiReactionKey(left));
-      const rightRank = recentEmojis.indexOf(emojiReactionKey(right));
-      return (leftRank < 0 ? 999 : leftRank) - (rightRank < 0 ? 999 : rightRank);
-    })
-    .slice(0, emojiQuery.trim() ? 48 : MAX_VISIBLE_EMOJI_RESULTS);
-  const submit = (event: FormEvent) => {
-    event.preventDefault();
-    if (inlineEmojiSendInFlight.current) return;
-    const navigation = composerNavigation.current;
-    const revision = draftRevision;
-    const submittedCodeLanguage = codeLanguage;
-    const submittedCodeMode = codeDraftMode;
-    const isCurrent = () => composerNavigation.current === navigation
-      && currentComposition.current.draftRevision === revision
-      && currentComposition.current.codeLanguage === submittedCodeLanguage
-      && currentComposition.current.codeDraftMode === submittedCodeMode;
-    const sendingEmoji = inlineEmojis.length > 0;
-    if (sendingEmoji) {
-      inlineEmojiSendInFlight.current = true;
-      setSendingInlineEmojis(true);
-    }
-    void (async () => {
-      const messageDraft = draft;
-      const isFencedDraft = messageDraft.startsWith('```');
-      const body = codeDraftMode
-        ? `\`\`\`${codeLanguage}\n${messageDraft}\n\`\`\``
-        : isFencedDraft || inlineEmojis.length ? messageDraft : undefined;
-      const editMentions = (editingMessage?.mentions ?? []).map((mention) => ({
-        userId: mention.userId,
-        label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
-      }));
-      const activeMentions = [...selectedMentions, ...editMentions]
-        .filter((mention, index, values) =>
-          hasVisibleComposerMention(messageDraft, mention.label) &&
-          values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
-        );
-      const result = await onSubmit(body, activeMentions, inlineEmojis);
-      if (!result) return;
-      // These setters capture the submitted room; navigation must not leave its
-      // old mention/token metadata behind after the matching text was cleared.
-      setInlineEmojis([]);
-      setSelectedMentions([]);
-      if (!isCurrent()) return;
-      setCodeDraftMode(false);
-      if (result === 'sent') returnToLatest();
-    })().finally(() => {
-      if (sendingEmoji) {
-        inlineEmojiSendInFlight.current = false;
-        setSendingInlineEmojis(false);
-      }
-      if (isCurrent()) requestAnimationFrame(() => {
-        if (composerNavigation.current === navigation && currentComposition.current.draftRevision === revision) mainComposer.current?.focus();
-      });
-    });
-  };
-  const stageInlineSticker = (
-    sticker: { id: string; name: string; src: string },
-    before: string,
-    after = '',
-  ) => {
-    const shortcode = `:${sticker.id}:`;
-    mainComposer.current?.replaceRange(
-      before.length,
-      draft.length - after.length,
-      { id: sticker.id, shortcode, src: sticker.src, alt: sticker.name, title: sticker.name },
-    );
-    rememberEmoji(shortcode);
-    requestAnimationFrame(() => {
-      mainComposer.current?.focus();
-      const caret = before.length + shortcode.length;
-      mainComposer.current?.setSelection({ start: caret, end: caret });
-    });
-  };
-  const insertMention = (member: MemberSummary) => {
-    const label = member.displayName;
-    setSelectedMentions((current) => current.some((mention) => mention.userId === member.id && mention.label === label)
-      ? current
-      : [...current, { userId: member.id, label }]);
-    const match = draft.match(/@[^\s@]*$/);
-    if (match?.index !== undefined) mainComposer.current?.replaceRange(match.index, draft.length, `@${label} `);
-    requestAnimationFrame(() => mainComposer.current?.focus());
-  };
-  const insertThreadMention = (member: MemberSummary) => {
-    const label = member.displayName;
-    setSelectedThreadMentions((current) => current.some((mention) => mention.userId === member.id && mention.label === label)
-      ? current
-      : [...current, { userId: member.id, label }]);
-    onThreadDraftChange(threadDraft.replace(/@[^\s@]*$/, `@${label} `));
-    requestAnimationFrame(() => threadComposer.current?.focus());
-  };
-  const startEdit = (message: MessageSummary) => {
-    mentionsBeforeEdit.current = selectedMentions;
-    inlineEmojisBeforeEdit.current = inlineEmojis;
-    setInlineEmojis([]);
-    setSelectedMentions((message.mentions ?? []).map((mention) => ({
-      userId: mention.userId,
-      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
-    })));
-    onStartEdit(message);
-  };
-  const cancelContext = () => {
-    setSelectedMentions(mentionsBeforeEdit.current);
-    setInlineEmojis(inlineEmojisBeforeEdit.current);
-    mentionsBeforeEdit.current = [];
-    inlineEmojisBeforeEdit.current = [];
-    onCancelContext();
-  };
-  const startThreadEdit = (message: MessageSummary) => {
-    threadMentionsBeforeEdit.current = selectedThreadMentions;
-    setSelectedThreadMentions((message.mentions ?? []).map((mention) => ({
-      userId: mention.userId,
-      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
-    })));
-    onStartThreadEdit(message);
-  };
-  const cancelThreadEdit = () => {
-    setSelectedThreadMentions(threadMentionsBeforeEdit.current);
-    threadMentionsBeforeEdit.current = [];
-    onCancelThreadEdit();
-  };
-  const submitThread = (event: FormEvent) => {
-    event.preventDefault();
-    const navigation = composerNavigation.current;
-    const revision = threadDraftRevision;
-    const isCurrent = () => composerNavigation.current === navigation
-      && currentComposition.current.threadDraftRevision === revision;
-    const editMentions = (editingThreadMessage?.mentions ?? []).map((mention) => ({
-      userId: mention.userId,
-      label: mention.label.startsWith('@') ? mention.label.slice(1) : mention.label,
-    }));
-    const activeMentions = [...selectedThreadMentions, ...editMentions]
-      .filter((mention, index, values) =>
-        hasVisibleComposerMention(threadDraft, mention.label) &&
-        values.findIndex((candidate) => candidate.userId === mention.userId && candidate.label === mention.label) === index,
-      );
-    void onThreadSubmit(activeMentions).then((result) => {
-      if (result) setSelectedThreadMentions([]);
-      if (isCurrent() && onLatestThread && activeThread?.history && activeThread.history.mode !== 'live' && (result === 'sent' || result === 'retained')) latestThread();
-    }).finally(() => {
-      if (isCurrent()) requestAnimationFrame(() => { if (isCurrent()) threadComposer.current?.focus(); });
-    });
-  };
-  const codeDraft = codeDraftMode || draft.startsWith('```');
-  const uploadPastedImageFile = (image: File, threadRootId?: string) => {
-    const extension = image.type.split('/')[1]?.replace(/[^a-z0-9]/gi, '') || 'png';
-    const file = image.name ? image : new File([image], `pasted-image.${extension}`, { type: image.type });
-    onUploadAttachment(file, threadRootId);
-  };
-  const uploadPastedImage = (event: ClipboardEvent<HTMLElement>, threadRootId?: string) => {
-    const image = [...event.clipboardData.items]
-      .map((item) => item.getAsFile())
-      .find((file) => file?.type.startsWith('image/'))
-      ?? Array.from(event.clipboardData.files ?? []).find((file) => file.type.startsWith('image/'));
-    if (!image) {
-      if (!event.clipboardData.getData('text/plain')) {
-        void readNativeClipboardImage().then((nativeImage) => {
-          if (nativeImage) uploadPastedImageFile(nativeImage, threadRootId);
-        });
-      }
-      return;
-    }
-    event.preventDefault();
-    uploadPastedImageFile(image, threadRootId);
-  };
-
-  const insertCodeBlock = () => {
-    const selection = mainComposer.current?.getSelection();
-    const start = selection?.start ?? draft.length;
-    const end = selection?.end ?? start;
-    const selected = draft.slice(start, end) || draft;
-    setCodeDraftMode(true);
-    onDraftChange(selected);
-    requestAnimationFrame(() => {
-      mainComposer.current?.focus();
-      mainComposer.current?.setSelection({ start: 0, end: selected.length });
-    });
-  };
-  const sendCodeFile = () => {
-    if (!draft.trim()) return;
-    const extensions: Record<string, string> = {
-      bash: 'sh', javascript: 'js', json: 'json', python: 'py', rust: 'rs', text: 'txt', typescript: 'ts', yaml: 'yaml',
-    };
-    const file = new File([draft], `snippet.${extensions[codeLanguage] ?? 'txt'}`, { type: 'text/plain' });
-    void onUploadAttachment(file, undefined, codeLanguage).then((sent) => {
-      if (sent) {
-        onDraftChange('');
-        setCodeDraftMode(false);
-      }
-    });
-  };
-  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>, selection: InlineComposerSelection | null): boolean => {
-    if (colonResults.length) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        setColonIndex((index) => (index + 1) % colonResults.length);
-        return true;
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setColonIndex((index) => (index - 1 + colonResults.length) % colonResults.length);
-        return true;
-      }
-      if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault();
-        pickColonResult(colonResults[colonIndex % colonResults.length]);
-        return true;
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setColonDismissed(colon?.query);
-        return true;
-      }
-    }
-    if (mentionMatches.length) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        setMentionIndex((index) => (index + 1) % mentionMatches.length);
-        return true;
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setMentionIndex((index) => (index - 1 + mentionMatches.length) % mentionMatches.length);
-        return true;
-      }
-      if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault();
-        insertMention(mentionMatches[mentionIndex % mentionMatches.length]);
-        return true;
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setMentionDismissed(mentionQuery);
-        return true;
-      }
-    }
-    if (
-      event.key === 'ArrowUp'
-      && !event.shiftKey
-      && !event.altKey
-      && !event.ctrlKey
-      && !event.metaKey
-      && !draft
-      && selection?.start === 0
-      && selection.end === 0
-    ) {
-      const latestOwnText = [...messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending && (!message.delivery || message.delivery === 'accepted') && !message.pendingEdit);
-      if (latestOwnText) {
-        event.preventDefault();
-        startEdit(latestOwnText);
-        return true;
-      }
-      return false;
-    }
-    return false;
-  };
+  const startEdit = onStartEdit;
+  const startThreadEdit = onStartThreadEdit;
 
   const runProgrammaticScroll = useCallback((scroll: () => void) => {
     const before = timeline.current?.scrollTop;
@@ -2920,92 +2033,6 @@ function Conversation({
     if (messages.some((message) => /:[a-z0-9][a-z0-9_+-]*:/i.test(message.body))) loadEmojiCatalog();
   }, [messages, loadEmojiCatalog]);
 
-  useEffect(() => {
-    if (emojiOpen) loadEmojiCatalog();
-  }, [emojiOpen, loadEmojiCatalog]);
-
-  const colon = (() => {
-    if (!composerFocused) return undefined;
-    const caret = Math.min(composerCaret, draft.length);
-    const match = /(?:^|\s):([a-z0-9_+-]{2,})$/i.exec(draft.slice(0, caret));
-    return match ? { query: match[1].toLowerCase(), start: caret - match[1].length - 1, caret } : undefined;
-  })();
-
-  useEffect(() => {
-    if (colon) loadEmojiCatalog();
-  }, [colon, loadEmojiCatalog]);
-
-  const [lastColonQuery, setLastColonQuery] = useState(colon?.query);
-  if (lastColonQuery !== colon?.query) {
-    setLastColonQuery(colon?.query);
-    setColonIndex(0);
-  }
-
-  const colonResults = (() => {
-    if (!colon || colonDismissed === colon.query) return [] as Array<
-      ({ type: 'emoji' } & EmojiPackEntry) |
-      ({ type: 'sticker' } & { id: string; name: string; src: string })
-    >;
-    const query = colon.query;
-    const rank = (name: string) => {
-      const normalized = name.toLowerCase().replace(/[^a-z0-9]/g, '');
-      const normalizedQuery = query.replace(/[^a-z0-9]/g, '');
-      if (!normalized.includes(normalizedQuery)) return -1;
-      return normalized.startsWith(normalizedQuery) ? 0 : 1;
-    };
-    const emojiMatches = emojiCatalog
-      .map((entry) => ({ entry, score: rank(`${entry.name} ${entry.aliases?.join(' ') ?? ''}`) }))
-      .filter((candidate) => candidate.score >= 0)
-      .sort((left, right) => left.score - right.score)
-      .slice(0, 6)
-      .map(({ entry }) => ({ type: 'emoji' as const, ...entry }));
-    const stickerMatches = Object.values(stickerCache)
-      .flat()
-      .filter((sticker) => rank(sticker.name) >= 0)
-      .slice(0, 4)
-      .map((sticker) => ({ type: 'sticker' as const, ...sticker }));
-    return [...emojiMatches, ...stickerMatches];
-  })();
-
-  const pickColonResult = (result: (typeof colonResults)[number]) => {
-    if (!colon) return;
-    const before = draft.slice(0, colon.start);
-    const after = draft.slice(colon.caret);
-    if (result.type === 'emoji') {
-      if (result.emoji) {
-        mainComposer.current?.replaceRange(colon.start, colon.caret, result.emoji);
-        rememberEmoji(result.emoji);
-      } else if (result.src) {
-        const sticker = { id: result.id, name: result.name, src: result.src };
-        stageInlineSticker(sticker, before, after);
-      }
-    } else {
-      stageInlineSticker(result, before, after);
-    }
-    setColonDismissed(colon.query);
-  };
-
-  useEffect(() => {
-    if (!stickerOpen) return;
-    const controller = new AbortController();
-    queueMicrotask(() => {
-      if (!controller.signal.aborted) {
-        setStickerStatus('loading');
-        setStickerPack([]);
-      }
-    });
-    void loadStickerPack(stickerManifest, controller.signal)
-      .then((items) => {
-        setStickerCache((current) => ({ ...current, [stickerManifest]: items }));
-        setStickerPack(items);
-        setStickerStatus('idle');
-      })
-      .catch((error: unknown) => {
-        if ((error as { name?: string }).name !== 'AbortError') setStickerStatus('error');
-      });
-    return () => controller.abort();
-  }, [stickerManifest, stickerOpen]);
-
   const setPanelWidth = onContextResize;
 
   const startPanelResize = (event: PointerEvent<HTMLDivElement>) => {
@@ -3020,52 +2047,6 @@ function Conversation({
   };
 
   const stopPanelResize = () => { resizeStart.current = undefined; };
-
-  const handleThreadComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (threadMentionMatches.length) {
-      if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        setThreadMentionIndex((index) => (index + 1) % threadMentionMatches.length);
-        return;
-      }
-      if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        setThreadMentionIndex((index) => (index - 1 + threadMentionMatches.length) % threadMentionMatches.length);
-        return;
-      }
-      if (event.key === 'Enter' || event.key === 'Tab') {
-        event.preventDefault();
-        insertThreadMention(threadMentionMatches[threadMentionIndex % threadMentionMatches.length]);
-        return;
-      }
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setThreadMentionDismissed(threadMentionQuery);
-        return;
-      }
-    }
-    if (
-      event.key === 'ArrowUp'
-      && !event.shiftKey
-      && !event.altKey
-      && !event.ctrlKey
-      && !event.metaKey
-      && !threadDraft
-      && event.currentTarget.selectionStart === 0
-      && event.currentTarget.selectionEnd === 0
-    ) {
-      const latestOwnText = activeThread && [...activeThread.messages].reverse().find((message) => message.isOwn && message.kind === 'text' && !message.pending && (!message.delivery || message.delivery === 'accepted') && !message.pendingEdit);
-      if (latestOwnText) {
-        event.preventDefault();
-        startThreadEdit(latestOwnText);
-      }
-      return;
-    }
-    if (event.key === 'Enter' && !event.shiftKey) {
-      event.preventDefault();
-      event.currentTarget.form?.requestSubmit();
-    }
-  };
 
   if (!room) {
     return (
@@ -3217,6 +2198,7 @@ function Conversation({
                   recentEmojis={recentEmojis}
                   onLoadEmojiCatalog={loadEmojiCatalog}
                   onEmojiUsed={rememberEmoji}
+                  onMarkUnread={onMarkUnread ? (message) => onMarkUnread(message.id) : undefined}
                   onMediaLoad={handleMediaLoad}
                   onJumpToEvent={(eventId) => void openContext(eventId)}
                   highlighted={message.id === targetEventId && (historicalWindow || Boolean(localTarget))}
@@ -3260,7 +2242,11 @@ function Conversation({
           </header>
           <div ref={threadTimeline} className="thread-panel__timeline" tabIndex={0} aria-label="Thread replies" aria-busy={threadHistoryBusy} onScroll={() => { captureThread(); reportThreadRead(false, true); }}>
             <div className="thread-panel__root">
-              {threadRoot && activeThread.rootStatus !== 'removed' ? <><strong>{threadRoot.senderName}</strong><p>{threadRoot.body}</p></> : <p role="status">{activeThread.rootStatus === 'removed' ? 'The original message was removed. Replies are still available.' : activeThread.rootStatus === 'unavailable' ? 'The original message is unavailable. Check your access and connection.' : 'Loading the original message…'}</p>}
+              {threadRoot && activeThread.rootStatus !== 'removed' ? <TimelineMessage message={threadRoot} hideThreadControls dataSaver={dataSaver} autoplayMedia={autoplayMedia}
+                onReply={(message) => onStartReply(message, activeThread.rootId)} onOpenThread={onOpenThread} onStartThread={onStartThread} onEdit={startThreadEdit} onDelete={onDeleteMessage}
+                onRetryMessage={onRetryMessage} onCancelMessage={onCancelMessage} onPin={onTogglePin} canPin={Boolean(room.canManage)} onReact={onReact}
+                emojiCatalog={emojiCatalog} recentEmojis={recentEmojis} onLoadEmojiCatalog={loadEmojiCatalog} onEmojiUsed={rememberEmoji}
+                onMediaLoad={restoreThread} onJumpToEvent={onThreadContext} onLoadLinkPreview={onLoadLinkPreview} /> : <p role="status">{activeThread.rootStatus === 'removed' ? 'The original message was removed. Replies are still available.' : activeThread.rootStatus === 'unavailable' ? 'The original message is unavailable. Check your access and connection.' : 'Loading the original message…'}</p>}
             </div>
             {threadHistoryError || activeThread.history?.error || activeThread.rootStatus === 'unavailable' || activeThread.history?.targetStatus === 'unavailable' ? <div className="history-feedback"><p role="status">{activeThread.history?.error ?? (activeThread.history?.targetStatus === 'unavailable' ? 'This reply is unavailable. You can still browse the thread.' : 'Thread history could not load.')}</p><button type="button" disabled={threadHistoryBusy} onClick={retryThread}>Retry loading thread replies</button></div> : null}
             {onPageThreadHistory && activeThread.history?.canLoadOlder ? <div className="history-edge"><button type="button" className="aqua-button" disabled={threadHistoryBusy} onClick={() => loadThread('backward')}>Load older thread replies</button></div> : null}
@@ -3272,7 +2258,7 @@ function Conversation({
                 message={message}
                 dataSaver={dataSaver}
                 autoplayMedia={autoplayMedia}
-                onReply={onStartReply}
+                onReply={(message) => onStartReply(message, activeThread.rootId)}
                 onOpenThread={onOpenThread}
                 onStartThread={onStartThread}
                 onEdit={startThreadEdit}
@@ -3293,46 +2279,24 @@ function Conversation({
             ))}
             {onPageThreadHistory && activeThread.history?.canLoadNewer ? <div className="history-edge"><button type="button" className="aqua-button" disabled={threadHistoryBusy} onClick={() => loadThread('forward')}>Load newer thread replies</button></div> : null}
           </div>
-          {threadMentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a thread member">
-            {threadMentionMatches.map((member, index) => <button
-              type="button"
-              role="option"
-              aria-selected={index === threadMentionIndex % threadMentionMatches.length}
-              className={index === threadMentionIndex % threadMentionMatches.length ? 'is-active' : ''}
-              key={member.id}
-              onMouseEnter={() => setThreadMentionIndex(index)}
-              onClick={() => insertThreadMention(member)}
-            ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
-          </div> : null}
-          <form className="thread-panel__composer" onSubmit={submitThread}>
+          <div className="conversation-composition">
             {onLatestThread && activeThread.history?.mode !== 'live' ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><button type="button" disabled={threadHistoryBusy} onClick={latestThread}>Jump to latest replies</button></div> : null}
             {threadReadError?.roomId === room.id && threadReadError.rootId === activeThread.rootId ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" disabled={threadHistoryBusy || Boolean(activeThread.history && activeThread.history.mode !== 'live')} title={activeThread.history && activeThread.history.mode !== 'live' ? 'Jump to latest replies to retry this observed read status' : undefined} onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
-            {notice ? <div className="thread-panel__composer-context" role="status"><span>{notice}</span>{uploadInProgress ? <button type="button" onClick={onCancelUpload}>Cancel upload</button> : failedUploadName ? <button type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button> : null}</div> : null}
-            <input ref={threadFileInput} type="file" className="sr-only" aria-label="Choose thread attachment" onChange={(event) => { const file = event.target.files?.[0]; if (file) void onUploadAttachment(file, activeThread.rootId); event.target.value = ''; }} />
-            <button type="button" aria-label="More thread tools" aria-expanded={threadMoreOpen} onClick={() => setThreadMoreOpen((open) => !open)}><Plus size={18} /></button>
-            {threadMoreOpen && contextPanel === 'thread' ? <Popover className="thread-tools" label="Thread tools" onClose={() => setThreadMoreOpen(false)}><button type="button" onClick={() => { threadFileInput.current?.click(); setThreadMoreOpen(false); }}>Attach a file</button></Popover> : null}
-            {editingThreadMessage ? <div className="thread-panel__composer-context"><strong>Editing message</strong><button type="button" aria-label="Cancel thread edit" onClick={cancelThreadEdit}><X size={14} /></button></div> : null}
-            <label>
-              <span className="sr-only">Message thread</span>
-              <textarea
-                ref={threadComposer}
-                aria-label="Message thread"
-                value={threadDraft}
-                onChange={(event) => {
-                  const nextDraft = event.target.value;
-                  setSelectedThreadMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
-                  onThreadDraftChange(nextDraft);
-                }}
-                onKeyDown={handleThreadComposerKeyDown}
-                onPaste={(event) => uploadPastedImage(event, activeThread.rootId)}
-                placeholder="Reply in thread"
-                rows={2}
-              />
-            </label>
-            <button type="submit" aria-label="Send thread reply" disabled={!threadDraft.trim() || threadSending}>
-              <Send size={15} /> Send
-            </button>
-          </form>
+          {notice ? <p className="history-feedback" role="status">{notice}</p> : null}
+          {!threadComposition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id, threadRootId: activeThread.rootId }} /> : null}
+          <SharedComposer ref={threadComposer} key={`${room.id}:${activeThread.rootId}`} contextKey={JSON.stringify([room.id, activeThread.rootId])}
+            value={threadComposition} onChange={onThreadCompositionChange} onSubmit={onThreadSubmit}
+            thread active={contextPanel === 'thread' && !threadCollapsed} sending={threadSending}
+            members={members} roomName={room.name} emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl}
+            stickerPacks={stickerPacks} defaultStickerPack={defaultStickerPack} gifEndpoint={gifEndpoint}
+            stageFiles={threadComposition.edit ? undefined : (files, language) => onStageFiles(files, activeThread.rootId, language)}
+            sendSticker={threadComposition.edit ? undefined : async (sticker) => { await onSendSticker(sticker, activeThread.rootId); }}
+            sendGif={threadComposition.edit ? undefined : async (gif) => { await onSendGif(gif, activeThread.rootId); }}
+            onCancelContext={onCancelThreadEdit}
+            onEditLatest={() => { const message = [...activeThread.messages].reverse().find((item) => item.actions?.edit ?? (item.isOwn && item.kind === 'text' && !item.pending && (!item.delivery || item.delivery === 'accepted') && !item.pendingEdit)); if (message) startThreadEdit(message); }}
+            onSubmitted={(result) => { if (result !== 'edited' && activeThread.history?.mode !== 'live') latestThread(); }}
+          />
+          </div>
         </aside>, contextHost
       ) : null}
       {contextHost && contextPanel === 'thread' && !activeThread ? createPortal(<aside className="search-panel" aria-label="Thread">
@@ -3348,208 +2312,25 @@ function Conversation({
       {activeThread && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
 
       <div className="typing-strip" aria-live="polite">
-        {notice ? <>{notice}{uploadInProgress ? <button className="cancel-upload" type="button" onClick={onCancelUpload}>Cancel</button> : failedUploadName ? <button className="cancel-upload" type="button" onClick={onRetryUpload}>Retry {failedUploadName}</button> : null}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
+        {notice ? <>{notice}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
       </div>
-      {replyTarget || editingMessage ? (
-        <div className="composer-context">
-          <div>
-            <strong>{editingMessage ? 'Editing message' : `Replying to ${replyTarget?.senderName}`}</strong>
-            <span>{editingMessage?.body || replyTarget?.body}</span>
-          </div>
-          <button type="button" aria-label="Cancel reply or edit" onClick={cancelContext}><X size={15} /></button>
-        </div>
-      ) : null}
-      {conversationVisible && gifOpen && gifEndpoint ? (
-        <Popover className="gif-popover" label="GIF picker" onClose={() => setGifOpen(false)}><GifPicker endpoint={gifEndpoint} onSelect={(gif) => { onSendGif(gif); setGifOpen(false); }} /></Popover>
-      ) : null}
-      {conversationVisible && stickerOpen ? (
-        <Popover className="sticker-tray" label="Sticker picker" onClose={() => setStickerOpen(false)}>
-          <header><strong>Sticker packs</strong><select aria-label="Sticker pack" value={stickerManifest} onChange={(event) => setStickerManifest(event.target.value)}>{stickerPacks.map((pack) => <option value={pack.manifestUrl} key={pack.manifestUrl}>{pack.name}</option>)}</select></header>
-          <div aria-busy={stickerStatus === 'loading'}>
-            {stickerStatus === 'loading' ? <p><span className="spinner" /> Loading stickers…</p> : stickerStatus === 'error' ? <p role="alert">This sticker pack could not be loaded.</p> : stickerPack.map((sticker) => (
-              <button
-                type="button"
-                key={`${sticker.id}:${sticker.src}`}
-                aria-label={`Send ${sticker.name}`}
-                onClick={() => {
-                  void onSendSticker(sticker);
-                  setStickerOpen(false);
-                }}
-              ><ResolvedStickerImage sticker={sticker} /></button>
-            ))}
-          </div>
-        </Popover>
-      ) : null}
-      {conversationVisible && emojiOpen ? (
-        <Popover className="emoji-tray" label="Emoji picker" onClose={() => setEmojiOpen(false)}>
-          <header><strong>Emoji</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
-          <label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input value={emojiQuery} placeholder="Search emoji" onChange={(event) => setEmojiQuery(event.target.value)} /></label>
-          <div>
-            {visibleEmojis.map((entry) => (
-              <button
-                type="button"
-                key={emojiReactionKey(entry)}
-                aria-label={entry.emoji ? `Insert ${entry.emoji}` : `Insert :${entry.id}:`}
-                title={entry.name}
-                onClick={() => {
-                  if (entry.emoji) {
-                    mainComposer.current?.insertText(entry.emoji);
-                    rememberEmoji(entry.emoji);
-                  } else if (entry.src) {
-                    const sticker = { id: entry.id, name: entry.name, src: entry.src };
-                    stageInlineSticker(sticker, draft);
-                  }
-                  setEmojiOpen(false);
-                  setEmojiQuery('');
-                }}
-              ><EmojiAsset entry={entry} /></button>
-            ))}
-          </div>
-        </Popover>
-      ) : null}
-      {colonResults.length ? (
-        <div className="colon-complete" role="listbox" aria-label="Emoji and sticker suggestions">
-          {colonResults.map((result, index) => (
-            <button
-              type="button"
-              role="option"
-              aria-selected={index === colonIndex % colonResults.length}
-              className={index === colonIndex % colonResults.length ? 'is-active' : ''}
-              key={result.type === 'emoji' ? emojiReactionKey(result) : `${result.id}:${result.src}`}
-              onMouseDown={(event) => {
-                event.preventDefault();
-                pickColonResult(result);
-              }}
-              onMouseEnter={() => setColonIndex(index)}
-            >
-              {result.type === 'emoji' ? (
-                <span className="colon-complete__emoji"><EmojiAsset entry={result} /></span>
-              ) : (
-                <span className="colon-complete__sticker"><ResolvedStickerImage sticker={result} /></span>
-              )}
-              <span className="colon-complete__name">
-                {result.type === 'emoji' && result.emoji ? `:${result.name.replace(/\s+/g, '')}:` : result.name}
-              </span>
-              {result.type === 'sticker' || (result.type === 'emoji' && !result.emoji) ? <small>inline emoji</small> : null}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      {mentionMatches.length ? <div className="mention-complete" role="listbox" aria-label="Mention a room member">
-        {mentionMatches.map((member, index) => <button
-          type="button"
-          role="option"
-          aria-selected={index === mentionIndex % mentionMatches.length}
-          className={index === mentionIndex % mentionMatches.length ? 'is-active' : ''}
-          key={member.id}
-          onMouseEnter={() => setMentionIndex(index)}
-          onClick={() => insertMention(member)}
-        ><Avatar name={member.displayName} src={member.avatarUrl} color={colorForId(member.id)} size="small" /><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}
-      </div> : null}
-      <form ref={composerForm} className="composer" onSubmit={submit} onKeyDown={(event) => {
-        if (event.key === 'Escape' && moreOpen) { event.preventDefault(); event.stopPropagation(); setMoreOpen(false); composerForm.current?.querySelector<HTMLButtonElement>('.composer__more')?.focus(); }
-      }}>
-        <input
-          ref={fileInput}
-          className="sr-only"
-          type="file"
-          aria-label="Choose attachment"
-          onChange={(event) => {
-            const file = event.target.files?.[0];
-            if (file) onUploadAttachment(file);
-            event.target.value = '';
-          }}
-        />
-        <label className="composer__field">
-          <span className="sr-only">Message {room.name}</span>
-          {codeDraft ? <span className="composer-code-preview" aria-label="Code block mode">{codeLanguage} code</span> : null}
-          <InlineComposer
-            ref={mainComposer}
-            ariaLabel={`Message ${room.name}`}
-            placeholder={`Message ${room.name}`}
-            value={{
-              text: draft,
-              tokens: inlineEmojis.map(({ name, ...emoji }) => ({ ...emoji, alt: name, title: name })),
-            }}
-            onChange={(nextValue) => {
-              const nextDraft = nextValue.text;
-              setSelectedMentions((current) => current.filter((mention) => hasVisibleComposerMention(nextDraft, mention.label)));
-              setInlineEmojis(nextValue.tokens.map(({ alt, title, ...token }) => ({
-                ...token,
-                name: alt ?? title ?? token.id,
-              })));
-              if (nextDraft === '```') {
-                setCodeDraftMode(true);
-                setCodeLanguage('text');
-                onDraftChange('');
-              } else {
-                onDraftChange(nextDraft);
-              }
-            }}
-            onSelectionChange={(selection) => setComposerCaret(selection?.end ?? draft.length)}
-            onKeyDown={handleKeyDown}
-            onSubmit={() => composerForm.current?.requestSubmit()}
-            onImagePaste={({ files }) => {
-              void (async () => {
-                if (files.length) {
-                  files.forEach((image) => uploadPastedImageFile(image));
-                  return;
-                }
-                const image = await readNativeClipboardImage();
-                if (image) uploadPastedImageFile(image);
-              })();
-            }}
-            onFocus={() => setComposerFocused(true)}
-            onBlur={() => setComposerFocused(false)}
-          />
-        </label>
-        <button type="button" className="icon-button composer__more" aria-label="More message tools" aria-expanded={moreOpen} onClick={() => setMoreOpen((open) => !open)}><Plus size={18} /></button>
-        <div aria-label="Message tools" className={`composer__actions${moreOpen ? ' is-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setMoreOpen(false); composerForm.current?.querySelector<HTMLButtonElement>('.composer__more')?.focus(); } }}>
-          <IconButton className="composer__attachment-more" label="Attach a file" onClick={() => fileInput.current?.click()}><Paperclip size={18} /></IconButton>
-          {gifEndpoint ? (
-            <IconButton label="Search GIFs" active={gifOpen} onClick={() => {
-            setGifOpen((open) => !open);
-            setStickerOpen(false);
-            setEmojiOpen(false);
-            }}><Film size={18} /></IconButton>
-          ) : null}
-          <IconButton
-            label="Open sticker pack"
-            active={stickerOpen}
-            onClick={() => {
-            if (!stickerOpen && defaultStickerPack && stickerPacks.some((pack) => pack.manifestUrl === defaultStickerPack)) {
-              setStickerManifest(defaultStickerPack);
-            }
-            setStickerOpen((open) => !open);
-            setEmojiOpen(false);
-            setGifOpen(false);
-            }}
-          ><Sticker size={18} /></IconButton>
-          <IconButton label="Add emoji" active={emojiOpen} onClick={() => {
-          setEmojiOpen((open) => !open);
-          setStickerOpen(false);
-          setGifOpen(false);
-          }}>
-            <Smile size={19} />
-          </IconButton>
-          <IconButton label="Send a nudge" onClick={() => onSendNudge?.()}><BellRing size={18} /></IconButton>
-          <select className="composer__code-language" aria-label="Code language" value={codeLanguage} onChange={(event) => { setCodeLanguage(event.target.value); onDraftChange(draft); }}>
-            <option value="text">Text</option><option value="typescript">TS</option><option value="javascript">JS</option><option value="python">Py</option><option value="rust">Rust</option><option value="bash">Bash</option><option value="json">JSON</option><option value="yaml">YAML</option>
-          </select>
-          <IconButton label="Insert code block" onClick={insertCodeBlock}><span aria-hidden="true">&lt;/&gt;</span></IconButton>
-          {codeDraft ? <IconButton label="Send code as file" onClick={sendCodeFile}><span aria-hidden="true">▤</span></IconButton> : null}
-        </div>
-        <button className="send-button" type="submit" aria-label="Send message" disabled={!draft.trim() || sending || sendingInlineEmojis}>
-          <Send size={17} />
-        </button>
-      </form>
+      <div className="conversation-composition">
+      {!composition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id }} /> : null}
+      <SharedComposer ref={mainComposer} key={room.id} contextKey={JSON.stringify([room.id, null])}
+        value={composition} onChange={onCompositionChange} onSubmit={onSubmit}
+        active={conversationVisible} sending={sending} members={members} roomName={room.name}
+        emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl} stickerPacks={stickerPacks}
+        defaultStickerPack={defaultStickerPack} gifEndpoint={gifEndpoint}
+        stageFiles={composition.edit ? undefined : (files, language) => onStageFiles(files, undefined, language)}
+        sendSticker={composition.edit ? undefined : async (sticker) => { await onSendSticker(sticker); }}
+        sendGif={composition.edit ? undefined : async (gif) => { await onSendGif(gif); }}
+        onNudge={composition.edit ? undefined : onSendNudge} onCancelContext={onCancelContext}
+        onEditLatest={() => { const message = [...messages].reverse().find((item) => item.actions?.edit ?? (item.isOwn && item.kind === 'text' && !item.pending && (!item.delivery || item.delivery === 'accepted') && !item.pendingEdit)); if (message) startEdit(message); }}
+        onSubmitted={(result) => { if (result !== 'edited') returnToLatest(); }}
+      />
+      </div>
     </main>
   );
-}
-
-function ResolvedStickerImage({ sticker }: { sticker: { name: string; src: string } }) {
-  const source = useMediaSource(sticker.src, 180);
-  return source ? <img src={source} alt="" /> : <span className="spinner" aria-label={`Loading ${sticker.name}`} />;
 }
 
 function MomentPreview({ message }: { message: MessageSummary }) {
@@ -4062,6 +2843,9 @@ function DetailsPanel({
 export function Workspace({
   workspace,
   draftStore,
+  structuredDraftStore,
+  draftScope,
+  onDraftStateChange,
   connectionNotice,
   config,
   theme,
@@ -4246,45 +3030,32 @@ export function Workspace({
   const contextMaximum = Math.max(260, Math.min(560, shellWidth - 66 - buddyWidth - 16 - 420));
   const contextWidth = Math.min(panelWidths.details, contextMaximum);
   const panelResizeStart = useRef<{ panel: 'buddies' | 'details'; x: number; width: number } | undefined>(undefined);
-  const [replyThreadRootId, setReplyThreadRootId] = useState<string>();
-  const [drafts, setDrafts] = useState<Record<string, string>>(() => draftStore?.read(workspace.user.id).rooms ?? {});
-  const [threadDrafts, setThreadDrafts] = useState<Record<string, string>>(() => draftStore?.read(workspace.user.id).threads ?? {});
-  useLayoutEffect(() => { draftStore?.write(workspace.user.id, drafts, threadDrafts); }, [draftStore, drafts, threadDrafts, workspace.user.id]);
-  const draftRevisions = useRef<Record<string, number>>({});
-  const threadDraftRevisions = useRef<Record<string, number>>({});
-  const [draftRevision, setDraftRevision] = useState(0);
-  const [threadDraftRevision, setThreadDraftRevision] = useState(0);
-  const mainSendInFlight = useRef(false);
-  const threadSendInFlight = useRef(false);
+  const [legacyDrafts] = useState(() => draftStore?.read(workspace.user.id));
+  const draftsState = useWorkspaceDrafts({ store: workspace.mode === 'matrix' ? structuredDraftStore : undefined, scope: workspace.mode === 'matrix' ? draftScope : undefined, userId: workspace.user.id,
+    initialRooms: legacyDrafts?.rooms, initialThreads: legacyDrafts?.threads,
+    threadRooms: Object.fromEntries(Object.entries(workspace.threadsByRoot).flatMap(([rootId, thread]) => {
+      const roomId = thread.roomId ?? thread.root?.roomId ?? thread.messages[0]?.roomId
+        ?? Object.entries(workspace.messagesByRoom).find(([, events]) => events.some((event) => event.id === rootId))?.[0];
+      return roomId ? [[rootId, roomId]] : [];
+    })),
+  });
   const composerNavigation = useRef(0);
-  const bumpDraft = useCallback((roomId?: string) => {
-    if (roomId) {
-      draftRevisions.current[roomId] = (draftRevisions.current[roomId] ?? 0) + 1;
-      setDraftRevision((current) => current + 1);
+  const sendsInFlight = useRef(new Set<string>());
+  useLayoutEffect(() => {
+    const rooms: Record<string, string> = {}, threads: Record<string, string> = {};
+    for (const record of draftsState.list) {
+      if (record.context.threadRootId) threads[record.context.threadRootId] = record.value.body;
+      else rooms[record.context.roomId] = record.value.body;
     }
-  }, []);
-  const bumpThreadDraft = useCallback((rootId?: string) => {
-    if (rootId) {
-      threadDraftRevisions.current[rootId] = (threadDraftRevisions.current[rootId] ?? 0) + 1;
-      setThreadDraftRevision((current) => current + 1);
-    }
-  }, []);
-  const changeDraft = useCallback((roomId: string, value: string) => {
-    bumpDraft(roomId);
-    setDrafts((current) => ({ ...current, [roomId]: value }));
-  }, [bumpDraft]);
-  const changeThreadDraft = useCallback((rootId: string, value: string) => {
-    bumpThreadDraft(rootId);
-    setThreadDrafts((current) => ({ ...current, [rootId]: value }));
-  }, [bumpThreadDraft]);
+    draftStore?.write(workspace.user.id, rooms, threads);
+  }, [draftStore, draftsState.list, workspace.user.id]);
   const [demoMessages, setDemoMessages] = useState(workspace.messagesByRoom);
+  const [demoMessageOverrides, setDemoMessageOverrides] = useState<Record<string, Partial<MessageSummary> | null>>({});
   const [demoThreadMessages, setDemoThreadMessages] = useState<Record<string, MessageSummary[]>>({});
-  const [sending, setSending] = useState(false);
-  const [threadSending, setThreadSending] = useState(false);
-  const [uploadInProgress, setUploadInProgress] = useState(false);
-  const uploadRunning = useRef(false);
-  const [failedUpload, setFailedUpload] = useState<{ file: File; roomId: string; threadRootId?: string; codeLanguage?: string }>();
+  const [mediaSends, setMediaSends] = useState<Record<string, number>>({});
+  const [sendingContexts, setSendingContexts] = useState(new Set<string>());
   const [notice, setNotice] = useState<string>();
+  const [draftListOpen, setDraftListOpen] = useState(false);
   const [nudgeActive, setNudgeActive] = useState(false);
   const latestNudgeId = useRef<string | undefined>(undefined);
   const lastNudgeSentAt = useRef(0);
@@ -4325,9 +3096,6 @@ export function Workspace({
     });
   }
   const [memberPowerOverrides, setMemberPowerOverrides] = useState<Record<string, Record<string, number>>>({});
-  const [replyTarget, setReplyTarget] = useState<MessageSummary>();
-  const [editingMessage, setEditingMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
-  const [editingThreadMessage, setEditingThreadMessage] = useState<{ message: MessageSummary; originalDraft: string }>();
   const typingTimer = useRef<number | undefined>(undefined);
   const lastTypingSentAt = useRef(0);
   const handledPushRoute = useRef<PushRoute | undefined>(undefined);
@@ -4366,14 +3134,6 @@ export function Workspace({
   const effectiveRoomId = visibleRooms.some((room) => room.id === selectedRoomId)
     ? selectedRoomId
     : visibleRooms[0]?.id;
-  const [compositionRoom, setCompositionRoom] = useState(effectiveRoomId);
-  if (compositionRoom !== effectiveRoomId) {
-    setCompositionRoom(effectiveRoomId);
-    setReplyTarget(undefined);
-    setReplyThreadRootId(undefined);
-    setEditingMessage(undefined);
-    setEditingThreadMessage(undefined);
-  }
   const selectedRoomBase = visibleRooms.find((room) => room.id === effectiveRoomId);
   const scopeSpace = activeSpaceSummary?.kind === 'matrix' && effectiveRoomId && activeSpaceSummary.roomIds.includes(effectiveRoomId)
     ? activeSpaceSummary
@@ -4394,7 +3154,7 @@ export function Workspace({
           : selectedRoomConfigured.background,
       }
     : undefined;
-  const messagesByRoom = workspace.mode === 'demo' ? demoMessages : workspace.messagesByRoom;
+  const messagesByRoom = useMemo(() => workspace.mode === 'demo' ? Object.fromEntries(Object.entries(demoMessages).map(([roomId, items]) => [roomId, items.filter((item) => demoMessageOverrides[item.id] !== null).map((item) => ({ ...item, ...demoMessageOverrides[item.id] }))])) : workspace.messagesByRoom, [workspace.mode, workspace.messagesByRoom, demoMessages, demoMessageOverrides]);
   const messages = useMemo(() => effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [], [effectiveRoomId, messagesByRoom]);
   const canReceiveLiveNudges = workspace.mode === 'demo' || Boolean(effectiveRoomId && workspace.historyByRoom?.[effectiveRoomId]?.mode === 'live');
   useEffect(() => {
@@ -4407,19 +3167,25 @@ export function Workspace({
     const stop = window.setTimeout(() => setNudgeActive(false), 520);
     return () => { window.clearTimeout(start); window.clearTimeout(stop); setNudgeActive(false); };
   }, [canReceiveLiveNudges, messages, preferences.motion, preferences.nudgeEffects]);
-  const activeThreadBase = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] : undefined;
+  const loadedThreadRoot = activeThreadRootId ? messages.find((item) => item.id === activeThreadRootId && !item.pending && (!item.delivery || item.delivery === 'accepted')) : undefined;
+  const activeThreadBase: ThreadSummary | undefined = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] ?? (loadedThreadRoot ? {
+    rootId: activeThreadRootId, roomId: loadedThreadRoot.roomId, root: loadedThreadRoot, rootStatus: 'found', messages: [], replyCount: 0,
+  } : undefined) : undefined;
   const activeThread = activeThreadBase && activeThreadRootId
     ? {
         ...activeThreadBase,
-        messages: [...activeThreadBase.messages, ...(demoThreadMessages[activeThreadRootId] ?? [])],
+        messages: [...activeThreadBase.messages, ...(demoThreadMessages[activeThreadRootId] ?? [])].filter((item) => demoMessageOverrides[item.id] !== null).map((item) => ({ ...item, ...demoMessageOverrides[item.id] })),
         replyCount: activeThreadBase.replyCount + (demoThreadMessages[activeThreadRootId]?.length ?? 0),
       }
     : undefined;
-  const activeThreadRoot = activeThreadBase?.root ?? (!activeThreadBase?.rootStatus && activeThreadRootId
+  const originalThreadRoot = activeThreadBase?.root ?? (!activeThreadBase?.rootStatus && activeThreadRootId
     ? messages.find((message) => message.id === activeThreadRootId)
     : undefined);
-  const draft = effectiveRoomId ? drafts[effectiveRoomId] ?? '' : '';
-  const threadDraft = activeThreadRootId ? threadDrafts[activeThreadRootId] ?? '' : '';
+  const activeThreadRoot = originalThreadRoot && demoMessageOverrides[originalThreadRoot.id] !== null ? { ...originalThreadRoot, ...demoMessageOverrides[originalThreadRoot.id] } : undefined;
+  const composition: StructuredDraft = effectiveRoomId ? draftsState.get({ roomId: effectiveRoomId }) : { body: '' };
+  const threadComposition: StructuredDraft = effectiveRoomId && activeThreadRootId ? draftsState.get({ roomId: effectiveRoomId, threadRootId: activeThreadRootId }) : { body: '' };
+  const editingMessage = composition.edit ? messages.find((message) => message.id === composition.edit!.id) : undefined;
+  const editingThreadMessage = threadComposition.edit ? activeThreadRoot?.id === threadComposition.edit.id ? activeThreadRoot : activeThread?.messages.find((message) => message.id === threadComposition.edit!.id) : undefined;
   useLayoutEffect(() => { composerNavigation.current += 1; }, [effectiveRoomId, activeThreadRootId, contextPanel, conversationVisible]);
   useLayoutEffect(() => { currentHistoryRoom.current = effectiveRoomId; }, [effectiveRoomId]);
   const selectedHistory = effectiveRoomId ? workspace.historyByRoom?.[effectiveRoomId] : undefined;
@@ -4547,10 +3313,6 @@ export function Workspace({
     setSelectedRoomId(roomId);
     navigateShell({ surface: 'conversation', roomId, spaceId, eventId, panel: contextDocked && shellRoute.panel === 'details' ? 'details' : null });
     setNotice(undefined);
-    setReplyTarget(undefined);
-    setReplyThreadRootId(undefined);
-    setEditingMessage(undefined);
-    setEditingThreadMessage(undefined);
     setActiveThreadRootId(undefined);
   }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
@@ -4720,70 +3482,69 @@ export function Workspace({
     finally { setFavoritePending((current) => { const next = new Set(current); next.delete(roomId); return next; }); }
   };
 
-  const uploadAttachment = async (file: File, threadRootId?: string, codeLanguage?: string, roomId = effectiveRoomId): Promise<boolean> => {
-    if (!roomId) return false;
-    if (workspace.mode === 'demo') {
-      const message: MessageSummary = {
-        id: `demo-code-file-${Date.now()}`,
-        roomId,
-        threadRootId,
-        senderId: workspace.user.id,
-        senderName: workspace.user.displayName,
-        body: file.name,
-        timestamp: Date.now(),
-        kind: 'media',
-        mediaKind: 'file',
-        mediaUrl: URL.createObjectURL(file),
-        mimeType: file.type,
-        codeFile: Boolean(codeLanguage),
-        codeLanguage,
-        isOwn: true,
-      };
-      if (threadRootId) setDemoThreadMessages((current) => ({ ...current, [threadRootId]: [...(current[threadRootId] ?? []), message] }));
-      else setDemoMessages((current) => ({ ...current, [roomId]: [...(current[roomId] ?? []), message] }));
-      return true;
-    }
-    if (!onUploadAttachment || uploadRunning.current) return false;
-    uploadRunning.current = true;
-    setSending(true);
-    setUploadInProgress(true);
-    setFailedUpload(undefined);
-    setNotice(`Encrypting ${file.name}…`);
-    let uploaded = false;
-    try {
-      const progress = (loaded: number, total: number) => {
-        const percent = total ? Math.min(100, Math.round((loaded / total) * 100)) : 0;
-        if (currentHistoryRoom.current === roomId) setNotice(`Uploading ${file.name} — ${percent}%`);
-      };
-      if (codeLanguage) {
-        await onUploadAttachment(roomId, file, progress, threadRootId, codeLanguage);
+  const [attachmentActions] = useState(() => new Map([['current', { onUploadAttachment, onCancelUpload, draftsState, workspace }]]));
+  useLayoutEffect(() => { attachmentActions.set('current', { onUploadAttachment, onCancelUpload, draftsState, workspace }); });
+  const [demoAttachmentUrls] = useState(() => new Set<string>());
+  const [attachmentQueue] = useState(() => new StagedAttachments({
+    maxBytes: config.media.maxUploadBytes,
+    send: async (context, file, progress, codeLanguage, options) => {
+      const actions = attachmentActions.get('current')!;
+      if (!actions.draftsState.isActive()) throw new Error('This draft account is no longer active.');
+      if (actions.workspace.mode === 'matrix') {
+        if (!actions.onUploadAttachment) throw new Error('Attachment sending is unavailable.');
+        await actions.onUploadAttachment(context.roomId, file, progress, context.threadRootId, codeLanguage, options);
       } else {
-        await onUploadAttachment(roomId, file, progress, threadRootId);
+        options.onPhase?.('uploading');
+        const mediaUrl = URL.createObjectURL(file); demoAttachmentUrls.add(mediaUrl);
+        const message: MessageSummary = { id: `demo-file-${crypto.randomUUID()}`, roomId: context.roomId, threadRootId: context.threadRootId,
+          senderId: actions.workspace.user.id, senderName: actions.workspace.user.displayName, body: options.caption || file.name, fileName: file.name,
+          timestamp: Date.now(), kind: 'media', mediaKind: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'file',
+          mediaUrl, mimeType: file.type, codeFile: Boolean(codeLanguage), codeLanguage, isOwn: true };
+        if (context.threadRootId) setDemoThreadMessages((current) => ({ ...current, [context.threadRootId!]: [...(current[context.threadRootId!] ?? []), message] }));
+        else setDemoMessages((current) => ({ ...current, [context.roomId]: [...(current[context.roomId] ?? []), message] }));
+        progress(file.size, file.size);
       }
-      if (currentHistoryRoom.current === roomId) setNotice(undefined);
-      uploaded = true;
-    } catch {
-      setFailedUpload({ file, roomId, threadRootId, codeLanguage });
-      if (currentHistoryRoom.current === roomId) setNotice('That attachment could not be encrypted and uploaded.');
-    } finally {
-      uploadRunning.current = false;
-      setUploadInProgress(false);
-      setSending(false);
+    },
+    cancel: (id) => attachmentActions.get('current')!.onCancelUpload?.(id),
+    persist: (context, attachments) => {
+      const state = attachmentActions.get('current')!.draftsState;
+      if (state.isActive()) state.update(context, { ...state.get(context), attachments });
+    },
+  }));
+  const restoredAttachmentIds = useRef(new Set<string>());
+  useEffect(() => {
+    if (!draftsState.active) { attachmentQueue.clear(); restoredAttachmentIds.current.clear(); return; }
+    for (const record of draftsState.list) {
+      const descriptors = (record.value.attachments ?? []).filter((item) => !restoredAttachmentIds.current.has(item.id));
+      if (descriptors.length) { for (const item of descriptors) restoredAttachmentIds.current.add(item.id); attachmentQueue.restore(record.context, descriptors); }
     }
-    return uploaded;
+  }, [attachmentQueue, draftsState.active, draftsState.list]);
+  useEffect(() => () => { attachmentQueue.clear(); for (const url of demoAttachmentUrls) URL.revokeObjectURL(url); }, [attachmentQueue, demoAttachmentUrls]);
+  const hasSavedDrafts = draftsState.list.length > 0;
+  const hasStagedFiles = draftsState.list.some((record) => Boolean(record.value.attachments?.length));
+  const filesSending = draftsState.list.some((record) => attachmentQueue.list(record.context).some((item) => ['queued', 'encrypting', 'uploading', 'sending'].includes(item.phase)));
+  const draftsVolatile = draftsState.status.mode === 'volatile' || Boolean(draftsState.writeIssue);
+  const anySending = Object.values(mediaSends).some(Boolean) || sendingContexts.size > 0 || filesSending;
+  useEffect(() => { onDraftStateChange?.({ hasDrafts: hasSavedDrafts, volatile: draftsVolatile, hasAttachments: hasStagedFiles, sending: anySending }); }, [onDraftStateChange, hasSavedDrafts, draftsVolatile, hasStagedFiles, anySending]);
+  const stageFiles = (files: File[], threadRootId?: string, codeLanguage?: string) => {
+    if (!effectiveRoomId || !draftsState.isActive()) return;
+    const errors = attachmentQueue.stage({ roomId: effectiveRoomId, ...(threadRootId ? { threadRootId } : {}) }, files, codeLanguage);
+    if (errors.length) setNotice(errors.join(' '));
   };
 
-  const sendGif = async (gif: GifChoice) => {
-    if (!effectiveRoomId) return;
-    setSending(true);
-    setNotice(`Uploading ${gif.title}…`);
+  const sendGif = async (gif: GifChoice, threadRootId?: string) => {
+    if (!effectiveRoomId || !draftsState.isActive()) throw new Error('This conversation is unavailable.');
+    const mediaKey = JSON.stringify({ roomId: effectiveRoomId, threadRootId });
+    setMediaSends((current) => ({ ...current, [mediaKey]: (current[mediaKey] ?? 0) + 1 }));
     try {
       if (workspace.mode === 'matrix') {
-        await onSendGif?.(effectiveRoomId, gif);
+        if (!onSendGif) throw new Error('GIF sending is unavailable.');
+        await onSendGif(effectiveRoomId, gif, threadRootId);
       } else {
         const message: MessageSummary = {
           id: `demo-gif-${Date.now()}`,
           roomId: effectiveRoomId,
+          threadRootId,
           senderId: workspace.user.id,
           senderName: workspace.user.displayName,
           body: gif.title,
@@ -4793,23 +3554,24 @@ export function Workspace({
           mediaUrl: gif.mediaUrl,
           isOwn: true,
         };
-        setDemoMessages((current) => ({ ...current, [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message] }));
+        if (threadRootId) setDemoThreadMessages((current) => ({ ...current, [threadRootId]: [...(current[threadRootId] ?? []), message] }));
+        else setDemoMessages((current) => ({ ...current, [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message] }));
       }
-      setNotice(undefined);
-    } catch {
-      setNotice('That GIF could not be downloaded and uploaded to Matrix.');
     } finally {
-      setSending(false);
+      setMediaSends((current) => ({ ...current, [mediaKey]: Math.max(0, (current[mediaKey] ?? 1) - 1) }));
     }
   };
 
-  const sendSticker = async (sticker: { id: string; name: string; src: string }) => {
-    if (!effectiveRoomId) return false;
+  const sendSticker = async (sticker: { id: string; name: string; src: string }, threadRootId?: string) => {
+    if (!effectiveRoomId || !draftsState.isActive()) throw new Error('This conversation is unavailable.');
+    const mediaKey = JSON.stringify({ roomId: effectiveRoomId, threadRootId });
+    setMediaSends((current) => ({ ...current, [mediaKey]: (current[mediaKey] ?? 0) + 1 }));
     try {
       if (workspace.mode === 'demo') {
         const message: MessageSummary = {
           id: `demo-sticker-${Date.now()}`,
           roomId: effectiveRoomId,
+          threadRootId,
           senderId: workspace.user.id,
           senderName: workspace.user.displayName,
           senderAvatarUrl: workspace.user.avatarUrl,
@@ -4819,18 +3581,15 @@ export function Workspace({
           mediaUrl: sticker.src,
           isOwn: true,
         };
-        setDemoMessages((current) => ({
-          ...current,
-          [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message],
-        }));
+        if (threadRootId) setDemoThreadMessages((current) => ({ ...current, [threadRootId]: [...(current[threadRootId] ?? []), message] }));
+        else setDemoMessages((current) => ({ ...current, [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message] }));
       } else {
-        if (!onSendSticker) return false;
-        await onSendSticker(effectiveRoomId, sticker);
+        if (!onSendSticker) throw new Error('Sticker sending is unavailable.');
+        await onSendSticker(effectiveRoomId, sticker, threadRootId);
       }
       return true;
-    } catch {
-      setNotice('That sticker could not be uploaded to Matrix.');
-      return false;
+    } finally {
+      setMediaSends((current) => ({ ...current, [mediaKey]: Math.max(0, (current[mediaKey] ?? 1) - 1) }));
     }
   };
 
@@ -4905,62 +3664,51 @@ export function Workspace({
     await onSetRoomMemberPower?.(roomId, userId, level);
   };
 
-  const handleStartReply = useCallback((message: MessageSummary) => {
-    if (!conversationVisible) closePanel();
-    bumpDraft(effectiveRoomId);
-    bumpThreadDraft(activeThreadRootId);
-    setReplyTarget(message);
-    setReplyThreadRootId(message.threadRootId ?? (message.isThreadRoot ? message.id : undefined));
-    setEditingMessage(undefined);
-    setEditingThreadMessage(undefined);
-  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, closePanel, conversationVisible, effectiveRoomId]);
+  const replyDescriptor = (message: MessageSummary, threadRootId?: string) => ({ id: message.id, senderId: message.senderId, senderName: message.senderName, body: message.body, ...(threadRootId ? { threadRootId } : {}) });
+  const handleStartReply = (message: MessageSummary, sourceThreadRootId?: string) => {
+    const threadRootId = sourceThreadRootId ?? message.threadRootId;
+    const context: DraftContext = { roomId: message.roomId, ...(threadRootId ? { threadRootId } : {}) };
+    const previous = draftsState.get(context);
+    draftsState.update(context, { ...(previous.edit?.originalDraft ?? previous), edit: undefined, reply: replyDescriptor(message, threadRootId) });
+    if (threadRootId) openPanel('thread', threadRootId); else if (!conversationVisible) closePanel();
+  };
+  const handleStartThread = (message: MessageSummary) => {
+    const rootId = message.threadRootId ?? message.id;
+    setActiveThreadRootId(rootId); setThreadCollapsed(false); openPanel('thread', rootId);
+  };
+  const startCompositionEdit = (message: MessageSummary, threadRootId?: string) => {
+    const context: DraftContext = { roomId: message.roomId, ...(threadRootId ? { threadRootId } : {}) };
+    const previous = draftsState.get(context);
+    const mentions = message.mentions?.map((mention) => ({ userId: mention.userId, label: mention.label.replace(/^@/, '') }));
+    draftsState.update(context, { body: message.body, mentions, attachments: previous.attachments,
+      edit: { id: message.id, body: message.body, mentions, originalDraft: previous.edit?.originalDraft ?? previous } });
+  };
+  const handleStartEdit = (message: MessageSummary) => startCompositionEdit(message);
+  const handleStartThreadEdit = (message: MessageSummary) => { if (activeThreadRootId) startCompositionEdit(message, activeThreadRootId); };
+  const cancelCompositionContext = (context: DraftContext) => {
+    const previous = draftsState.get(context);
+    draftsState.update(context, previous.edit?.originalDraft ?? { ...previous, reply: undefined, edit: undefined });
+  };
 
-  const handleStartThread = useCallback((message: MessageSummary) => {
-    if (!conversationVisible) closePanel();
-    bumpDraft(effectiveRoomId);
-    bumpThreadDraft(activeThreadRootId);
-    setReplyTarget(message);
-    setReplyThreadRootId(message.threadRootId ?? message.id);
-    setEditingMessage(undefined);
-    setEditingThreadMessage(undefined);
-  }, [activeThreadRootId, bumpDraft, bumpThreadDraft, closePanel, conversationVisible, effectiveRoomId]);
-
-  const handleStartEdit = useCallback((message: MessageSummary) => {
-    if (!effectiveRoomId) return;
-    bumpThreadDraft(activeThreadRootId);
-    setEditingMessage({ message, originalDraft: drafts[effectiveRoomId] ?? '' });
-    setEditingThreadMessage(undefined);
-    setReplyTarget(undefined);
-    setReplyThreadRootId(undefined);
-    changeDraft(effectiveRoomId, message.body);
-  }, [activeThreadRootId, bumpThreadDraft, changeDraft, drafts, effectiveRoomId]);
-
-  const handleStartThreadEdit = useCallback((message: MessageSummary) => {
-    if (!activeThreadRootId) return;
-    bumpDraft(effectiveRoomId);
-    setEditingThreadMessage({ message, originalDraft: threadDrafts[activeThreadRootId] ?? '' });
-    setEditingMessage(undefined);
-    setReplyTarget(undefined);
-    setReplyThreadRootId(undefined);
-    changeThreadDraft(activeThreadRootId, message.body);
-  }, [activeThreadRootId, bumpDraft, changeThreadDraft, effectiveRoomId, threadDrafts]);
-
-  const handleTogglePin = useCallback((message: MessageSummary) => {
+  const handleTogglePin = useCallback(async (message: MessageSummary) => {
     if (workspace.mode === 'matrix') {
-      void onTogglePinnedMessage?.(message.roomId, message.id, !message.pinned).catch(() =>
-        setNotice('Pinned messages could not be updated.'),
-      );
-    }
+      if (!onTogglePinnedMessage) throw new Error('Pinning is unavailable.');
+      await onTogglePinnedMessage(message.roomId, message.id, !message.pinned);
+    } else setDemoMessageOverrides((current) => ({ ...current, [message.id]: { ...current[message.id], pinned: !message.pinned } }));
   }, [workspace.mode, onTogglePinnedMessage]);
 
-  const handleDeleteMessage = useCallback((message: MessageSummary) => {
-    if (workspace.mode === 'matrix' && onRedactMessage) setDeleteTarget(message);
-  }, [workspace.mode, onRedactMessage]);
+  const handleDeleteMessage = useCallback((message: MessageSummary) => { setDeleteTarget(message); }, []);
 
-  const handleReact = useCallback((message: MessageSummary, key: string, ownReactionEventId?: string) => {
+  const handleReact = useCallback(async (message: MessageSummary, key: string, ownReactionEventId?: string) => {
     if (workspace.mode === 'matrix') {
-      void onToggleReaction?.(message.roomId, message.id, key, ownReactionEventId).catch(() => setNotice('That reaction could not be updated. Try again.'));
-    }
+      if (!onToggleReaction) throw new Error('Reactions are unavailable.');
+      await onToggleReaction(message.roomId, message.id, key, ownReactionEventId);
+    } else setDemoMessageOverrides((current) => {
+      const reactions = [...(current[message.id]?.reactions ?? message.reactions ?? [])];
+      const previous = reactions.find((item) => item.key === key);
+      const next = previous ? { ...previous, reacted: !previous.reacted, count: previous.count + (previous.reacted ? -1 : 1) } : { key, count: 1, reacted: true };
+      return { ...current, [message.id]: { ...current[message.id], reactions: [...reactions.filter((item) => item.key !== key), next].filter((item) => item.count > 0) } };
+    });
   }, [workspace.mode, onToggleReaction]);
 
   const applyPreferences = (nextPreferences: UserPreferences) => {
@@ -4970,182 +3718,60 @@ export function Workspace({
     onPreferencesChange(nextPreferences);
   };
 
-  const submitMessage = async (
-    draftOverride?: string,
-    mentions: ComposerMention[] = [],
-    inlineEmojis: ComposerInlineEmoji[] = [],
-  ): Promise<ComposerSubmitResult> => {
-    if (!effectiveRoomId || !draft.trim() || mainSendInFlight.current) return false;
-    mainSendInFlight.current = true;
-    const roomId = effectiveRoomId;
-    const revision = draftRevisions.current[roomId] ?? 0;
+  const submitComposition = async (context: DraftContext, bodyOverride?: string, mentions: ComposerMention[] = [], inlineEmojis: ComposerInlineEmoji[] = []): Promise<ComposerSubmitResult> => {
+    const submitted = draftsState.capture(context);
+    const body = (bodyOverride ?? submitted.value.body).trim();
+    const key = JSON.stringify(context);
+    if (!body || !draftsState.isActive() || sendsInFlight.current.has(key)) return false;
+    sendsInFlight.current.add(key);
     const navigation = composerNavigation.current;
-    const unchanged = () => (draftRevisions.current[roomId] ?? 0) === revision;
-    const current = () => unchanged() && composerNavigation.current === navigation;
-    const clearSubmittedDraft = () => setDrafts((draftValues) => unchanged() ? { ...draftValues, [roomId]: '' } : draftValues);
-    const clearSubmittedContext = () => {
-      if (!current()) return;
-      setReplyTarget(undefined);
-      setReplyThreadRootId(undefined);
-      setEditingMessage(undefined);
-    };
-    const body = (draftOverride ?? draft).trim();
-    setSending(true);
-    setNotice(undefined);
-
-    let sentMessage = false;
+    const setPending = (pending: boolean) => setSendingContexts((current) => { const next = new Set(current); if (pending) next.add(key); else next.delete(key); return next; });
+    setPending(true); setNotice(undefined);
+    const edit = submitted.value.edit, reply = submitted.value.reply;
+    const finish = () => draftsState.finish(submitted, edit?.originalDraft);
     try {
-      if (workspace.mode === 'matrix' && (editingMessage ? !onEditMessage : replyTarget ? !onSendReply : !onSendMessage)) {
-        throw new Error('This message action is unavailable.');
-      }
-      if (editingMessage) {
-        if (workspace.mode === 'demo') {
-          setDemoMessages((current) => ({
-            ...current,
-            [effectiveRoomId]: (current[effectiveRoomId] ?? []).map((message) =>
-              message.id === editingMessage.message.id ? { ...message, body, edited: true } : message,
-            ),
-          }));
-        } else if (onEditMessage) {
-          if (inlineEmojis.length) await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions, inlineEmojis);
-          else await onEditMessage(effectiveRoomId, editingMessage.message.id, body, mentions);
+      if (workspace.mode === 'demo') {
+        if (edit) setDemoMessageOverrides((current) => ({ ...current, [edit.id]: { ...current[edit.id], body, edited: true, mentions, mentionUserIds: mentions.map((mention) => mention.userId) } }));
+        const apply = (current: Record<string, MessageSummary[]>, id: string) => ({ ...current, [id]: edit
+          ? current[id] ?? []
+          : [...(current[id] ?? []), { id: `demo-${crypto.randomUUID()}`, roomId: context.roomId, threadRootId: context.threadRootId,
+            senderId: workspace.user.id, senderName: workspace.user.displayName, senderAvatarUrl: workspace.user.avatarUrl,
+            body, timestamp: Date.now(), kind: 'text' as const, isOwn: true, mentions, mentionUserIds: mentions.map((mention) => mention.userId),
+            ...(reply ? { replyTo: { eventId: reply.id, senderName: reply.senderName, body: reply.body } } : {}) }] });
+        if (context.threadRootId) setDemoThreadMessages((current) => apply(current, context.threadRootId!)); else setDemoMessages((current) => apply(current, context.roomId));
+      } else if (edit) {
+        if (!onEditMessage) throw new Error('Editing is unavailable.');
+        if (inlineEmojis.length) await onEditMessage(context.roomId, edit.id, body, mentions, inlineEmojis); else await onEditMessage(context.roomId, edit.id, body, mentions);
+      } else if (reply) {
+        if (!onSendReply) throw new Error('Replies are unavailable.');
+        const target = { id: reply.id, senderId: reply.senderId, body: reply.body, threadRootId: context.threadRootId ?? reply.threadRootId };
+        if (inlineEmojis.length) await onSendReply(context.roomId, body, target, mentions, inlineEmojis); else await onSendReply(context.roomId, body, target, mentions);
+      } else if (context.threadRootId) {
+        if (onSendThreadMessage) {
+          if (inlineEmojis.length) await onSendThreadMessage(context.roomId, context.threadRootId, body, mentions, inlineEmojis); else await onSendThreadMessage(context.roomId, context.threadRootId, body, mentions);
+        } else if (onSendReply && activeThreadRoot) {
+          const target = { id: context.threadRootId, senderId: activeThreadRoot.senderId, body: activeThreadRoot.body, threadRootId: context.threadRootId };
+          if (inlineEmojis.length) await onSendReply(context.roomId, body, target, mentions, inlineEmojis); else await onSendReply(context.roomId, body, target, mentions);
         }
-      } else if (workspace.mode === 'demo') {
-        const message: MessageSummary = {
-          id: `demo-${Date.now()}`,
-          roomId: effectiveRoomId,
-          senderId: workspace.user.id,
-          senderName: workspace.user.displayName,
-          senderAvatarUrl: workspace.user.avatarUrl,
-          body,
-          timestamp: Date.now(),
-          kind: 'text',
-          isOwn: true,
-          mentionUserIds: mentions.map((mention) => mention.userId),
-          mentions,
-        };
-        setDemoMessages((current) => ({
-          ...current,
-          [effectiveRoomId]: [...(current[effectiveRoomId] ?? []), message],
-        }));
-        sentMessage = true;
-      } else if (replyTarget && onSendReply) {
-        const threadRootId = replyThreadRootId ?? replyTarget.threadRootId;
-        const target = {
-          id: replyTarget.id,
-          senderId: replyTarget.senderId,
-          body: replyTarget.body,
-          threadRootId,
-        };
-        if (inlineEmojis.length) await onSendReply(effectiveRoomId, body, target, mentions, inlineEmojis);
-        else await onSendReply(effectiveRoomId, body, target, mentions);
-        sentMessage = true;
-      } else if (onSendMessage) {
-        if (inlineEmojis.length) await onSendMessage(effectiveRoomId, body, mentions, inlineEmojis);
-        else if (mentions.length) await onSendMessage(effectiveRoomId, body, mentions);
-        else await onSendMessage(effectiveRoomId, body);
-        sentMessage = true;
+        else throw new Error('Thread replies are unavailable.');
+      } else {
+        if (!onSendMessage) throw new Error('Sending is unavailable.');
+        if (inlineEmojis.length) await onSendMessage(context.roomId, body, mentions, inlineEmojis); else if (mentions.length) await onSendMessage(context.roomId, body, mentions); else await onSendMessage(context.roomId, body);
       }
-      clearSubmittedDraft();
-      clearSubmittedContext();
-      if (unchanged() && preferences.sendTypingNotifications) void onSendTyping?.(roomId, false);
-      return unchanged() ? sentMessage ? 'sent' : 'edited' : false;
+      const cleared = finish();
+      if (cleared && !context.threadRootId && preferences.sendTypingNotifications) void onSendTyping?.(context.roomId, false);
+      return cleared ? edit ? 'edited' : 'sent' : false;
     } catch (error) {
       const retained = error instanceof MessageSendError && error.localEchoRetained;
-      if (retained) {
-        clearSubmittedDraft();
-        clearSubmittedContext();
-      }
-      if (composerNavigation.current === navigation) {
-        setNotice(retained
-          ? 'That message did not send. Use Retry on the failed message. Any newer draft stays here.'
-          : 'That message did not send. Your draft is still here.');
-      }
-      if (retained && unchanged()) return 'retained';
-      return false;
-    } finally {
-      mainSendInFlight.current = false;
-      setSending(false);
-    }
+      const cleared = retained && finish();
+      if (composerNavigation.current === navigation) setNotice(retained ? 'That message did not send. Use Retry on the failed message. Any newer draft stays here.' : 'That message did not send. Your draft is still here.');
+      return cleared ? 'retained' : false;
+    } finally { sendsInFlight.current.delete(key); setPending(false); }
   };
-
-  const submitThreadMessage = async (mentions: ComposerMention[] = []): Promise<ComposerSubmitResult> => {
-    if (!effectiveRoomId || !activeThreadRootId || !threadDraft.trim() || threadSendInFlight.current) return false;
-    threadSendInFlight.current = true;
-    const rootId = activeThreadRootId;
-    const revision = threadDraftRevisions.current[rootId] ?? 0;
-    const navigation = composerNavigation.current;
-    const unchanged = () => (threadDraftRevisions.current[rootId] ?? 0) === revision;
-    const current = () => unchanged() && composerNavigation.current === navigation;
-    const clearSubmittedDraft = () => setThreadDrafts((draftValues) => unchanged() ? { ...draftValues, [rootId]: '' } : draftValues);
-    const body = threadDraft.trim();
-    setThreadSending(true);
-    setNotice(undefined);
-    try {
-      if (workspace.mode === 'matrix' && (editingThreadMessage ? !onEditMessage : (!onSendThreadMessage && (!onSendReply || !activeThreadRoot)))) {
-        throw new Error('This thread action is unavailable.');
-      }
-      if (editingThreadMessage) {
-        if (workspace.mode === 'demo') {
-          setDemoThreadMessages((current) => ({
-            ...current,
-            [rootId]: (current[rootId] ?? []).map((message) =>
-              message.id === editingThreadMessage.message.id ? { ...message, body, edited: true } : message,
-            ),
-          }));
-        } else if (onEditMessage) {
-          await onEditMessage(effectiveRoomId, editingThreadMessage.message.id, body, mentions);
-        }
-      } else if (workspace.mode === 'demo') {
-        const message: MessageSummary = {
-          id: `demo-thread-${Date.now()}`,
-          roomId: effectiveRoomId,
-          senderId: workspace.user.id,
-          senderName: workspace.user.displayName,
-          senderAvatarUrl: workspace.user.avatarUrl,
-          body,
-          timestamp: Date.now(),
-          kind: 'text',
-          isOwn: true,
-          threadRootId: rootId,
-          mentionUserIds: mentions.map((mention) => mention.userId),
-          mentions,
-        };
-        setDemoThreadMessages((current) => ({
-          ...current,
-          [rootId]: [...(current[rootId] ?? []), message],
-        }));
-      } else if (onSendThreadMessage) {
-        await onSendThreadMessage(effectiveRoomId, rootId, body, mentions);
-      } else if (onSendReply && activeThreadRoot) {
-        await onSendReply(effectiveRoomId, body, {
-          id: rootId,
-          senderId: activeThreadRoot.senderId,
-          body: activeThreadRoot.body,
-          threadRootId: rootId,
-        }, mentions);
-      }
-      clearSubmittedDraft();
-      if (current()) setEditingThreadMessage(undefined);
-      return unchanged() ? editingThreadMessage ? 'edited' : 'sent' : false;
-    } catch (error) {
-      const retained = error instanceof MessageSendError && error.localEchoRetained;
-      if (retained) {
-        clearSubmittedDraft();
-        if (current()) setEditingThreadMessage(undefined);
-      }
-      if (composerNavigation.current === navigation) {
-        setNotice(retained
-          ? 'That thread reply did not send. Use Retry on the failed message. Any newer draft stays here.'
-          : 'That thread reply did not send. Your draft is still here.');
-      }
-      if (retained && unchanged()) return 'retained';
-      return false;
-    } finally {
-      threadSendInFlight.current = false;
-      setThreadSending(false);
-    }
-  };
+  const submitMessage = (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => effectiveRoomId
+    ? submitComposition({ roomId: effectiveRoomId }, body, mentions, inlineEmojis) : Promise.resolve(false as const);
+  const submitThreadMessage = (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => effectiveRoomId && activeThreadRootId
+    ? submitComposition({ roomId: effectiveRoomId, threadRootId: activeThreadRootId }, body, mentions, inlineEmojis) : Promise.resolve(false as const);
 
   const setPanelCollapsed = (panel: WorkspacePanelId, collapsed: boolean) => {
     setCollapsedPanels((current) => {
@@ -5226,6 +3852,15 @@ export function Workspace({
       event.preventDefault();
       void openMatrixLink(value).catch(() => { setNotice('This Matrix link could not be opened. Use Open Matrix link in the quick switcher to check access or start a conversation.'); });
     }} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}${contextPanel ? ' context-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented && contextPanel && !(event.target as HTMLElement).closest('dialog,[role=dialog]')) { event.preventDefault(); closePanel(); } }}>
+      {draftListOpen ? <DraftList durable={!draftsVolatile} drafts={draftsState.list} rooms={workspace.rooms} onClose={() => setDraftListOpen(false)} onOpen={(context) => {
+        setDraftListOpen(false);
+        const space = workspace.spaces.find((candidate) => candidate.roomIds.includes(context.roomId));
+        selectRoom(context.roomId, space?.id ?? activeSpace);
+        if (context.threadRootId) {
+          setActiveThreadRootId(context.threadRootId); setThreadCollapsed(false);
+          navigateShell({ spaceId: space?.id ?? activeSpace, roomId: context.roomId, surface: 'context', panel: 'thread', threadRootId: context.threadRootId });
+        }
+      }} /> : null}
       {navigationDialog === 'switcher' ? <QuickSwitcher workspace={{ ...workspace, rooms: workspace.rooms.map((room) => ({ ...room, ...roomOverrides[room.id] })) }} recents={recents} onSelect={chooseDestination} onClose={() => setNavigationDialog(undefined)}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
           <button className="aqua-button" style={{ minHeight: 44 }} type="button" disabled={!canGoBack} onClick={() => { setNavigationDialog(undefined); shellBack(); }}><ArrowLeft size={14} /> Back</button>
@@ -5236,7 +3871,7 @@ export function Workspace({
           {notice === 'No other unread conversations. You’re all caught up!' ? <p role="status" style={{ margin: 0 }}>{notice}</p> : null}
         </div>
       </QuickSwitcher> : navigationDialog ? <NavigationDialogs kind={navigationDialog} onClose={() => setNavigationDialog(undefined)} onOpenLink={openMatrixLink} onStartConversation={onCreateDirectRoom ? async (userId) => { const id = await onCreateDirectRoom(userId); selectRoom(id, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace); } : undefined} /> : null}
-      <section className={`aimtrix-window${connectionNotice ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
+      <section className={`aimtrix-window${connectionNotice || structuredDraftStore || draftsState.list.length ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
           <button className="icon-button" type="button" aria-label="Quick switcher" title="Quick switcher" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setNavigationDialog('switcher')}><Search size={18} /></button>
           <div className="app-titlebar__identity">
@@ -5264,7 +3899,12 @@ export function Workspace({
           {unreadTotal ? <span className="titlebar-unread">{unreadTotal} unread</span> : null}
         </header>
 
-        {connectionNotice}
+        {(connectionNotice || structuredDraftStore || draftsState.list.length > 0) ? <div className="workspace-notices">{connectionNotice}
+        {(structuredDraftStore || draftsState.list.length > 0) ? <div className="session-connection-banner" role="status">
+          <button className="aqua-button" type="button" onClick={() => setDraftListOpen(true)}>Drafts ({draftsState.list.length})</button>
+          <span>{!draftsState.active ? 'Draft access ended. Sign in again to continue.' : draftsState.writeIssue === 'conflict' ? 'Another tab changed this draft. Your unsaved version stays in this tab.' : draftsState.writeIssue ? 'This draft could not be saved. Your text stays in this tab.' : draftsState.status.mode === 'persistent' ? 'Drafts saved on this device.' : 'Drafts stay in this tab. Reloading or closing it can lose changes.'}</span>
+        </div> : null}
+        </div> : null}
         <div
           className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
           style={{
@@ -5279,6 +3919,7 @@ export function Workspace({
           />
           {collapsedPanels.buddies ? <button className="workspace-collapsed-panel workspace-collapsed-panel--buddies" type="button" aria-label="Expand rooms" title="Expand rooms" onClick={() => setPanelCollapsed('buddies', false)}><Users size={18} /></button> : <BuddyPanel
             workspace={scopedWorkspace}
+            draftRoomIds={new Set(draftsState.list.map((record) => record.context.roomId))}
             selectedRoomId={effectiveRoomId}
             scopeName={activeSpaceSummary?.name ?? 'Conversations'}
             scopeSpace={activeSpaceSummary}
@@ -5333,42 +3974,28 @@ export function Workspace({
             onCloseThreadHistory={onCloseThreadHistory}
             onThreadContext={(eventId) => openPanel('thread', activeThreadRootId, eventId)}
             threadCollapsed={threadCollapsed}
-            draft={draft}
-            threadDraft={threadDraft}
-            draftRevision={draftRevision}
-            threadDraftRevision={threadDraftRevision}
-            sending={sending}
-            threadSending={threadSending}
-            notice={notice ?? (failedUpload?.roomId === effectiveRoomId ? 'That attachment could not be encrypted and uploaded.' : undefined)}
-            uploadInProgress={uploadInProgress}
-            failedUploadName={failedUpload && failedUpload.roomId === effectiveRoomId ? failedUpload.file.name : undefined}
+            composition={composition}
+            threadComposition={threadComposition}
+            attachmentQueue={attachmentQueue}
+            onStageFiles={stageFiles}
+            sending={Boolean(mediaSends[JSON.stringify({ roomId: effectiveRoomId })]) || sendingContexts.has(JSON.stringify({ roomId: effectiveRoomId }))}
+            threadSending={Boolean(mediaSends[JSON.stringify({ roomId: effectiveRoomId, threadRootId: activeThreadRootId })]) || sendingContexts.has(JSON.stringify({ roomId: effectiveRoomId, threadRootId: activeThreadRootId }))}
+            notice={notice}
             onBack={shellBack}
-            replyTarget={replyTarget}
-            editingMessage={editingMessage?.message}
-            editingThreadMessage={editingThreadMessage?.message}
-            onDraftChange={(nextDraft) => {
+            editingMessage={editingMessage}
+            editingThreadMessage={editingThreadMessage}
+            onCompositionChange={(next) => {
               if (!effectiveRoomId) return;
-              changeDraft(effectiveRoomId, nextDraft);
+              draftsState.update({ roomId: effectiveRoomId }, next);
               if (workspace.mode === 'matrix' && preferences.sendTypingNotifications) {
                 const now = Date.now();
-                if (nextDraft && now - lastTypingSentAt.current > 4000) {
-                  lastTypingSentAt.current = now;
-                  void onSendTyping?.(effectiveRoomId, true);
-                } else if (!nextDraft) {
-                  lastTypingSentAt.current = 0;
-                  void onSendTyping?.(effectiveRoomId, false);
-                }
+                if (next.body && now - lastTypingSentAt.current > 4000) { lastTypingSentAt.current = now; void onSendTyping?.(effectiveRoomId, true); }
+                else if (!next.body) { lastTypingSentAt.current = 0; void onSendTyping?.(effectiveRoomId, false); }
                 if (typingTimer.current !== undefined) window.clearTimeout(typingTimer.current);
-                typingTimer.current = window.setTimeout(() => {
-                  lastTypingSentAt.current = 0;
-                  void onSendTyping?.(effectiveRoomId, false);
-                }, 5000);
+                typingTimer.current = window.setTimeout(() => { lastTypingSentAt.current = 0; void onSendTyping?.(effectiveRoomId, false); }, 5000);
               }
             }}
-            onThreadDraftChange={(nextDraft) => {
-              if (!activeThreadRootId) return;
-              changeThreadDraft(activeThreadRootId, nextDraft);
-            }}
+            onThreadCompositionChange={(next) => { if (effectiveRoomId && activeThreadRootId) draftsState.update({ roomId: effectiveRoomId, threadRootId: activeThreadRootId }, next); }}
             onSubmit={submitMessage}
             onThreadSubmit={submitThreadMessage}
             onToggleDetails={() => detailsOpen ? closePanel() : openPanel('details')}
@@ -5389,29 +4016,12 @@ export function Workspace({
             onDeleteMessage={handleDeleteMessage}
             onRetryMessage={onRetryMessage}
             onCancelMessage={onCancelMessage}
-            onCancelContext={() => {
-              bumpDraft(effectiveRoomId);
-              if (editingMessage && effectiveRoomId) {
-                changeDraft(effectiveRoomId, editingMessage.originalDraft);
-              }
-              setReplyTarget(undefined);
-              setReplyThreadRootId(undefined);
-              setEditingMessage(undefined);
-            }}
-            onCancelThreadEdit={() => {
-              bumpThreadDraft(activeThreadRootId);
-              if (editingThreadMessage && activeThreadRootId) {
-                changeThreadDraft(activeThreadRootId, editingThreadMessage.originalDraft);
-              }
-              setEditingThreadMessage(undefined);
-            }}
+            onCancelContext={() => { if (effectiveRoomId) cancelCompositionContext({ roomId: effectiveRoomId }); }}
+            onCancelThreadEdit={() => { if (effectiveRoomId && activeThreadRootId) cancelCompositionContext({ roomId: effectiveRoomId, threadRootId: activeThreadRootId }); }}
             onReact={handleReact}
             emojiPacks={availableEmojiPacks}
             emojiAssetBaseUrl={config.emojiPacks.assetBaseUrl}
             onSendSticker={sendSticker}
-            onUploadAttachment={(file, threadRootId, codeLanguage) => uploadAttachment(file, threadRootId, codeLanguage)}
-            onCancelUpload={() => onCancelUpload?.()}
-            onRetryUpload={() => { if (failedUpload) void uploadAttachment(failedUpload.file, failedUpload.threadRootId, failedUpload.codeLanguage, failedUpload.roomId); }}
             onLoadMore={onLoadRoomHistory ? paginateCurrentRoom : undefined}
             onOpenContext={onOpenEventContext ? openCurrentEventContext : undefined}
             onReturnToLive={onReturnToLive ? returnCurrentRoomToLive : undefined}
@@ -5420,19 +4030,19 @@ export function Workspace({
             onReadThread={workspace.mode === 'matrix' && onMarkThreadRead && effectiveRoomId && activeThreadRootId ? (eventId) => onMarkThreadRead(effectiveRoomId, activeThreadRootId, { eventId }) : undefined}
             onMarkUnread={workspace.mode === 'matrix' && onMarkRoomUnread && effectiveRoomId ? (eventId) => onMarkRoomUnread(effectiveRoomId, eventId) : undefined}
             onMarkRead={workspace.mode === 'matrix' && onMarkRoomRead && effectiveRoomId ? (eventId) => onMarkRoomRead(effectiveRoomId, { eventId, explicit: true }) : undefined}
-            onSendNudge={() => {
+            onSendNudge={onSendNudge ? () => {
               if (!effectiveRoomId || !onSendNudge) return;
               if (Date.now() - lastNudgeSentAt.current < 5_000) {
                 setNotice('Please wait a few seconds before sending another nudge.');
                 return;
               }
               lastNudgeSentAt.current = Date.now();
-              void onSendNudge(effectiveRoomId).catch(() => setNotice('That nudge could not be sent.'));
-            }}
+              return onSendNudge(effectiveRoomId);
+            } : undefined}
             gifEndpoint={config.features.gifs ? config.gifProvider?.searchEndpoint : undefined}
             stickerPacks={availableStickerPacks}
             defaultStickerPack={profilePersonalization.defaultStickerPack}
-            onSendGif={(gif) => void sendGif(gif)}
+            onSendGif={(gif, threadRootId) => sendGif(gif, threadRootId)}
             callsEnabled={config.features.calls}
             onStartCall={(video) => {
               if (selectedRoom) void onStartCall?.(selectedRoom.id, video);
@@ -5510,7 +4120,7 @@ export function Workspace({
           </Dialog>
         ) : null}
 
-        {deleteTarget ? <ConfirmDialog title="Delete this message?" description="This removes the message for everyone in the room. This cannot be undone." actionLabel="Delete message" onClose={() => setDeleteTarget(undefined)} onConfirm={async () => { await onRedactMessage?.(deleteTarget.roomId, deleteTarget.id); setNotice('Message deleted.'); }} /> : null}
+        {deleteTarget ? <ConfirmDialog title="Delete this message?" description="This removes the message for everyone in the room. This cannot be undone." actionLabel="Delete message" onClose={() => setDeleteTarget(undefined)} onConfirm={async () => { if (workspace.mode === 'demo') setDemoMessageOverrides((current) => ({ ...current, [deleteTarget.id]: null })); else { if (!onRedactMessage) throw new Error('Deletion is unavailable.'); await onRedactMessage(deleteTarget.roomId, deleteTarget.id); } setNotice('Message deleted.'); }} /> : null}
         {settingsOpen ? (
           <SettingsDialog
             user={workspace.user}

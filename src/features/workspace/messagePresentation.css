@@ -1,0 +1,25 @@
+@layer reset, tokens, base, components, layout, responsive;
+@layer layout {
+  .timeline-message .timeline-message__content code { color:var(--text) }
+  :root[data-theme="midnight"] .timeline-message :is(.message-mention,header strong) { color:var(--text) }
+  .message-code { --code-keyword:#85378c;--code-string:#8e450d }
+  :root[data-theme="midnight"] .message-code { --code-keyword:#dcb3ee;--code-string:#ffc68b }
+  .timeline-message .message-code header { color:var(--text-soft) }
+  .timeline-message .message-code button { color:var(--text) }
+  .message-spoiler > button,.message-emoticon-load { color:var(--text);background:var(--surface-soft);border:1px solid var(--border);border-radius:5px;padding:3px 7px;font:inherit }
+  .message-spoiler > span:not([hidden]) { margin-inline-start:6px }
+  .message-kind--text blockquote,.message-kind--notice blockquote,.message-kind--emote blockquote { margin:6px 0;padding:4px 10px;border-inline-start:3px solid var(--border) }
+  .message-kind--text ul,.message-kind--text ol,.message-kind--notice ul,.message-kind--notice ol,.message-kind--emote ul,.message-kind--emote ol { padding-inline-start:24px;margin:6px 0 }
+  .message-unsupported { border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--text-soft) }
+  .message-action-menu { position:fixed;z-index:1200;display:grid;gap:2px;min-width:190px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;padding:6px;border:1px solid var(--border);border-radius:9px;background:var(--surface-raised);box-shadow:var(--shadow) }
+  .message-action-menu button { display:flex;align-items:center;gap:8px;min-height:36px;padding:6px 10px;border:0;border-radius:5px;color:var(--text);background:transparent;font:inherit;text-align:left }
+  .message-action-menu button:hover,.message-action-menu button:focus-visible { background:var(--blue-soft) }
+  .message-actions button[aria-disabled="true"] { opacity:.55 }
+  .message-action-feedback { display:block;margin:4px 0;color:var(--text-soft);font-size:.75rem }
+  .timeline-message--root { margin-bottom:8px;border-bottom:1px solid var(--border) }
+  @media (pointer:coarse) {
+    .timeline-message .message-actions { position:static;opacity:1;grid-column:1/-1;flex-wrap:wrap;justify-self:start;max-width:100%;margin-top:5px }
+    .timeline-message .message-actions button { min-width:44px;min-height:44px }
+    .message-action-menu button,.message-spoiler > button,.message-emoticon-load { min-height:44px }
+  }
+}

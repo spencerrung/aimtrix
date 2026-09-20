@@ -6,7 +6,8 @@ import type {
   Room,
   SyncState,
 } from 'matrix-js-sdk';
-import type { RoomMessageEventContent } from 'matrix-js-sdk/lib/@types/events.js';
+import type { RoomMessageEventContent, StickerEventContent } from 'matrix-js-sdk/lib/@types/events.js';
+import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
 import { MARKED_UNREAD_EVENT, UNREAD_RETURN_POINT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
@@ -36,6 +37,7 @@ import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWor
 import { resolveHomeserver } from './discovery';
 import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
+import { AttachmentSender, type AttachmentSendOptions } from './AttachmentSender';
 import { isMatrixNavigationTarget, type MatrixNavigationTarget } from './matrixLinks';
 import { RoomHistory } from './RoomHistory';
 import { ThreadHistory } from './ThreadHistory';
@@ -247,7 +249,7 @@ export class MatrixController {
   private activeCall?: MatrixCall;
   private callSummary?: CallSummary;
   private callDevices = { microphoneId: '', cameraId: '' };
-  private uploadAbortController?: AbortController;
+  private readonly attachmentSender: AttachmentSender;
   private inMemoryRecoveryKey?: Uint8Array<ArrayBuffer>;
   private personalizationLoaded = false;
   private personalizationSaveTimer?: number;
@@ -280,9 +282,22 @@ export class MatrixController {
     platform: AimtrixPlatform = getAimtrixPlatform(),
   ) {
     this.platform = platform;
+    this.attachmentSender = new AttachmentSender({
+      client: () => this.client,
+      maxBytes: config.media.maxUploadBytes,
+      relation: (roomId, rootId) => this.threadMessageRelation(roomId, rootId),
+      track: (client, event) => this.trackLocalEvent(client, event),
+      changed: (roomId) => { this.bumpRoomVersion(roomId); this.scheduleWorkspacePublish(); },
+    });
   }
 
   public getSnapshot = (): MatrixControllerSnapshot => this.snapshot;
+
+  /** Public account identity for local drafts; never exposes credentials. */
+  public getDraftScope = (): { userId: string; homeserver: string } | undefined => {
+    const session = this.activeSession ?? this.recoverySession;
+    return session ? { userId: session.userId, homeserver: session.baseUrl } : undefined;
+  };
 
   public setNotificationPreferences(preferences: {
     desktopNotifications: boolean;
@@ -1804,10 +1819,14 @@ export class MatrixController {
         }
         if (event) {
           await client.decryptEventIfNeeded(event).catch(() => undefined);
-          if (event.getRoomId() === room.roomId && !event.status) {
+          // HTTP acceptance can precede the remote echo. A server-assigned ID
+          // remains navigable while the SDK still marks that echo as SENT.
+          if (event.getRoomId() === room.roomId && (!event.status || event.status === EventStatus.SENT)) {
             const relation = historyRelation(event);
+            const knownThread = this.snapshotCache.threadHistory.get(eventId);
             if (relation?.rel_type === 'm.thread' && validUnreadEventId(relation.event_id)) threadRootId = relation.event_id;
-            else if (room.getThread(eventId) || event.isThreadRoot) threadRootId = eventId;
+            else if (room.getThread(eventId) || event.isThreadRoot ||
+              (knownThread?.roomId === room.roomId && knownThread.rootId === eventId && knownThread.rootStatus === 'found')) threadRootId = eventId;
           }
         }
       } catch { /* Ordinary context exposes unavailable events without disclosing server details. */ }
@@ -1916,31 +1935,67 @@ export class MatrixController {
     await this.rejectInvite(roomId);
   }
 
+  private async mediaSendEncryption(client: MatrixClient, room: Room, type: string): Promise<boolean> {
+    this.actionRoom(client, room.roomId, room);
+    const encrypted = room.hasEncryptionStateEvent() || Boolean(await client.getCrypto()?.isEncryptionEnabledInRoom?.(room.roomId));
+    this.actionRoom(client, room.roomId, room);
+    if (encrypted && !client.getCrypto()) throw new Error('Encryption is not ready for this conversation.');
+    if (!room.currentState.maySendEvent(encrypted ? 'm.room.encrypted' : type, client.getSafeUserId())) throw new Error('You cannot send messages in this conversation.');
+    return encrypted;
+  }
+
+  private async downloadImageAsset(src: string, guard: () => void): Promise<Blob> {
+    const url = new URL(src, this.platform.deepLinks.currentUrl());
+    // Relative bundled assets also work on Tauri/Capacitor local origins.
+    const relative = src.trim() === src && !src.includes(':') && !src.startsWith('//') && !src.includes('\\');
+    if (!relative && !['https:', 'http:'].includes(url.protocol) || url.username || url.password) throw new Error('The media source returned an unsupported URL.');
+    guard();
+    const response = await fetch(src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
+    guard();
+    if (!response.ok) throw new Error('The media asset could not be downloaded.');
+    if (Number(response.headers?.get('content-length') ?? 0) > this.config.media.maxUploadBytes) throw new Error('The media asset exceeds the configured upload limit.');
+    let blob: Blob;
+    if (response.body) {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array<ArrayBuffer>[] = [];
+      let size = 0;
+      try {
+        while (true) {
+          const next = await reader.read(); guard();
+          if (next.done) break;
+          size += next.value.byteLength;
+          if (size > this.config.media.maxUploadBytes) throw new Error('The media asset exceeds the configured upload limit.');
+          chunks.push(new Uint8Array(next.value));
+        }
+        blob = new Blob(chunks, { type: response.headers.get('content-type')?.split(';')[0] ?? '' });
+      } catch (error) { await reader.cancel().catch(() => undefined); throw error; }
+      finally { reader.releaseLock(); }
+    } else blob = await response.blob();
+    guard();
+    if (!blob.size || !blob.type.startsWith('image/') || blob.size > this.config.media.maxUploadBytes) throw new Error('The media asset returned unsupported media.');
+    return blob;
+  }
+
   public async sendGif(
     roomId: string,
     gif: { title: string; mediaUrl: string },
+    threadRootId?: string,
   ): Promise<void> {
-    const url = new URL(gif.mediaUrl);
-    if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-      throw new Error('The GIF provider returned an unsupported URL.');
-    }
-    const response = await fetch(url, { credentials: 'omit', referrerPolicy: 'no-referrer' });
-    if (!response.ok) throw new Error('The GIF could not be downloaded from the provider.');
-    const contentLength = Number(response.headers.get('content-length') ?? 0);
-    if (contentLength > this.config.media.maxUploadBytes) {
-      throw new Error('The GIF exceeds the configured upload limit.');
-    }
-    const blob = await response.blob();
-    if (!blob.type.startsWith('image/') || blob.size > this.config.media.maxUploadBytes) {
-      throw new Error('The GIF provider returned unsupported media.');
-    }
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    const room = this.actionRoom(client, roomId);
+    if (threadRootId && (!validUnreadEventId(threadRootId) || room.hasPendingEvent(threadRootId))) throw new Error('This thread is not available.');
+    await this.mediaSendEncryption(client, room, 'm.room.message');
+    const blob = await this.downloadImageAsset(gif.mediaUrl, () => { this.actionRoom(client, roomId, room); });
+    await this.mediaSendEncryption(client, room, 'm.room.message');
+    this.actionRoom(client, roomId, room);
     const extension = blob.type === 'image/webp' ? 'webp' : 'gif';
     const filename = `${gif.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').slice(0, 50) || 'aimtrix-gif'}.${extension}`;
-    await this.uploadAttachment(roomId, new File([blob], filename, { type: blob.type }));
+    await this.uploadAttachment(roomId, new File([blob], filename, { type: blob.type }), undefined, threadRootId);
   }
 
-  public cancelUpload(): void {
-    this.uploadAbortController?.abort();
+  public cancelUpload(id?: string): void {
+    this.attachmentSender.cancel(id);
   }
 
   public async uploadAttachment(
@@ -1949,93 +2004,29 @@ export class MatrixController {
     onProgress?: (loaded: number, total: number) => void,
     threadRootId?: string,
     codeLanguage?: string,
+    options?: AttachmentSendOptions,
   ): Promise<void> {
-    const client = this.client;
-    const sdk = this.sdk;
-    const room = client?.getRoom(roomId);
-    if (!client || !sdk || !room) throw new Error('Room is not available.');
-    if (!file.size || file.size > this.config.media.maxUploadBytes) {
-      throw new Error('The attachment exceeds this Aimtrix upload limit.');
-    }
-    const msgtype = file.type.startsWith('image/')
-      ? sdk.MsgType.Image
-      : file.type.startsWith('video/')
-        ? sdk.MsgType.Video
-        : file.type.startsWith('audio/')
-          ? sdk.MsgType.Audio
-          : sdk.MsgType.File;
-    const info = { mimetype: file.type || 'application/octet-stream', size: file.size };
-    const abortController = new AbortController();
-    this.uploadAbortController = abortController;
-    const uploadOptions = {
-      abortController,
-      progressHandler: (progress: { loaded: number; total: number }) =>
-        onProgress?.(progress.loaded, progress.total || file.size),
-    };
-    const sendAttachment = (content: RoomMessageEventContent) => threadRootId
-      ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, { ...content, ...this.threadMessageRelation(roomId, threadRootId) } as RoomMessageEventContent)
-      : client.sendMessage(roomId, content);
-
-    try {
-      if (room.hasEncryptionStateEvent()) {
-        const { encryptAttachment } = await import('matrix-encrypt-attachment');
-        const encrypted = await encryptAttachment(await file.arrayBuffer());
-        const uploaded = await client.uploadContent(new Blob([encrypted.data]), {
-          ...uploadOptions,
-          type: 'application/octet-stream',
-          includeFilename: false,
-        });
-        await sendAttachment({
-          msgtype,
-          body: file.name,
-          info,
-          ...(codeLanguage ? { 'dev.alucard.aimtrix.code.v1': { language: codeLanguage } } : {}),
-          file: {
-            ...encrypted.info,
-            hashes: encrypted.info.hashes ?? {},
-            url: uploaded.content_uri,
-          },
-        } as RoomMessageEventContent);
-      } else {
-        const uploaded = await client.uploadContent(file, {
-          ...uploadOptions,
-          name: file.name,
-          type: file.type,
-        });
-        await sendAttachment({
-          msgtype,
-          body: file.name,
-          info,
-          ...(codeLanguage ? { 'dev.alucard.aimtrix.code.v1': { language: codeLanguage } } : {}),
-          url: uploaded.content_uri,
-        } as RoomMessageEventContent);
-      }
-      this.scheduleWorkspacePublish();
-    } finally {
-      if (this.uploadAbortController === abortController) this.uploadAbortController = undefined;
-    }
+    await this.attachmentSender.send(roomId, file, onProgress, threadRootId, codeLanguage, options);
   }
 
   private async uploadInlineEmotes(
     emotes: Array<{ shortcode: string; id: string; name: string; src: string }>,
+    room?: Room,
   ): Promise<MatrixInlineEmote[]> {
     const client = this.client;
     if (!client) throw new Error('Matrix is not connected.');
+    const guard = () => {
+      if (this.client !== client) throw new MessageSendError(false);
+      if (room) this.actionRoom(client, room.roomId, room);
+    };
     return Promise.all(emotes.map(async (emote) => {
       const cacheKey = `${this.activeSession?.userId}|inline-emote|${emote.id}|${emote.src}`;
       let uploaded = this.inlineEmoteUploads.get(cacheKey);
       if (!uploaded) {
         uploaded = (async () => {
-          const response = await fetch(emote.src, { credentials: 'omit', referrerPolicy: 'no-referrer' });
-          if (!response.ok) throw new Error('Custom emoji asset could not be loaded.');
-          const contentLength = Number(response.headers.get('content-length') ?? 0);
-          if (contentLength > this.config.media.maxUploadBytes) {
-            throw new Error('Custom emoji exceeds the configured upload limit.');
-          }
-          const blob = await response.blob();
-          if (!blob.type.startsWith('image/') || blob.size > this.config.media.maxUploadBytes) {
-            throw new Error('Custom emoji returned unsupported media.');
-          }
+          const blob = await this.downloadImageAsset(emote.src, guard);
+          if (room) await this.mediaSendEncryption(client, room, 'm.room.message');
+          guard();
           const extension = ({
             'image/gif': 'gif',
             'image/jpeg': 'jpg',
@@ -2048,18 +2039,21 @@ export class MatrixController {
             type: blob.type,
             includeFilename: false,
           });
+          guard();
           return result.content_uri;
         })();
         this.inlineEmoteUploads.set(cacheKey, uploaded);
       }
       try {
+        const mxcUrl = await uploaded;
+        guard();
         return {
           shortcode: emote.shortcode,
           name: emote.name,
-          mxcUrl: await uploaded,
+          mxcUrl,
         };
       } catch (error) {
-        this.inlineEmoteUploads.delete(cacheKey);
+        if (this.inlineEmoteUploads.get(cacheKey) === uploaded) this.inlineEmoteUploads.delete(cacheKey);
         throw error;
       }
     }));
@@ -2068,28 +2062,42 @@ export class MatrixController {
   public async sendSticker(
     roomId: string,
     sticker: { id: string; name: string; src: string },
+    threadRootId?: string,
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     if (!client || !sdk) throw new Error('Matrix is not connected.');
-    const room = client.getRoom(roomId);
-    if (!room) throw new Error('Room is not available.');
-    const encrypt = room.hasEncryptionStateEvent();
+    const room = this.messageRoom(client, roomId);
+    if (room.getMyMembership() !== 'join' || (threadRootId && (!validUnreadEventId(threadRootId) || room.hasPendingEvent(threadRootId)))) throw new Error('This conversation is not available.');
+    const encrypt = await this.mediaSendEncryption(client, room, 'm.sticker');
+    const guard = () => {
+      this.actionRoom(client, roomId, room);
+      if (threadRootId && room.hasPendingEvent(threadRootId)) throw new Error('This thread is not available.');
+      if (!encrypt && room.hasEncryptionStateEvent()) throw new Error('Room encryption changed. Choose this sticker again to encrypt it.');
+      if (encrypt && !client.getCrypto()) throw new Error('Encryption is not ready for this conversation.');
+      if (!room.currentState.maySendEvent(encrypt ? 'm.room.encrypted' : 'm.sticker', client.getSafeUserId())) throw new Error('You cannot send stickers in this conversation.');
+    };
+    guard();
     const cacheKey = `${this.activeSession?.userId}|${roomId}|${encrypt ? 'encrypted' : 'plain'}|${sticker.id}|${sticker.src}`;
     let uploaded = this.stickerUploads.get(cacheKey);
     if (!uploaded) {
       uploaded = (async () => {
-        const response = await fetch(sticker.src);
-        if (!response.ok) throw new Error('Sticker asset could not be loaded.');
-        const blob = await response.blob();
-        const mimetype = blob.type || 'image/svg+xml';
+        const blob = await this.downloadImageAsset(sticker.src, guard);
+        if (await this.mediaSendEncryption(client, room, 'm.sticker') !== encrypt) throw new Error('Room encryption changed. Choose this sticker again to encrypt it.');
+        guard();
+        const mimetype = blob.type;
         if (encrypt) {
           const { encryptAttachment } = await import('matrix-encrypt-attachment');
-          const encrypted = await encryptAttachment(await blob.arrayBuffer());
+          guard();
+          const bytes = await blob.arrayBuffer();
+          guard();
+          const encrypted = await encryptAttachment(bytes);
+          guard();
           const result = await client.uploadContent(new Blob([encrypted.data]), {
             type: 'application/octet-stream',
             includeFilename: false,
           });
+          guard();
           return {
             mimetype,
             size: blob.size,
@@ -2112,16 +2120,16 @@ export class MatrixController {
           type: mimetype,
           includeFilename: false,
         });
+        guard();
         return { mimetype, size: blob.size, url: result.content_uri };
       })();
       this.stickerUploads.set(cacheKey, uploaded);
     }
     try {
       const asset = await uploaded;
-      const eventClient = client as unknown as {
-        sendEvent: (roomId: string, type: string, content: Record<string, unknown>) => Promise<unknown>;
-      };
-      await eventClient.sendEvent(roomId, sdk.EventType.Sticker, {
+      if (await this.mediaSendEncryption(client, room, 'm.sticker') !== encrypt) throw new Error('Room encryption changed. Choose this sticker again to encrypt it.');
+      guard();
+      const content = {
         body: sticker.name,
         info: {
           mimetype: asset.mimetype,
@@ -2130,10 +2138,17 @@ export class MatrixController {
           h: 180,
         },
         ...(asset.file ? { file: asset.file } : { url: asset.url }),
-      });
+        ...(threadRootId ? this.threadMessageRelation(roomId, threadRootId) : {}),
+      };
+      // SDK StickerEventContent requires plaintext `url`; encrypted sticker
+      // interoperability uses only `file`, including its authenticated MXC URL.
+      const stickerContent = content as unknown as StickerEventContent;
+      await this.sendTrackedMessage(client, room, (txnId) => threadRootId
+        ? client.sendEvent(roomId, threadRootId, sdk.EventType.Sticker, stickerContent, txnId)
+        : client.sendEvent(roomId, sdk.EventType.Sticker, stickerContent, txnId));
       this.scheduleWorkspacePublish();
     } catch (error) {
-      this.stickerUploads.delete(cacheKey);
+      if (this.stickerUploads.get(cacheKey) === uploaded) this.stickerUploads.delete(cacheKey);
       throw error;
     }
   }
@@ -2289,7 +2304,7 @@ export class MatrixController {
       'm.in_reply_to': { event_id: validUnreadEventId(fallback) ? fallback : rootId } } };
   }
 
-  public async sendThreadMessage(roomId: string, rootId: string, body: string, mentions: MatrixMessageMention[] = []): Promise<void> {
+  public async sendThreadMessage(roomId: string, rootId: string, body: string, mentions: MatrixMessageMention[] = [], inlineEmotes: Array<{ shortcode: string; id: string; name: string; src: string }> = []): Promise<void> {
     const message = body.trim();
     if (!message) return;
     const client = this.client;
@@ -2297,7 +2312,12 @@ export class MatrixController {
     if (!client || !sdk || !validUnreadEventId(rootId)) throw new MessageSendError(false);
     const room = this.messageRoom(client, roomId);
     if (room.getMyMembership() !== 'join' || room.hasPendingEvent(rootId)) throw new MessageSendError(false);
-    const formatted = matrixFormattedMessage(message, mentions, []);
+    await this.mediaSendEncryption(client, room, 'm.room.message');
+    const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes, room);
+    await this.mediaSendEncryption(client, room, 'm.room.message');
+    this.actionRoom(client, roomId, room);
+    if (room.hasPendingEvent(rootId)) throw new MessageSendError(false);
+    const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     await this.sendTrackedMessage(client, room, (txnId) => client.sendEvent(roomId, rootId, sdk.EventType.RoomMessage, {
       msgtype: sdk.MsgType.Text, body: formatted.body,
       ...this.threadMessageRelation(roomId, rootId),
@@ -2429,12 +2449,48 @@ export class MatrixController {
     }
   }
 
+  private actionRoom(client: MatrixClient, roomId: string, expected?: Room): Room {
+    const room = client.getRoom(roomId);
+    if (this.client !== client || !room || expected && room !== expected || room.getMyMembership() !== 'join') {
+      throw new Error('The session or conversation changed. Open the conversation again.');
+    }
+    return room;
+  }
+
+  /** Resolve accepted events without constructing SDK threads or mutating timelines. */
+  private async actionEvent(client: MatrixClient, room: Room, eventId: string): Promise<MatrixEvent> {
+    this.actionRoom(client, room.roomId, room);
+    if (!eventId.startsWith('$') || room.hasPendingEvent?.(eventId)) throw new Error('This message is not available for this action.');
+    const threadViews = [...this.snapshotCache.threadHistory.values()].filter((view) => view.roomId === room.roomId);
+    let event = room.findEventById(eventId)
+      ?? this.snapshotCache.history.get(room.roomId)?.events.find((candidate) => candidate.getId() === eventId)
+      ?? threadViews.flatMap((view) => [view.root, view.latestEvent, ...view.events]).find((candidate) => candidate?.getId() === eventId);
+    if (!event) {
+      try {
+        const raw = await client.fetchRoomEvent(room.roomId, eventId);
+        this.actionRoom(client, room.roomId, room);
+        if (raw.event_id !== eventId || raw.room_id && raw.room_id !== room.roomId) throw new Error('Unavailable event.');
+        event = client.getEventMapper({ decrypt: false })({ ...raw, room_id: room.roomId });
+      } catch { throw new Error('This message could not be loaded. Try opening it again.'); }
+    }
+    await client.decryptEventIfNeeded(event).catch(() => undefined);
+    this.actionRoom(client, room.roomId, room);
+    if (event.getId() !== eventId || event.getRoomId() !== room.roomId || event.status !== null || event.isRedacted() || event.isState()) {
+      throw new Error('This message is not available for this action.');
+    }
+    return event;
+  }
+
   public async togglePinnedMessage(roomId: string, eventId: string, pinned: boolean): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
     if (!client || !sdk) throw new Error('Matrix is not connected.');
-    const room = client.getRoom(roomId);
-    if (!room) throw new Error('Room is not available.');
+    const room = this.actionRoom(client, roomId);
+    const event = await this.actionEvent(client, room, eventId);
+    this.actionRoom(client, roomId, room);
+    if (!isVisibleTimelineEvent(event) || !room.currentState.maySendStateEvent(sdk.EventType.RoomPinnedEvents, client.getSafeUserId())) {
+      throw new Error('You do not have permission to pin messages in this conversation.');
+    }
     const state = room.currentState.getStateEvents(sdk.EventType.RoomPinnedEvents, '');
     const existing = state?.getContent<{ pinned?: unknown }>().pinned;
     const current = Array.isArray(existing)
@@ -2444,12 +2500,21 @@ export class MatrixController {
       ? [...new Set([...current, eventId])]
       : current.filter((candidate) => candidate !== eventId);
     await client.sendStateEvent(roomId, sdk.EventType.RoomPinnedEvents, { pinned: next }, '');
+    this.actionRoom(client, roomId, room);
     this.scheduleWorkspacePublish();
   }
 
   public async redactMessage(roomId: string, eventId: string): Promise<void> {
-    if (!this.client) throw new Error('Matrix is not connected.');
-    await this.client.redactEvent(roomId, eventId, undefined, { reason: 'Removed in Aimtrix' });
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    const room = this.actionRoom(client, roomId);
+    const event = await this.actionEvent(client, room, eventId);
+    this.actionRoom(client, roomId, room);
+    if (!isVisibleTimelineEvent(event) || !room.currentState.maySendRedactionForEvent(event, client.getSafeUserId())) {
+      throw new Error('You do not have permission to remove this message.');
+    }
+    await client.redactEvent(roomId, eventId, undefined, { reason: 'Removed in Aimtrix' });
+    this.actionRoom(client, roomId, room);
     this.scheduleWorkspacePublish();
   }
 
@@ -2466,10 +2531,29 @@ export class MatrixController {
     if (!message) return;
     if (!client || !sdk) throw new MessageSendError(false);
     const room = this.messageRoom(client, roomId);
+    const original = await this.actionEvent(client, room, eventId);
+    this.actionRoom(client, roomId, room);
+    const originalContent = original.getOriginalContent();
+    const msgtype = originalContent.msgtype;
+    // SDK crypto may remember encryption before room state has caught up.
+    let cryptoEncrypted = false;
+    try { cryptoEncrypted = await client.getCrypto()?.isEncryptionEnabledInRoom?.(roomId) ?? false; }
+    catch { throw new MessageSendError(false); }
+    this.actionRoom(client, roomId, room);
+    if (cryptoEncrypted && !client.getCrypto()) throw new MessageSendError(false);
+    const canEdit = () => original.status === null && !original.isRedacted() && original.getSender() === client.getSafeUserId()
+      && original.getType() === sdk.EventType.RoomMessage && ['m.text', 'm.notice', 'm.emote'].includes(String(msgtype))
+      && historyRelation(original)?.rel_type !== 'm.replace'
+      && room.currentState.maySendEvent(room.hasEncryptionStateEvent() || cryptoEncrypted ? 'm.room.encrypted' : sdk.EventType.RoomMessage, client.getSafeUserId());
+    if (!canEdit()) throw new Error('You do not have permission to edit this message.');
     const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
+    this.actionRoom(client, roomId, room);
+    this.messageRoom(client, roomId);
+    if (cryptoEncrypted && !client.getCrypto()) throw new MessageSendError(false);
+    if (!canEdit()) throw new Error('You do not have permission to edit this message.');
     const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     const newContent = {
-      msgtype: sdk.MsgType.Text,
+      msgtype,
       body: formatted.body,
       ...(formatted.usedMentionUserIds.length
         ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } }
@@ -2479,7 +2563,7 @@ export class MatrixController {
         : {}),
     };
     const content = {
-      msgtype: sdk.MsgType.Text,
+      msgtype,
       body: `* ${message}`,
       ...(formatted.usedMentionUserIds.length
         ? { 'm.mentions': { user_ids: formatted.usedMentionUserIds } }
@@ -2490,8 +2574,7 @@ export class MatrixController {
       'm.new_content': newContent,
       'm.relates_to': { rel_type: sdk.RelationType.Replace, event_id: eventId },
     } as RoomMessageEventContent;
-    const original = room.findEventById(eventId);
-    const threadRootId = original?.threadRootId;
+    const threadRootId = original.threadRootId ?? (historyRelation(original)?.rel_type === 'm.thread' ? historyRelation(original)?.event_id : undefined);
     await this.sendTrackedMessage(client, room, (txnId) => threadRootId && threadRootId !== eventId
       ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, content, txnId)
       : client.sendEvent(roomId, sdk.EventType.RoomMessage, content, txnId));
@@ -2506,10 +2589,23 @@ export class MatrixController {
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
-    if (!client || !sdk) return;
+    if (!client || !sdk) throw new Error('Matrix is not connected.');
+    const room = this.actionRoom(client, roomId);
+    const target = await this.actionEvent(client, room, eventId);
+    this.actionRoom(client, roomId, room);
+    if (!isVisibleTimelineEvent(target) || !key || key.length > 256) throw new Error('This reaction is not available.');
     if (ownReactionEventId) {
+      const reaction = await this.actionEvent(client, room, ownReactionEventId);
+      this.actionRoom(client, roomId, room);
+      const relation = reaction.getOriginalContent()['m.relates_to'];
+      if (reaction.getType() !== sdk.EventType.Reaction || reaction.getSender() !== client.getSafeUserId()
+        || relation?.rel_type !== sdk.RelationType.Annotation || relation.event_id !== eventId || relation.key !== key
+        || !room.currentState.maySendRedactionForEvent(reaction, client.getSafeUserId())) {
+        throw new Error('You do not have permission to remove this reaction.');
+      }
       await client.redactEvent(roomId, ownReactionEventId);
     } else {
+      if (!room.currentState.maySendEvent(sdk.EventType.Reaction, client.getSafeUserId())) throw new Error('You do not have permission to react in this conversation.');
       await client.sendEvent(roomId, sdk.EventType.Reaction, {
         'm.relates_to': {
           rel_type: sdk.RelationType.Annotation,
@@ -2518,6 +2614,7 @@ export class MatrixController {
         },
       });
     }
+    this.actionRoom(client, roomId, room);
     this.scheduleWorkspacePublish();
   }
 
@@ -2752,7 +2849,7 @@ export class MatrixController {
     this.retryingMessages = new WeakSet();
     this.snapshotCache.localEvents.clear();
     this.resetProfilePersonalization();
-    this.uploadAbortController?.abort();
+    this.attachmentSender.clear();
     this.activeCall?.hangup('user_hangup' as CallErrorCode, false);
     this.activeCall = undefined;
     this.callSummary = undefined;

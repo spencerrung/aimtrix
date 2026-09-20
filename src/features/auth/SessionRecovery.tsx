@@ -28,7 +28,7 @@ export function SessionRecoveryScreen({ recovery, error, onSignIn, onForget }: {
     <h1 id="session-recovery-title" tabIndex={-1} ref={heading}>Your Matrix session expired</h1>
     <p>Your session has expired. Conversations are hidden until you sign in again.</p>
     <p>{recovery.softLogout ? 'Your encryption keys are still on this device. Sign in to the same account to reconnect this session.' : 'Your encryption keys are still on this device. Your homeserver may require a new session; you may need your recovery key or another verified device to restore encrypted history.'}</p>
-    <p className="session-recovery__note">Unsent text stays while you sign in here. Reloading, closing this tab, or continuing through homeserver SSO clears those drafts.</p>
+    <p className="session-recovery__note">Drafts saved on this device return when you sign in to the same account. Changes kept only in this tab may be lost on reload or SSO. Files need to be reattached after leaving this page.</p>
     {error || actionError ? <p className="form-error" role="alert">{error || 'Sign in could not be opened. Please try again.'}</p> : null}
     <div className="connection-error__actions"><button className="aqua-button aqua-button--primary" type="button" disabled={busy} onClick={() => void signIn()}>{busy ? 'Opening sign in…' : 'Sign in again'}</button><ForgetSessionButton onForget={onForget} disabled={busy} /></div>
   </section></main>;

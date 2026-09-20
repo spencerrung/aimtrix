@@ -27,4 +27,12 @@ describe('visible history capacity', () => {
     const encrypted = new MatrixEvent({ type: 'm.room.encrypted', event_id: '$encrypted', sender: '@synthetic:test', content: { algorithm: 'm.megolm.v1.aes-sha2' } });
     expect(boundedTimelineEvents([cancelled, redacted, encrypted]).filter(isVisibleTimelineEvent)).toEqual([encrypted]);
   });
+
+  it('counts unknown user-facing message kinds while excluding state and technical events', () => {
+    const future = new MatrixEvent({ type: 'm.room.message', event_id: '$future', sender: '@synthetic:test', content: { msgtype: 'org.example.future', body: 'Readable fallback' } });
+    const empty = new MatrixEvent({ type: 'm.room.message', event_id: '$empty', sender: '@synthetic:test', content: { msgtype: 'org.example.future' } });
+    const state = new MatrixEvent({ ...future.event, event_id: '$state', state_key: '' });
+    const technical = new MatrixEvent({ ...future.event, event_id: '$technical', type: 'org.example.technical' });
+    expect(boundedTimelineEvents([message(0), future, empty, state, technical], 2)).toEqual([future, empty]);
+  });
 });

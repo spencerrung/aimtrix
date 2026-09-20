@@ -91,5 +91,5 @@ test('private thread read failure keeps the composer and retry reachable', async
   await expect(thread.getByRole('alert')).toHaveCount(0);
   await expect(thread.locator('.thread-panel__header')).not.toContainText('unread');
   await thread.getByLabel('Message thread').fill('A retained synthetic reply');
-  await expect(thread.getByLabel('Message thread')).toHaveValue('A retained synthetic reply');
+  await expect(thread.getByLabel('Message thread')).toHaveText('A retained synthetic reply');
 });

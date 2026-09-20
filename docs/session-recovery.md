@@ -10,7 +10,7 @@ The SDK’s `soft_logout` flag permits requesting the same device ID when signin
 
 Crypto databases survive expiry and transient errors. When hard revocation creates a new device, old device database identifiers remain in account metadata so explicit local cleanup can remove them later. Retention does not automatically import the old device’s keys into the new device: recovery-key restoration or another verified device may still be necessary. Recovery and verification remain available in Matrix settings.
 
-Unsent room and thread text is retained only in the current tab’s volatile, account-bound draft store during reauthentication. It is never written to localStorage, Matrix account data or a new plaintext database. Reloading, closing the tab, navigating away for SSO, explicit sign-out/forget or changing accounts clears it. The recovery screen and SSO action explain that navigation boundary. Reply/edit targets, pending SDK sends, selected files and uploads are not a durable outbox. No message is silently resent after reauthentication. Durable drafts and attachment staging remain #153/#154.
+Room and thread compositions now use the [private local draft contract](draft-storage.md): drafts are scoped to the exact account and homeserver and stored as plaintext in this browser profile, never as Matrix account data. Same-account reauthentication and reload restore successfully saved body, mentions, reply/edit context and attachment descriptors. Storage denial, corruption or quota fallback may leave changes only in this tab; reload or SSO navigation can lose those unsaved changes. Explicit sign-out/forget clears the account’s drafts and reports denied deletion. Selected file bytes and pending SDK sends are not a durable outbox: files require reattachment after reload, and no message is silently resent after reauthentication. See [shared messaging](room-thread-messaging.md) for staged uploads.
 
 Live profile decoration is owned by the signed-in Matrix account and loaded from its private account data. The old global local profile cache is used only by the demo; it no longer seeds a different live account. Generic device appearance preferences remain local.
 
@@ -20,7 +20,7 @@ Ordinary sync failures keep the current SDK client, crypto store, conversation a
 
 Shutdown, expiry, retry replacement and explicit account removal share cleanup for listeners, scheduled publications, uploads, calls, in-memory recovery material, room caches and authenticated object URLs. Async startup, downloads and account callbacks check client identity or lifecycle revision before publishing. Explicit forget/sign-out first replaces the stored token with recovery metadata before waiting on remote or local cleanup, then removes current and retained device stores and credentials; blocked or failed database deletion is reported rather than described as successful. Close other Aimtrix tabs if they still hold an account database open.
 
-The sync/history store remains in memory. Rust encryption keys persist in per-account, per-device IndexedDB. Native credential protection does not turn the in-memory timeline or volatile drafts into durable history storage.
+The sync/history store remains in memory. Rust encryption keys persist in per-account, per-device IndexedDB. Native credential protection does not encrypt browser draft storage or turn the in-memory timeline into durable history storage.
 
 ## Validation boundaries
 

@@ -10,6 +10,7 @@ import { spawn } from 'node:child_process';
 
 export const images = {
   synapse: 'ghcr.io/element-hq/synapse:v1.160.0@sha256:78de1d10bef02e375f861d1cc99f8bedd9381d4f9083ea8b2c22a053477b205f',
+  element: 'vectorim/element-web:v1.12.28@sha256:a8f415462ab8d2600a592ba1b92bea51efe5a4d10eb738aab9bed769f7099613',
   dex: 'ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462',
 };
 export const secret = () => randomBytes(24).toString('hex');
@@ -41,11 +42,11 @@ async function freePort() {
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack() {
+export async function createStack({ elementUi = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
-  const ports = { synapse: await freePort(), dex: await freePort(), app: await freePort() };
-  invariant(new Set(Object.values(ports)).size === 3, 'port-allocation');
+  const ports = { synapse: await freePort(), dex: await freePort(), app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
+  invariant(new Set(Object.values(ports)).size === Object.keys(ports).length, 'port-allocation');
   const origins = Object.fromEntries(Object.entries(ports).map(([key, port]) => [key, `http://127.0.0.1:${port}`]));
   const credentials = { password: secret(), registration: secret(), oidc: secret() };
   const configDirectory = join(directory, 'config');
@@ -83,6 +84,7 @@ export async function createStack() {
     // Pull before hashing: Python/bcrypt comes from the pinned Synapse image.
     await command('docker', ['pull', images.synapse]);
     await command('docker', ['pull', images.dex]);
+    if (elementUi) await command('docker', ['pull', images.element]);
     const hash = await command('docker', ['run', '--rm', '-i', '--network', 'none', '--log-driver', 'none', '--label', `dev.aimtrix.test-owner=${owner}`, '--name', `${project}-hash`, '--user', `${uid}:${uid}`, '--entrypoint', 'python', images.synapse, '-c', 'import bcrypt,sys; print(bcrypt.hashpw(sys.stdin.buffer.read(), bcrypt.gensalt()).decode())'], { input: credentials.password });
     await write('logging.json', { version: 1, disable_existing_loggers: true, handlers: { discard: { class: 'logging.NullHandler' } }, root: { level: 'CRITICAL', handlers: ['discard'] } });
     await write('synapse.json', {
@@ -112,6 +114,42 @@ export async function createStack() {
       staticClients: [{ id: 'aimtrix-test', name: 'Aimtrix disposable test', secret: credentials.oidc, redirectURIs: [`${origins.synapse}/_synapse/client/oidc/callback`] }],
       staticPasswords: [{ email: 'sso@aimtrix.test', hash, username: 'sso', userID: 'aimtrix-disposable-sso' }],
     });
+    if (elementUi) {
+      await write('element.json', {
+        default_server_config: { 'm.homeserver': { base_url: origins.synapse, server_name: 'aimtrix.test' } },
+        disable_custom_urls: true, disable_guests: true, disable_3pid_login: true,
+        brand: 'Element', force_verification: false, default_federate: false,
+        integrations_ui_url: '', integrations_rest_url: '', integrations_widgets_urls: [],
+        room_directory: { servers: [] }, element_call: { disable: true },
+        setting_defaults: { 'analyticsOptIn': false },
+      });
+      // Override only serving configuration, never Element's built application.
+      const target = join(configDirectory, 'element-nginx.conf');
+      await writeFile(target, `pid /tmp/element.pid;
+error_log /dev/null crit;
+events { worker_connections 256; }
+http {
+ include /etc/nginx/mime.types;
+ default_type application/octet-stream;
+ access_log off;
+ client_body_temp_path /tmp/client;
+ proxy_temp_path /tmp/proxy;
+ fastcgi_temp_path /tmp/fastcgi;
+ uwsgi_temp_path /tmp/uwsgi;
+ scgi_temp_path /tmp/scgi;
+ server {
+  listen 8080;
+  root /app;
+  index index.html;
+  add_header X-Content-Type-Options nosniff always;
+  add_header Referrer-Policy no-referrer always;
+  location = /config.json { alias /config/element.json; add_header Cache-Control no-store; }
+  location / { try_files $uri $uri/ =404; }
+ }
+}
+`, { mode: 0o444 });
+      await chmod(target, 0o444);
+    }
     const isolation = { labels: { 'dev.aimtrix.test-owner': owner }, user: `${uid}:${uid}`, read_only: true, cap_drop: ['ALL'], security_opt: ['no-new-privileges:true'], logging: { driver: 'none' },
       tmpfs: [`/data:uid=${uid},gid=${uid},mode=0700`, `/tmp:uid=${uid},gid=${uid},mode=0700`],
       volumes: [{ type: 'bind', source: configDirectory, target: '/config', read_only: true }], networks: ['test'],
@@ -119,14 +157,18 @@ export async function createStack() {
     await write('compose.json', { services: {
       dex: { ...isolation, image: images.dex, command: ['dex', 'serve', '/config/dex.json'], ports: [`127.0.0.1:${ports.dex}:5556`] },
       synapse: { ...isolation, image: images.synapse, entrypoint: ['python', '-m', 'synapse.app.homeserver'], command: ['-c', '/config/synapse.json'], ports: [`127.0.0.1:${ports.synapse}:8008`] },
+      ...(elementUi ? { element: { ...isolation, image: images.element, environment: { ELEMENT_WEB_PORT: '8080' }, entrypoint: ['nginx'], command: ['-c', '/config/element-nginx.conf', '-g', 'daemon off;'], ports: [`127.0.0.1:${ports.element}:8080`] } } : {}),
     }, networks: { test: { driver: 'bridge', labels: { 'dev.aimtrix.test-owner': owner } } } });
     prepared = true;
     await compose('up', '--detach');
     await until(async () => {
       try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok && (await fetch(`${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
     }, 'stack-readiness', 60000);
+    if (elementUi) await until(async () => {
+      try { return (await fetch(`${origins.element}/config.json`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
+    }, 'element-readiness', 60000);
     const ids = (await compose('ps', '-q')).split('\n');
-    invariant(ids.length === 2, 'service-count');
+    invariant(ids.length === (elementUi ? 3 : 2), 'service-count');
     for (const id of ids) {
       const [info] = JSON.parse(await command('docker', ['inspect', id]));
       invariant(info.HostConfig.CapDrop?.includes('ALL') && info.HostConfig.SecurityOpt?.includes('no-new-privileges:true'), 'container-capabilities');

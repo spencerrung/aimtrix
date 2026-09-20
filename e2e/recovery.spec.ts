@@ -19,7 +19,7 @@ test.beforeEach(async ({ page }, info) => {
   if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
 });
 
-test('expiry hides conversations and restores volatile drafts after same-account sign in', async ({ page }, info) => {
+test('expiry hides conversations and restores local drafts after same-account sign in', async ({ page }, info) => {
   test.setTimeout(60000);
   const composer = page.getByRole('textbox', { name: 'Message Welcome Lounge', exact: true });
   await composer.fill('Synthetic unsent main draft');
@@ -45,9 +45,11 @@ test('expiry hides conversations and restores volatile drafts after same-account
   if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   await expect(composer).toHaveText('Synthetic unsent main draft');
   await page.getByRole('button', { name: '2 replies' }).click();
-  await expect(page.getByRole('textbox', { name: 'Message thread', exact: true })).toHaveValue('Synthetic unsent thread draft');
-  const saved = await page.evaluate(() => JSON.stringify({ ...localStorage, ...sessionStorage }));
-  expect(saved).not.toContain('Synthetic unsent');
+  await expect(page.getByRole('textbox', { name: 'Message thread', exact: true })).toHaveText('Synthetic unsent thread draft');
+  const saved = await page.evaluate(() => ({ draft: Object.keys(localStorage).filter((key) => key.startsWith('aimtrix.private-drafts.v1:')).map((key) => localStorage.getItem(key)).join(''), other: JSON.stringify({ ...Object.fromEntries(Object.entries(localStorage).filter(([key]) => !key.startsWith('aimtrix.private-drafts.v1:'))), ...sessionStorage }) }));
+  expect(saved.draft).toContain('Synthetic unsent main draft');
+  expect(saved.draft).toContain('Synthetic unsent thread draft');
+  expect(saved.other).not.toContain('Synthetic unsent');
 });
 
 test('transient issues keep the workspace mounted and forgetting requires confirmation', async ({ page }, info) => {
@@ -81,6 +83,7 @@ test('transient issues keep the workspace mounted and forgetting requires confir
   await page.getByRole('button', { name: 'Forget this session' }).click();
   await page.getByRole('button', { name: 'Forget session and keys' }).click();
   await expect(page.getByLabel('Matrix ID')).toHaveValue('');
+  expect(await page.evaluate(() => Object.keys(localStorage).filter((key) => key.startsWith('aimtrix.private-drafts.v1:')))).toEqual([]);
   await page.getByLabel('Matrix ID').fill('@you:example.com');
   await page.getByLabel('Password').fill('synthetic fixture password');
   await page.getByRole('button', { name: 'Sign On', exact: true }).click();

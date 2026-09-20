@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   loadRuntimeConfig,
   type RuntimeConfigResult,
@@ -6,6 +6,7 @@ import {
 } from './config/runtimeConfig';
 import { demoWorkspace } from './demo/demoWorkspace';
 import { VolatileDrafts } from './features/workspace/volatileDrafts';
+import { StructuredDraftStore, type DraftScope, type DraftStateSummary } from './features/workspace/structuredDrafts';
 import { ConnectionBanner, SessionRecoveryScreen } from './features/auth/SessionRecovery';
 import { ConnectionError } from './features/auth/ConnectionError';
 import { LoginWindow } from './features/auth/LoginWindow';
@@ -13,6 +14,7 @@ import { InstallPrompt } from './features/pwa/InstallPrompt';
 import { NetworkStatus } from './features/pwa/NetworkStatus';
 import { StartupScreen } from './features/auth/StartupScreen';
 import { Workspace } from './features/workspace/Workspace';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { MatrixController } from './matrix/MatrixController';
 import type { PushRegistrationResult } from './matrix/MatrixController';
 import { MediaProvider } from './matrix/MediaProvider';
@@ -31,6 +33,8 @@ import {
   type ProfilePersonalization,
 } from './settings/profilePersonalization';
 
+const EMPTY_DRAFT_STATE: DraftStateSummary = { hasDrafts: false, volatile: false, hasAttachments: false, sending: false };
+
 const THEME_KEY = 'aimtrix.theme';
 const DEMO_PROFILE_KEY = 'aimtrix.demo.profile.v1';
 
@@ -44,7 +48,7 @@ function initialTheme(configured: ThemeName): ThemeName {
   return saved === 'aqua' || saved === 'graphite' || saved === 'midnight' ? saved : configured;
 }
 
-function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pushRoute?: PushRoute }) {
+function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: RuntimeConfigResult; pushRoute?: PushRoute; onDraftStateChange: (state: DraftStateSummary) => void }) {
   const { config, warnings } = result;
   const platform = getAimtrixPlatform();
   const controller = useMemo(() => new MatrixController(config), [config]);
@@ -68,10 +72,33 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
     if (controller.getSnapshot().status !== 'ready') profileRequests.generation++;
   }), [controller, profileRequests]);
   const [draftStore] = useState(() => new VolatileDrafts());
-  const forgetSession = async () => { draftStore.clear(); await controller.forgetSession(); };
+  const [structuredDraftStore] = useState(() => new StructuredDraftStore());
+  const draftScope = controller.getDraftScope?.();
+  const lastDraftScope = useRef<DraftScope | undefined>(undefined);
+  const lastDraftStatus = useRef(snapshot.status);
+  const lastDraftSummary = useRef(EMPTY_DRAFT_STATE);
+  const reportDraftState = useCallback((state: DraftStateSummary) => { lastDraftSummary.current = state; onDraftStateChange(state); }, [onDraftStateChange]);
+  const [draftCleanupFailed, setDraftCleanupFailed] = useState(false);
+  const clearDrafts = useCallback((scope?: DraftScope) => {
+    const currentScope = controller.getDraftScope?.() ?? lastDraftScope.current;
+    if (!scope || scope.userId === currentScope?.userId && scope.homeserver === currentScope.homeserver) { draftStore.clear(); reportDraftState(EMPTY_DRAFT_STATE); }
+    const result = structuredDraftStore.clear(scope ?? currentScope);
+    if (!result.cleared) setDraftCleanupFailed(true);
+  }, [controller, draftStore, structuredDraftStore, reportDraftState]);
+  const forgetSession = async () => { clearDrafts(); await controller.forgetSession(); };
+  const draftCleanupNotice = draftCleanupFailed ? <p role="alert" className="history-feedback">Your browser could not remove saved drafts. Clear this site's data to remove them from this device.</p> : null;
   useEffect(() => {
-    if (snapshot.status === 'signed-out' && !snapshot.recovery) draftStore.clear();
-  }, [snapshot, draftStore]);
+    const update = () => {
+      const next = controller.getSnapshot();
+      const scope = controller.getDraftScope?.();
+      if (scope) lastDraftScope.current = scope;
+      if (next.status !== 'ready' && lastDraftStatus.current === 'ready') { structuredDraftStore.suspend(); reportDraftState({ ...lastDraftSummary.current, sending: false }); }
+      if (next.status === 'signed-out' && !next.recovery && lastDraftScope.current) clearDrafts();
+      lastDraftStatus.current = next.status;
+    };
+    update();
+    return controller.subscribe(update);
+  }, [controller, structuredDraftStore, clearDrafts, reportDraftState]);
   const matrixSettingsActions = useMemo(
     () => ({
       load: () => controller.loadSettings(),
@@ -87,13 +114,16 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
       restoreRecovery: (recoveryKey: string) => controller.restoreRecovery(recoveryKey),
       changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) =>
         controller.changePassword(currentPassword, newPassword, logoutOtherDevices),
-      deactivateAccount: (password: string, erase: boolean) =>
-        controller.deactivateAccount(password, erase),
+      deactivateAccount: async (password: string, erase: boolean) => {
+        const scope = controller.getDraftScope?.() ?? lastDraftScope.current;
+        await controller.deactivateAccount(password, erase);
+        clearDrafts(scope);
+      },
       previewMessageSound: () => controller.previewMessageTone(),
       registerPushNotifications: (): Promise<PushRegistrationResult> => controller.registerPushNotifications(),
       unregisterPushNotifications: () => controller.unregisterPushNotifications(),
     }),
-    [controller],
+    [controller, clearDrafts],
   );
 
   useEffect(() => {
@@ -194,6 +224,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
     return (
       <Workspace
         workspace={demoWorkspace}
+        onDraftStateChange={reportDraftState}
         config={config}
         theme={theme}
         preferences={preferences}
@@ -201,7 +232,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
         onProfilePersonalizationChange={setDemoPersonalization}
-        onSignOut={() => setDemo(false)}
+        onSignOut={() => { reportDraftState(EMPTY_DRAFT_STATE); setDemo(false); }}
       />
     );
   }
@@ -211,23 +242,23 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
   }
 
   if (snapshot.status === 'reauthentication-required') {
-    return <SessionRecoveryScreen recovery={snapshot.recovery} error={snapshot.error} onSignIn={() => controller.reauthenticate()} onForget={forgetSession} />;
+    return <>{draftCleanupNotice}<SessionRecoveryScreen recovery={snapshot.recovery} error={snapshot.error} onSignIn={() => controller.reauthenticate()} onForget={forgetSession} /></>;
   }
 
   if (snapshot.status === 'error') {
     return (
-      <ConnectionError
+      <>{draftCleanupNotice}<ConnectionError
         message={snapshot.error}
         issue={snapshot.issue}
         onRetry={() => void controller.retry()}
         onForget={forgetSession}
-      />
+      /></>
     );
   }
 
   if (snapshot.status === 'signed-out' || snapshot.status === 'authenticating') {
     return (
-      <LoginWindow
+      <>{draftCleanupNotice}<LoginWindow
         key={snapshot.recovery?.userId ?? 'login'}
         config={config}
         snapshot={snapshot}
@@ -236,16 +267,19 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onLogin={(credentials) => controller.login(credentials)}
         onSso={(credentials) => controller.startSso(credentials)}
         onDemo={() => setDemo(true)}
-      />
+      /></>
     );
   }
 
   return (
     <MediaProvider resolver={controller.resolveMedia}>
       <Workspace
-        key={snapshot.workspace.user.id}
+        key={JSON.stringify([draftScope?.homeserver, snapshot.workspace.user.id])}
         workspace={snapshot.workspace}
+        onDraftStateChange={reportDraftState}
         draftStore={draftStore}
+        structuredDraftStore={structuredDraftStore}
+        draftScope={draftScope}
         connectionNotice={snapshot.issue ? <ConnectionBanner issue={snapshot.issue} onRetry={() => controller.retry()} /> : undefined}
         config={config}
         theme={theme}
@@ -278,7 +312,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onReturnThreadToLive={(roomId, rootId) => controller.returnThreadToLive(roomId, rootId)}
         onThreadHistoryDetached={(roomId, rootId, detached) => controller.setThreadHistoryDetached(roomId, rootId, detached)}
         onCloseThreadHistory={() => controller.closeThreadHistory()}
-        onSendThreadMessage={(roomId, rootId, body, mentions) => controller.sendThreadMessage(roomId, rootId, body, mentions)}
+        onSendThreadMessage={(roomId, rootId, body, mentions, inlineEmojis) => controller.sendThreadMessage(roomId, rootId, body, mentions, inlineEmojis)}
         onLoadRoomHistory={(roomId, direction) => controller.loadRoomHistory(roomId, direction)}
         onOpenEventContext={(roomId, eventId) => controller.openEventContext(roomId, eventId)}
         onReturnToLive={(roomId) => controller.returnToLive(roomId)}
@@ -294,10 +328,10 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
           controller.toggleReaction(roomId, eventId, key, ownReactionEventId)
         }
         onSendTyping={(roomId, typing) => controller.sendTyping(roomId, typing)}
-        onSendSticker={(roomId, sticker) => controller.sendSticker(roomId, sticker)}
-        onUploadAttachment={(roomId, file, onProgress, threadRootId, codeLanguage) => controller.uploadAttachment(roomId, file, onProgress, threadRootId, codeLanguage)}
-        onCancelUpload={() => controller.cancelUpload()}
-        onSendGif={(roomId, gif) => controller.sendGif(roomId, gif)}
+        onSendSticker={(roomId, sticker, rootId) => controller.sendSticker(roomId, sticker, rootId)}
+        onUploadAttachment={(roomId, file, onProgress, threadRootId, codeLanguage, options) => controller.uploadAttachment(roomId, file, onProgress, threadRootId, codeLanguage, options)}
+        onCancelUpload={(id) => controller.cancelUpload(id)}
+        onSendGif={(roomId, gif, rootId) => controller.sendGif(roomId, gif, rootId)}
         onMarkRoomRead={(roomId, options) => controller.markRoomRead(roomId, { ...options, publicReceipt: preferences.sendReadReceipts })}
         onMarkRoomUnread={(roomId, eventId) => controller.markRoomUnread(roomId, eventId)}
         onMarkThreadRead={(roomId, rootId, options) => controller.markThreadRead(roomId, rootId, { ...options, publicReceipt: preferences.sendReadReceipts })}
@@ -326,7 +360,7 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
         onRemoveRoomMember={(roomId, userId, action) => controller.removeRoomMember(roomId, userId, action)}
         onSetRoomMemberPower={(roomId, userId, level) => controller.setRoomMemberPower(roomId, userId, level)}
         onLeaveRoom={(roomId) => controller.leaveRoom(roomId)}
-        onSignOut={() => { draftStore.clear(); void controller.logout(); }}
+        onSignOut={() => { clearDrafts(); void controller.logout(); }}
       />
     </MediaProvider>
   );
@@ -335,6 +369,18 @@ function ConfiguredApp({ result, pushRoute }: { result: RuntimeConfigResult; pus
 export default function App() {
   const [result, setResult] = useState<RuntimeConfigResult>();
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker>();
+  const [draftState, setDraftState] = useState<DraftStateSummary>(EMPTY_DRAFT_STATE);
+  const [confirmReload, setConfirmReload] = useState(false);
+  const applyUpdate = () => {
+    if (!updateWorker || draftState.sending) return;
+    navigator.serviceWorker?.addEventListener('controllerchange', () => window.location.reload(), { once: true });
+    updateWorker.postMessage('SKIP_WAITING');
+  };
+  const reloadDescription = [
+    draftState.volatile ? 'Some drafts are only in this tab. Reloading will lose unsaved changes.' : 'Drafts saved on this device will return for the same account after reloading.',
+    draftState.hasAttachments ? 'File contents are not saved. Reattach files after reloading; if a send was interrupted, check the conversation before sending again.' : '',
+    'Encrypted account storage is preserved.',
+  ].filter(Boolean).join(' ');
   const [pushRoute, setPushRoute] = useState<PushRoute | undefined>(() => parsePushRoute(new URL(window.location.href)));
 
   useEffect(() => {
@@ -376,7 +422,7 @@ export default function App() {
 
   return (
     <>
-      {!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} />}
+      {!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} onDraftStateChange={setDraftState} />}
       <NetworkStatus />
       <InstallPrompt />
       {updateWorker ? (
@@ -404,17 +450,18 @@ export default function App() {
         >
           <span style={{ display: 'grid', minWidth: 0, gap: 2 }}>
             <strong>Aimtrix update ready</strong>
-            <small style={{ color: 'var(--text-faint)', fontSize: '0.62rem' }}>Finish any draft, then reload. Encrypted account storage is preserved.</small>
+            <small style={{ color: 'var(--text-faint)', fontSize: '0.62rem' }}>{draftState.sending ? 'Wait for current sends to finish before reloading.' : 'Reload when you are ready. Encrypted account storage is preserved.'}</small>
           </span>
           <div style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', gap: 7 }}>
-            <button className="text-button" type="button" onClick={() => setUpdateWorker(undefined)}>Later</button>
-            <button className="aqua-button aqua-button--primary" type="button" onClick={() => {
-              navigator.serviceWorker.addEventListener('controllerchange', () => window.location.reload(), { once: true });
-              updateWorker.postMessage('SKIP_WAITING');
+            <button className="text-button" type="button" onClick={() => { setUpdateWorker(undefined); setConfirmReload(false); }}>Later</button>
+            <button className="aqua-button aqua-button--primary" type="button" disabled={draftState.sending} onClick={() => {
+              if (draftState.hasDrafts || draftState.hasAttachments) setConfirmReload(true);
+              else applyUpdate();
             }}>Reload</button>
           </div>
         </div>
       ) : null}
+      {confirmReload && updateWorker ? <ConfirmDialog title="Reload Aimtrix?" description={draftState.sending ? 'A send is now in progress. Wait for it to finish before reloading.' : reloadDescription} actionLabel="Reload now" onClose={() => setConfirmReload(false)} onConfirm={async () => { if (draftState.sending) throw new Error('Send in progress'); applyUpdate(); }} /> : null}
     </>
   );
 }
