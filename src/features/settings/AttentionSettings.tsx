@@ -72,7 +72,7 @@ export function AttentionSettings({ actions }: { actions: AttentionSettingsActio
     {snapshot && policy ? <fieldset className="interaction-fields" disabled={busy || loading}>
       <label className="settings-toggle-row"><span><strong>Do not disturb across devices</strong><small>Pauses homeserver push notifications for this account until you turn it off. Local pause and sound settings are separate.</small></span><input type="checkbox" checked={snapshot.doNotDisturb} onChange={(event) => void update(() => actions.setDoNotDisturb(event.target.checked), 'Account notification rule saved.')} /></label>
       <h4>Room notifications</h4>
-      <p>Mentions and keywords follow higher-priority Matrix rules. Custom rules from other clients are preserved.</p>
+      <p>Mentions and keywords follow higher-priority Matrix rules. Custom rules from other clients are preserved. In encrypted rooms, the server cannot inspect mentions or keywords while Aimtrix is closed; local alerts need decryption keys.</p>
       <div className="attention-room-list">{snapshot.rooms.map((room) => <label key={room.id}><span>{room.name}</span><select aria-label={`Notifications for ${room.name}`} value={room.mode} disabled={room.mode === 'custom'} onChange={(event) => void update(() => actions.setRoom(room.id, event.target.value as Exclude<RoomNotificationMode, 'custom'>), 'Room notification rule saved.')}>
         <option value="default">Account default</option><option value="all">All messages</option><option value="mentions">Mentions and keywords</option><option value="nothing">Nothing</option>{room.mode === 'custom' ? <option value="custom">Custom · manage in original client</option> : null}
       </select></label>)}</div>

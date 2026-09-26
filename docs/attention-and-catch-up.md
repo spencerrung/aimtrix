@@ -29,7 +29,7 @@ Only valid event IDs and booleans are accepted, bounded to 128 preferences per r
 Matrix & security → Notification rules and delivery exposes authoritative homeserver rules, local quiet settings and delivery checks. Home's notification shortcut opens Matrix settings directly. Changes refresh server rules before writing and read back afterwards; partial failures retain a visible error and refresh what the server actually accepted.
 
 - **All messages:** a standard room rule with `notify`.
-- **Mentions and keywords:** an empty-action room rule; higher-priority mention/content rules still apply.
+- **Mentions and keywords:** an empty-action room rule; higher-priority mention/content rules still apply. The homeserver cannot inspect encrypted mentions or keywords; encrypted mentions-only delivery while the client is closed is not guaranteed.
 - **Nothing:** an unconditional room override with empty actions, including suppression of mentions. Main/space badges hide ordinary and highlighted counts while preserving an explicit unread reminder.
 - **Account default:** remove the canonical room customization. Unfamiliar custom rules are preserved and labeled for management in their originating client.
 - **Keywords:** standard content-rule glob patterns, bounded to 120 characters. Encrypted bodies cannot be matched by the server; closed-app encrypted keyword delivery is not promised.
