@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { LocalNotifications } from '@capacitor/local-notifications';
 
 const mocks = vi.hoisted(() => ({
   appListeners: new Map<string, (value: any) => void>(),
@@ -74,6 +75,26 @@ describe('Capacitor platform', () => {
     mocks.storage.clear();
     mocks.getLaunchUrl.mockReset().mockResolvedValue(undefined);
     window.history.replaceState({}, '', '/');
+    vi.spyOn(window, 'focus').mockImplementation(() => undefined);
+  });
+
+  it('deduplicates local alerts and rejects old-account clicks', async () => {
+    const platform = createCapacitorPlatform(); const clicked = vi.fn();
+    await platform.notifications.requestPermission();
+    await platform.notifications.setContext?.({ owner: 'synthetic-owner-001', policy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } } });
+    vi.mocked(LocalNotifications.schedule).mockClear();
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$event', silent: true, onClick: clicked });
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$event' });
+    await vi.waitFor(() => expect(LocalNotifications.schedule).toHaveBeenCalledOnce());
+    const notification = vi.mocked(LocalNotifications.schedule).mock.calls[0][0].notifications[0];
+    expect(notification).toMatchObject({ silent: true });
+    platform.notifications.clearContext?.('synthetic-owner-001');
+    mocks.localListeners.get('localNotificationActionPerformed')?.({ notification });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clicked).not.toHaveBeenCalled();
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$later' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(LocalNotifications.schedule).toHaveBeenCalledOnce();
   });
 
   it('persists native credentials and SSO state in secure storage', async () => {
@@ -110,14 +131,14 @@ describe('Capacitor platform', () => {
     expect(await platform.push.getSubscription()).toMatchObject({ pushKey: 'token-b' });
   });
 
-  it('routes native notification taps with opaque identifiers only', () => {
+  it('opens the app without trusting a provider notification account or destination', () => {
     const platform = createCapacitorPlatform();
     expect(platform.capabilities.platform).toBe('android');
     mocks.pushListeners.get('pushNotificationActionPerformed')?.({
       notification: { data: { room_id: '!room:example.com', event_id: '$event' } },
     });
 
-    expect(window.location.search).toBe('?room=%21room%3Aexample.com&event=%24event');
+    expect(window.location.search).toBe('');
   });
 });
 

@@ -1,3 +1,4 @@
+import { NotificationGuard } from '../pwa/notificationPolicy';
 import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -96,6 +97,7 @@ function createTauriSsoState(): CredentialStore<SsoPendingState> {
 }
 
 function createTauriNotifications(): NotificationService {
+  const guard = new NotificationGuard(false);
   let permission: NotificationPermission = 'default';
   const clickHandlers = new Map<string, () => void>();
   let nextActionId = 0;
@@ -112,6 +114,8 @@ function createTauriNotifications(): NotificationService {
   }).catch(() => undefined);
 
   return {
+    setContext: guard.setContext,
+    clearContext: guard.clearContext,
     supported: true,
     get permission() {
       return permission;
@@ -126,20 +130,24 @@ function createTauriNotifications(): NotificationService {
     },
     show(request: NotificationRequest) {
       if (permission !== 'granted') return;
-      const actionTypeId = `aimtrix-open-${nextActionId++}`;
-      if (request.onClick) clickHandlers.set(actionTypeId, request.onClick);
-      void registerActionTypes([{
-        id: actionTypeId,
-        actions: [{ id: 'open', title: 'Open Aimtrix', foreground: true }],
-      }]).then(() => sendNotification({
-        title: request.title,
-        body: request.body,
-        actionTypeId,
-      })).catch(() => clickHandlers.delete(actionTypeId));
-      if (clickHandlers.size > 100) {
-        const oldest = clickHandlers.keys().next().value;
-        if (oldest) clickHandlers.delete(oldest);
-      }
+      void guard.accept(request.eventId).then((owner) => {
+        if (!owner) return;
+        const actionTypeId = `aimtrix-open-${nextActionId++}`;
+        if (request.onClick) clickHandlers.set(actionTypeId, () => { void guard.isCurrent(owner).then((current) => { if (current) request.onClick?.(); }); });
+        void registerActionTypes([{
+          id: actionTypeId,
+          actions: [{ id: 'open', title: 'Open Aimtrix', foreground: true }],
+        }]).then(async () => { if (!(await guard.canDeliver(owner))) { clickHandlers.delete(actionTypeId); return; } sendNotification({
+          title: request.title,
+          body: request.body,
+          actionTypeId,
+          silent: request.silent,
+        }); }).catch(() => clickHandlers.delete(actionTypeId));
+        if (clickHandlers.size > 100) {
+          const oldest = clickHandlers.keys().next().value;
+          if (oldest) clickHandlers.delete(oldest);
+        }
+      }).catch(() => undefined);
     },
   };
 }

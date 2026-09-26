@@ -1,3 +1,4 @@
+import { NotificationGuard } from '../pwa/notificationPolicy';
 import {
   createBrowserCredentialStore,
 } from '../matrix/sessionStore';
@@ -26,9 +27,12 @@ function isStandalone(): boolean {
 }
 
 function createBrowserNotifications(): NotificationService {
+  const guard = new NotificationGuard(true);
   const supported = typeof window !== 'undefined' && 'Notification' in window;
 
   return {
+    setContext: guard.setContext,
+    clearContext: guard.clearContext,
     supported,
     get permission() {
       return supported ? Notification.permission : 'unsupported';
@@ -39,8 +43,11 @@ function createBrowserNotifications(): NotificationService {
     },
     show(request: NotificationRequest) {
       if (!supported || Notification.permission !== 'granted') return;
-      const notification = new Notification(request.title, { body: request.body, tag: request.tag });
-      if (request.onClick) notification.onclick = request.onClick;
+      void guard.accept(request.eventId).then((owner) => {
+        if (!owner) return;
+        const notification = new Notification(request.title, { body: request.body, tag: request.tag ? `${owner}:${request.tag}` : undefined, silent: request.silent });
+        if (request.onClick) notification.onclick = () => { void guard.isCurrent(owner).then((current) => { if (current) request.onClick?.(); }); };
+      }).catch(() => undefined);
     },
   };
 }

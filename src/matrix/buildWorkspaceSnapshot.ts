@@ -1,3 +1,4 @@
+import { roomNotificationMode } from './notificationRules';
 import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent, supportedMessageTypes } from './historyEvents';
 import { MAX_FORMATTED_BODY_LENGTH, parseIncomingFormatting } from './incomingFormatting';
 import type { HistoryView } from './RoomHistory';
@@ -909,7 +910,8 @@ export function buildWorkspaceSnapshot(
     );
     let highlightCount = room.getUnreadNotificationCount('highlight' as NotificationCountType);
     const pushRule = client.getRoomPushRule('global', room.roomId);
-    const muted = pushRule?.enabled !== false && (pushRule?.actions.some((action) => action === 'dont_notify') ?? false);
+    const notificationMode = roomNotificationMode(client.pushRules ?? (pushRule ? { global: { room: [{ ...pushRule, rule_id: room.roomId }] } } : undefined), room.roomId);
+    const muted = notificationMode === 'mentions' || notificationMode === 'nothing';
     const markedUnreadEvent = room.getAccountData?.(MARKED_UNREAD_EVENT) ?? room.getAccountData?.(LEGACY_MARKED_UNREAD_EVENT);
     const { markedUnread, unreadEventId } = parseMarkedUnread(markedUnreadEvent?.getContent());
     const fullyReadId = room.getAccountData?.('m.fully_read')?.getContent<{ event_id?: unknown }>()?.event_id;
@@ -936,7 +938,7 @@ export function buildWorkspaceSnapshot(
     }
     // The aggregate already includes thread counts. Muting hides ordinary badge
     // noise, while mentions and deliberate reminders remain visible.
-    const badgeCount = Math.max(markedUnread ? 1 : 0, muted ? highlightCount : unreadCount);
+    const badgeCount = Math.max(markedUnread ? 1 : 0, notificationMode === 'nothing' ? 0 : muted ? highlightCount : unreadCount);
     const readUpToEventId = timelineUnreadCount > 0
       ? room.getEventReadUpTo(userId, true) ?? (validUnreadEventId(fullyReadId) ? fullyReadId : null)
       : null;
@@ -1000,7 +1002,7 @@ export function buildWorkspaceSnapshot(
       markedUnread,
       unreadEventId,
       readUpToMessageId,
-      highlighted: highlightCount > 0,
+      highlighted: notificationMode !== 'nothing' && highlightCount > 0,
       encrypted: room.hasEncryptionStateEvent(),
       topic: roomTopic(room),
       canManage: ownPowerLevel >= 50,
@@ -1010,6 +1012,7 @@ export function buildWorkspaceSnapshot(
         .filter((member) => member.userId !== userId && member.typing)
         .map((member) => member.name),
       muted,
+      notificationMode,
       background,
       backgroundPolicy: {
         mode: isDirect ? 'members' : backgroundPermissionForThreshold(backgroundThreshold),

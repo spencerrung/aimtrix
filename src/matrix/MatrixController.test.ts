@@ -430,6 +430,7 @@ describe('MatrixController protocol integration', () => {
 
   it('publishes a decrypted event that belongs to a loaded room timeline', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    vi.spyOn(controller.activity, 'observe').mockImplementation(() => undefined);
     const internals = controller as unknown as ControllerInternals;
     const scheduleWorkspacePublish = vi.fn();
     internals.scheduleWorkspacePublish = scheduleWorkspacePublish;
@@ -634,7 +635,7 @@ describe('MatrixController protocol integration', () => {
     });
 
     internals.notifyForMessage(
-      { getType: () => 'm.room.message' },
+      { getType: () => 'm.room.message', getId: () => '$tone:test' },
       { roomId: '!room:test' },
     );
 
@@ -653,7 +654,7 @@ describe('MatrixController protocol integration', () => {
     });
 
     internals.notifyForMessage(
-      { getType: () => 'm.room.message' },
+      { getType: () => 'm.room.message', getId: () => '$tone:test' },
       { roomId: '!room:test' },
     );
 
@@ -682,6 +683,7 @@ describe('MatrixController protocol integration', () => {
     internals.notifyForMessage(
       {
         getType: () => 'm.room.message',
+        getId: () => '$notice:test',
         getContent: () => ({ body: 'private room content' }),
       },
       { roomId: '!room:test', name: 'Private room' },
@@ -694,7 +696,7 @@ describe('MatrixController protocol integration', () => {
     }));
     const request = show.mock.calls[0][0] as { onClick: () => void };
     request.onClick();
-    expect(platform.deepLinks.openRoute).toHaveBeenCalledWith({ roomId: '!room:test' });
+    expect(platform.deepLinks.openRoute).toHaveBeenCalledWith({ roomId: '!room:test', eventId: '$notice:test' });
     expect(platform.deepLinks.focus).toHaveBeenCalledOnce();
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   });
@@ -1254,14 +1256,53 @@ describe('MatrixController protocol integration', () => {
     );
   });
 
+  it('does not register push after permission resolves for a replaced account', async () => {
+    const platform = pushPlatform(undefined, { permission: 'default' });
+    let grant!: (value: NotificationPermission) => void;
+    platform.notifications.requestPermission = vi.fn(() => new Promise<NotificationPermission>((resolve) => { grant = resolve; }));
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    inject(controller, {});
+    const pending = controller.registerPushNotifications();
+    await vi.waitFor(() => expect(platform.notifications.requestPermission).toHaveBeenCalled());
+    inject(controller, {});
+    grant('granted');
+    expect((await pending).status).toBe('error');
+    expect(platform.push.subscribe).not.toHaveBeenCalled();
+  });
+
+  it('deduplicates an event and refuses a click after shutdown', () => {
+    const platform = pushPlatform();
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    inject(controller, { getPushActionsForEvent: () => ({ notify: true, tweaks: {} }), stopClient: vi.fn() });
+    controller.setNotificationPreferences({ desktopNotifications: true, notificationSounds: false, soundVolume: 0 });
+    const internals = controller as unknown as ControllerInternals;
+    const event = { getType: () => 'm.room.message', getId: () => '$synthetic-notification', getContent: () => ({ body: 'Synthetic message' }) };
+    internals.notifyForMessage(event, { roomId: '!synthetic:test', name: 'Synthetic room' });
+    internals.notifyForMessage(event, { roomId: '!synthetic:test', name: 'Synthetic room' });
+    expect(platform.notifications.show).toHaveBeenCalledTimes(1);
+    // Rotate the lifecycle without relying on a real SDK listener fixture.
+    (controller as unknown as { notificationOwner: string }).notificationOwner = crypto.randomUUID();
+    vi.mocked(platform.notifications.show).mock.calls[0][0].onClick?.();
+    expect(platform.deepLinks.openRoute).not.toHaveBeenCalled();
+  });
+
+  it('reports background policy persistence failure while retaining foreground pause', async () => {
+    const platform = pushPlatform();
+    platform.notifications.setContext = vi.fn().mockRejectedValue(new Error('storage unavailable'));
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    inject(controller, { getPushActionsForEvent: () => ({ notify: true, tweaks: {} }) });
+    await expect(controller.setLocalNotificationPolicy({ pauseUntil: Date.now() + 60000, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } })).rejects.toThrow('background quiet settings');
+    controller.setNotificationPreferences({ desktopNotifications: true, notificationSounds: true, soundVolume: 1 });
+    (controller as unknown as ControllerInternals).notifyForMessage({ getType: () => 'm.room.message' }, { roomId: '!synthetic:test' });
+    expect(platform.notifications.show).not.toHaveBeenCalled();
+  });
+
   it('writes a room mute push rule through the homeserver', async () => {
-    const setRoomMutePushRule = vi.fn().mockResolvedValue(undefined);
+    const addPushRule = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
-    inject(controller, { setRoomMutePushRule } as Partial<MatrixClient>);
-
+    inject(controller, { addPushRule, getPushRules: vi.fn().mockResolvedValue({ global: {} }), getVersions: vi.fn().mockResolvedValue({ versions: ['v1.10'] }), setPushRuleEnabled: vi.fn().mockResolvedValue({}), getRoom: () => ({ getMyMembership: () => 'join' }) } as unknown as Partial<MatrixClient>);
     await controller.setRoomMuted('!quiet:test', true);
-
-    expect(setRoomMutePushRule).toHaveBeenCalledWith('global', '!quiet:test', true);
+    expect(addPushRule).toHaveBeenCalledWith('global', 'override', 'dev.alucard.aimtrix.silence.!quiet:test', { actions: [], conditions: [{ kind: 'event_property_is', key: 'room_id', value: '!quiet:test' }] });
   });
 
   it('sends a read receipt only once per latest event', async () => {

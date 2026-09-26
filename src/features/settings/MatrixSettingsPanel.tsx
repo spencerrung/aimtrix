@@ -17,7 +17,9 @@ import {
   Video,
   Volume2,
 } from 'lucide-react';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import type { AttentionSettingsActions } from './AttentionSettings';
+const AttentionSettings = lazy(() => import('./AttentionSettings').then((module) => ({ default: module.AttentionSettings })));
 import type {
   DeviceRemovalResult,
   DeviceVerificationChallenge,
@@ -27,6 +29,7 @@ import type { PushRegistrationResult } from '../../matrix/MatrixController';
 import type { UserPreferences } from '../../settings/preferences';
 
 export interface MatrixSettingsActions {
+  attention?: AttentionSettingsActions;
   load: () => Promise<MatrixSettingsSnapshot>;
   verifyDevice: (deviceId: string, signal?: AbortSignal) => Promise<DeviceVerificationChallenge>;
   renameDevice: (deviceId: string, displayName: string) => Promise<void>;
@@ -62,6 +65,7 @@ export function MatrixSettingsPanel({
   actions,
 }: MatrixSettingsPanelProps) {
   const { busy, run } = useAction();
+  const [attentionOpen, setAttentionOpen] = useState(false);
   const [verificationWaiting, setVerificationWaiting] = useState(false);
   const verificationAbort = useRef<AbortController | null>(null);
   useDialogBusy(busy && !verificationWaiting);
@@ -424,6 +428,7 @@ export function MatrixSettingsPanel({
             {actions?.previewMessageSound ? (
               <button className="text-button sound-preview-button" type="button" onClick={() => actions.previewMessageSound?.()}><Play size={13} /> Preview message sound</button>
             ) : null}
+            {actions.attention ? <><button className="aqua-button" type="button" aria-expanded={attentionOpen} onClick={() => setAttentionOpen((value) => !value)}>Notification rules and delivery</button>{attentionOpen ? <Suspense fallback={<p role="status">Loading notification controls…</p>}><AttentionSettings actions={actions.attention} /></Suspense> : null}</> : null}
             <label className="settings-toggle-row"><span><strong>Send read receipts</strong><small>Let rooms know when you have read messages. When off, read tracking stays private. Older servers can save your conversation position but may not support private thread reads.</small></span><input type="checkbox" checked={preferences.sendReadReceipts} onChange={(event) => updatePreferences({ sendReadReceipts: event.target.checked })} /></label>
             <label className="settings-toggle-row"><span><strong>Send typing notifications</strong><small>Show other people while you are composing.</small></span><input type="checkbox" checked={preferences.sendTypingNotifications} onChange={(event) => updatePreferences({ sendTypingNotifications: event.target.checked })} /></label>
           </section>

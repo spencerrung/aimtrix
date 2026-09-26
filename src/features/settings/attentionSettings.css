@@ -1,0 +1,17 @@
+.attention-settings { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border-color, #b2bbc7); min-width: 0; }
+.attention-settings h4 { margin: 14px 0 8px; }
+.attention-settings p { line-height: 1.5; }
+.attention-settings-heading, .attention-inline { display: flex; gap: 10px; align-items: end; flex-wrap: wrap; }
+.attention-settings-heading { align-items: center; justify-content: space-between; }
+.attention-inline label { display: grid; gap: 5px; min-width: 0; }
+.attention-room-list { max-height: 280px; overflow: auto; }
+.attention-room-list label, .attention-keyword-list > div { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.attention-room-list span, .attention-keyword-list span { overflow-wrap: anywhere; min-width: 0; }
+.attention-room-list select { max-width: 60%; }
+.attention-settings input, .attention-settings select { min-height: 32px; }
+@media (max-width: 600px) {
+  .attention-room-list label { align-items: stretch; flex-direction: column; gap: 5px; }
+  .attention-room-list select { max-width: 100%; width: 100%; }
+  .attention-settings .settings-definition-list div { flex-wrap: wrap; }
+  .attention-inline > label { flex: 1 1 120px; }
+}

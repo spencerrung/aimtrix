@@ -22,6 +22,38 @@ describe('browser platform', () => {
     await expect(platform.sso.load()).rejects.toMatchObject({ name: 'SecurityError' });
   });
 
+  it('passes explicit silence to the operating-system notification', async () => {
+    const notices: NotificationOptions[] = [];
+    vi.stubGlobal('Notification', class { static permission = 'granted'; constructor(_title: string, options: NotificationOptions) { notices.push(options); } });
+    const platform = createBrowserPlatform();
+    await expect(Promise.resolve(platform.notifications.setContext?.({ owner: 'synthetic-owner-001', policy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } } }))).rejects.toThrow('Notification metadata storage unavailable');
+    platform.notifications.show({ title: 'Synthetic notification', body: 'Synthetic activity', silent: true });
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    expect(notices).toEqual([{ body: 'Synthetic activity', tag: undefined, silent: true }]);
+  });
+
+  it('deduplicates accepted events and rejects clicks after the account changes', async () => {
+    const notices: { onclick?: () => void }[] = [];
+    vi.stubGlobal('Notification', class { static permission = 'granted'; constructor() { notices.push(this); } });
+    const platform = createBrowserPlatform(); const clicked = vi.fn();
+    const policy = { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } };
+    await expect(Promise.resolve(platform.notifications.setContext?.({ owner: 'synthetic-owner-001', policy }))).rejects.toThrow('Notification metadata storage unavailable');
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$event', onClick: clicked });
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$event', onClick: clicked });
+    await vi.waitFor(() => expect(notices).toHaveLength(1));
+    await expect(Promise.resolve(platform.notifications.setContext?.({ owner: 'synthetic-owner-002', policy }))).rejects.toThrow('Notification metadata storage unavailable');
+    notices[0].onclick?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clicked).not.toHaveBeenCalled();
+    await platform.notifications.clearContext?.('synthetic-owner-001');
+    platform.notifications.show({ title: 'Synthetic', body: 'New account', eventId: '$event' });
+    await vi.waitFor(() => expect(notices).toHaveLength(2));
+    await expect(Promise.resolve(platform.notifications.clearContext?.('synthetic-owner-002'))).rejects.toThrow('Notification metadata storage unavailable');
+    platform.notifications.show({ title: 'Synthetic', body: 'Logged out', eventId: '$other' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(notices).toHaveLength(2);
+  });
+
   it('keeps SSO state in the browser session until the callback completes', async () => {
     const platform = createBrowserPlatform();
     const pending = { baseUrl: 'https://matrix.example.com', serverName: 'example.com' };

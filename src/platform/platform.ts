@@ -1,3 +1,4 @@
+import type { NotificationContext } from '../pwa/notificationPolicy';
 import type { StoredMatrixSession } from '../matrix/sessionStore';
 import type { PushRoute } from '../pwa/pushRouting';
 
@@ -26,6 +27,7 @@ export interface NotificationRequest {
   title: string;
   body: string;
   tag?: string;
+  eventId?: string;
   silent?: boolean;
   onClick?: () => void;
 }
@@ -35,6 +37,8 @@ export interface NotificationService {
   readonly permission: NotificationPermission | 'unsupported';
   requestPermission(): Promise<NotificationPermission | 'unsupported'>;
   show(request: NotificationRequest): void;
+  setContext?(context: NotificationContext): void | Promise<void>;
+  clearContext?(owner: string): void | Promise<void>;
 }
 
 export interface PushSubscriptionData {

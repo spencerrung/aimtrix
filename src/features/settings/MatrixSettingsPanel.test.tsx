@@ -59,3 +59,14 @@ it('keeps failed device removal open and retains password-required UIA input', a
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('did not accept'));
   expect(password).toHaveValue('synthetic-test-only');
 });
+
+it('loads notification rules only when the controls are opened', async () => {
+  const loadAttention = vi.fn().mockResolvedValue({ rooms: [], keywords: [], doNotDisturb: false, threadRulesSupported: false, localPolicy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 1320, endMinute: 420 } }, health: { permission: 'denied', background: 'Not configured for this installation', subscription: 'Missing', pusher: 'No matching registration' } });
+  setup({ attention: { load: loadAttention, setRoom: vi.fn(), setDoNotDisturb: vi.fn(), addKeyword: vi.fn(), removeKeyword: vi.fn(), setLocalPolicy: vi.fn(), testNotification: vi.fn() } });
+  const button = await screen.findByRole('button', { name: 'Notification rules and delivery' });
+  expect(loadAttention).not.toHaveBeenCalled();
+  fireEvent.click(button);
+  await screen.findByText('Join a room to set its notification rules.');
+  expect(loadAttention).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole('button', { name: 'Test local notification' })).toBeDisabled();
+});

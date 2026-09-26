@@ -1,3 +1,4 @@
+import { NotificationGuard } from '../pwa/notificationPolicy';
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
@@ -8,7 +9,7 @@ import {
   SESSION_KEY,
   type StoredMatrixSession,
 } from '../matrix/sessionStore';
-import { parsePushRoute, pushRouteFromMessage, routeUrl, type PushRoute } from '../pwa/pushRouting';
+import { parsePushRoute, routeUrl, type PushRoute } from '../pwa/pushRouting';
 import type {
   AimtrixPlatform,
   AppLifecycle,
@@ -29,15 +30,6 @@ function permissionState(value: string): NotificationPermission {
   if (value === 'granted') return 'granted';
   if (value === 'denied') return 'denied';
   return 'default';
-}
-
-function routeFromNativeData(value: unknown): PushRoute | undefined {
-  if (!value || typeof value !== 'object') return undefined;
-  const data = value as Record<string, unknown>;
-  return pushRouteFromMessage({
-    roomId: Object.hasOwn(data, 'room_id') ? data.room_id : data.roomId,
-    eventId: Object.hasOwn(data, 'event_id') ? data.event_id : data.eventId,
-  });
 }
 
 function createNativeCredentials(): CredentialStore<StoredMatrixSession> {
@@ -98,6 +90,7 @@ function createNativeSsoState(): CredentialStore<SsoPendingState> {
 }
 
 function createNativeNotifications(): NotificationService {
+  const guard = new NotificationGuard(false);
   let permission: NotificationPermission = 'default';
   const clickHandlers = new Map<number, () => void>();
   let nextNotificationId = 1;
@@ -112,6 +105,8 @@ function createNativeNotifications(): NotificationService {
   });
 
   return {
+    setContext: guard.setContext,
+    clearContext: guard.clearContext,
     supported: true,
     get permission() {
       return permission;
@@ -130,22 +125,26 @@ function createNativeNotifications(): NotificationService {
     },
     show(request: NotificationRequest) {
       if (permission !== 'granted') return;
-      const id = nextNotificationId++;
-      if (request.onClick) clickHandlers.set(id, request.onClick);
-      void LocalNotifications.schedule({
-        notifications: [{
-          id,
-          title: request.title,
-          body: request.body,
-          silent: request.silent,
-          extra: request.tag ? { tag: request.tag } : undefined,
-        }],
-      }).catch(() => clickHandlers.delete(id));
+      void guard.accept(request.eventId).then((owner) => {
+        if (!owner) return;
+        const id = nextNotificationId++;
+        if (request.onClick) clickHandlers.set(id, () => { void guard.isCurrent(owner).then((current) => { if (current) request.onClick?.(); }); });
+        if (clickHandlers.size > 100) clickHandlers.delete(clickHandlers.keys().next().value!);
+        return LocalNotifications.schedule({
+          notifications: [{
+            id,
+            title: request.title,
+            body: request.body,
+            silent: request.silent,
+            extra: request.tag ? { tag: request.tag } : undefined,
+          }],
+        }).catch(() => { clickHandlers.delete(id); });
+      }).catch(() => undefined);
     },
   };
 }
 
-function createNativePush(onRoute: (route: PushRoute) => void): PushService {
+function createNativePush(onRoute: () => void): PushService {
   let token: string | undefined;
   let registrationError: string | undefined;
   let registrationPromise: Promise<string> | undefined;
@@ -174,8 +173,8 @@ function createNativePush(onRoute: (route: PushRoute) => void): PushService {
     rejectRegistration = undefined;
   });
   void PushNotifications.addListener('pushNotificationActionPerformed', (result) => {
-    const route = routeFromNativeData(result.notification.data);
-    if (route) onRoute(route);
+    void result;
+    onRoute();
   });
 
   return {
@@ -331,9 +330,7 @@ export function createCapacitorPlatform(): AimtrixPlatform {
     credentials: createNativeCredentials(),
     sso: createNativeSsoState(),
     notifications: createNativeNotifications(),
-    push: createNativePush((route) => {
-      deepLinks.openRoute(route);
-    }),
+    push: createNativePush(() => { deepLinks.focus(); }),
     lifecycle: createNativeLifecycle(),
     install: createNativeInstall(),
     deepLinks,

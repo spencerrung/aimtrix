@@ -75,6 +75,7 @@ export interface RoomSummary {
   ownPowerLevel?: number;
   typingUsers?: string[];
   muted?: boolean;
+  notificationMode?: import('./notificationRules').RoomNotificationMode;
   background?: RoomBackground;
   backgroundPolicy?: RoomBackgroundPolicy;
   updatedAt: number;
@@ -94,6 +95,7 @@ export interface ThreadSummary {
   rootStatus?: 'loading' | 'found' | 'removed' | 'unavailable';
   history?: HistorySummary;
   participated?: boolean;
+  followed?: boolean;
   latestActivity?: number;
   /** Latest accepted live reply, independently of the currently selected page. */
   latestReplyEventId?: string;
@@ -205,6 +207,7 @@ export interface WorkspaceSnapshot {
   historyByRoom?: Record<string, HistorySummary>;
   membersByRoom: Record<string, MemberSummary[]>;
   threadsByRoot: Record<string, ThreadSummary>;
+  activity?: import('./activity').ActivitySnapshot;
   call?: CallSummary;
 }
 

@@ -56,6 +56,7 @@ function platformFixture(stored: StoredMatrixSession | undefined = session) {
   };
   const platform = {
     capabilities: { platform: 'browser' }, credentials,
+    notifications: { setContext: vi.fn().mockResolvedValue(undefined), clearContext: vi.fn().mockResolvedValue(undefined) },
     push: { unsubscribe: vi.fn().mockResolvedValue(true) },
     sso: { load: vi.fn(), save: vi.fn(), clear: vi.fn() },
   } as unknown as AimtrixPlatform;
