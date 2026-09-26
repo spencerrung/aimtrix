@@ -1,3 +1,5 @@
+import type { ThreadAttentionActions } from './ThreadAttention';
+import type { ActivityActions, HomePosition } from './HomeActivity';
 import { MemberActions } from './MemberActions';
 import '../auth/sessionRecovery.css';
 import { useShellNavigation, type ShellReadingPosition } from './useShellNavigation';
@@ -56,6 +58,8 @@ import {
 } from 'lucide-react';
 import {
   Fragment,
+  lazy,
+  Suspense,
   createContext,
   useContext,
   memo,
@@ -119,10 +123,15 @@ import {
   type WorkspaceSnapshot,
 } from '../../matrix/viewModels';
 
+const ThreadAttention = lazy(() => import('./ThreadAttention'));
+const HomeActivity = lazy(() => import('./HomeActivity'));
+
 type ComposerMention = DraftMention;
 type ComposerInlineEmoji = DraftInlineEmoji;
 
 interface WorkspaceProps extends MessageDeliveryActions {
+  activityActions?: ActivityActions;
+  threadAttentionActions?: ThreadAttentionActions;
   workspace: WorkspaceSnapshot;
   draftStore?: VolatileDrafts;
   structuredDraftStore?: StructuredDraftStore;
@@ -1297,6 +1306,7 @@ type WorkspacePanelId = 'buddies' | 'conversation' | 'thread';
 type ComposerSubmitResult = 'sent' | 'edited' | 'retained' | false;
 
 function Conversation({
+  threadAttentionActions,
   contextHost, contextPanel, conversationVisible, contextWidth, contextMaximum, onContextResize, onSearch, onCloseContext, onRevealConversation,
   room,
   history,
@@ -1362,6 +1372,7 @@ function Conversation({
   onLoadLinkPreview,
   onSendNudge,
 }: {
+  threadAttentionActions?: ThreadAttentionActions;
   contextHost: HTMLDivElement | null;
   contextPanel: 'thread' | 'details' | 'search' | null;
   conversationVisible: boolean;
@@ -2241,6 +2252,7 @@ function Conversation({
             <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></span>
           </header>
           <div ref={threadTimeline} className="thread-panel__timeline" tabIndex={0} aria-label="Thread replies" aria-busy={threadHistoryBusy} onScroll={() => { captureThread(); reportThreadRead(false, true); }}>
+          {threadAttentionActions ? <Suspense fallback={null}><ThreadAttention key={JSON.stringify([room.id, activeThread.rootId])} actions={threadAttentionActions} roomId={room.id} rootId={activeThread.rootId} /></Suspense> : null}
             <div className="thread-panel__root">
               {threadRoot && activeThread.rootStatus !== 'removed' ? <TimelineMessage message={threadRoot} hideThreadControls dataSaver={dataSaver} autoplayMedia={autoplayMedia}
                 onReply={(message) => onStartReply(message, activeThread.rootId)} onOpenThread={onOpenThread} onStartThread={onStartThread} onEdit={startThreadEdit} onDelete={onDeleteMessage}
@@ -2841,6 +2853,8 @@ function DetailsPanel({
 }
 
 export function Workspace({
+  activityActions,
+  threadAttentionActions,
   workspace,
   draftStore,
   structuredDraftStore,
@@ -2935,6 +2949,8 @@ export function Workspace({
       return workspace.spaces[0]?.id ?? 'home';
     }
   });
+  const [homePosition, setHomePosition] = useState<HomePosition>({ filter: 'all', scroll: 0, initialized: false });
+  const updateHomePosition = useCallback((patch: Partial<HomePosition>) => setHomePosition((current) => ({ ...current, ...patch })), []);
   const [query, setQuery] = useState('');
   const [navigationDialog, setNavigationDialog] = useState<'switcher' | 'link' | 'help'>();
   const [conversationFilter, setConversationFilter] = useState<'all' | 'unread' | 'favorites'>('all');
@@ -2949,7 +2965,8 @@ export function Workspace({
   const [shellWidth, setShellWidth] = useState(window.innerWidth);
   const contextDocked = shellWidth >= 1200;
   const mobileChatOpen = shellRoute.surface !== 'list';
-  const contextPanel = contextDocked || shellRoute.surface === 'context' ? shellRoute.panel : null;
+  const showingHome = shellRoute.surface === 'activity';
+  const contextPanel = !showingHome && (contextDocked || shellRoute.surface === 'context') ? shellRoute.panel : null;
   const detailsOpen = contextPanel === 'details';
   const conversationVisible = (shellWidth >= 768 || mobileChatOpen) && (contextDocked || !contextPanel);
   const [contextHost, setContextHost] = useState<HTMLDivElement | null>(null);
@@ -3335,6 +3352,7 @@ export function Workspace({
     const space = workspace.spaces.find((candidate) => candidate.id === spaceId);
     setActiveSpace(spaceId);
     setQuery('');
+    if (space?.kind === 'home') { navigateShell({ surface: 'activity', panel: null, spaceId, roomId: selectedRoomId }); return; }
     navigateShell({ surface: 'list', spaceId, roomId: space?.roomIds.includes(selectedRoomId ?? '') ? selectedRoomId : space?.roomIds[0], panel: contextDocked && shellRoute.panel === 'details' ? 'details' : null });
     if (space && !space.roomIds.includes(selectedRoomId ?? '')) {
       setSelectedRoomId(space.roomIds.find((roomId) => workspace.rooms.some((room) => room.id === roomId)));
@@ -3408,12 +3426,12 @@ export function Workspace({
         threadRootId: result.threadRootId, threadEventId: result.eventId });
       return;
     }
-    if (result.roomId === effectiveRoomId && result.eventId && result.eventId === shellRoute.eventId) {
+    if (shellRoute.surface !== 'activity' && result.roomId === effectiveRoomId && result.eventId && result.eventId === shellRoute.eventId) {
       await historyHandlers.current.onOpenEventContext?.(result.roomId, result.eventId);
       return;
     }
     selectRoom(result.roomId, workspace.spaces.find((space) => space.roomIds.includes(result.roomId))?.id ?? activeSpace, result.eventId);
-  }, [activeSpace, effectiveRoomId, onResolveNavigationTarget, navigateShell, selectRoom, shellRoute.eventId, workspace.rooms, workspace.spaces]);
+  }, [activeSpace, effectiveRoomId, onResolveNavigationTarget, navigateShell, selectRoom, shellRoute.eventId, shellRoute.surface, workspace.rooms, workspace.spaces]);
   const matrixTargetHandler = useRef(openMatrixTarget);
   useLayoutEffect(() => { matrixTargetHandler.current = openMatrixTarget; });
   useEffect(() => {
@@ -3873,6 +3891,7 @@ export function Workspace({
       </QuickSwitcher> : navigationDialog ? <NavigationDialogs kind={navigationDialog} onClose={() => setNavigationDialog(undefined)} onOpenLink={openMatrixLink} onStartConversation={onCreateDirectRoom ? async (userId) => { const id = await onCreateDirectRoom(userId); selectRoom(id, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace); } : undefined} /> : null}
       <section className={`aimtrix-window${connectionNotice || structuredDraftStore || draftsState.list.length ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
+          <button className="icon-button" type="button" aria-label="Home activity" title="Home activity" style={{ minWidth: 44, minHeight: 44 }} onClick={() => { setPanelCollapsed('conversation', false); navigateShell({ surface: 'activity', panel: null, spaceId: workspace.spaces.find((space) => space.kind === 'home')?.id, roomId: selectedRoomId }); }}><Sparkles size={18} /></button>
           <button className="icon-button" type="button" aria-label="Quick switcher" title="Quick switcher" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setNavigationDialog('switcher')}><Search size={18} /></button>
           <div className="app-titlebar__identity">
             <BrandMark compact />
@@ -3908,7 +3927,7 @@ export function Workspace({
         <div
           className={`workspace-grid${collapsedPanels.conversation ? ' workspace-grid--conversation-collapsed' : ''}`}
           style={{
-            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${buddyWidth}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation ? '48px' : 'minmax(420px, 1fr)'} 0px 0px ${contextPanel ? '8px' : '0px'} ${contextPanel ? `${contextWidth}px` : '0px'}`,
+            gridTemplateColumns: `66px 0px ${collapsedPanels.buddies ? '48px' : `${buddyWidth}px`} ${collapsedPanels.buddies ? '0px' : '8px'} ${collapsedPanels.conversation && !showingHome ? '48px' : 'minmax(420px, 1fr)'} 0px 0px ${contextPanel ? '8px' : '0px'} ${contextPanel ? `${contextWidth}px` : '0px'}`,
           }}
         >
           <SpaceRail
@@ -3939,7 +3958,8 @@ export function Workspace({
             onReorganize={onReorganizeSpaceChildren}
           />}
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(buddyWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', buddyWidth - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', buddyWidth + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
-          <Conversation
+          {showingHome ? <Suspense fallback={<main style={{ gridColumn: '5 / span 3' }} role="status">Loading Home…</main>}><HomeActivity workspace={workspace} activity={workspace.activity} actions={activityActions} position={homePosition} onPosition={updateHomePosition} onOpen={openMatrixTarget} onBack={shellBack} onBrowse={() => navigateShell({ ...shellRoute, surface: 'list', panel: null })} onSettings={() => setSettingsOpen(true)} onDrafts={() => setDraftListOpen(true)} draftCount={draftsState.list.length} onMarkRead={onMarkRoomRead ? (roomId) => onMarkRoomRead(roomId, { explicit: true }) : undefined} /></Suspense> : <Conversation
+            threadAttentionActions={threadAttentionActions}
             contextHost={contextHost}
             contextPanel={contextPanel}
             conversationVisible={conversationVisible && (!contextDocked || !collapsedPanels.conversation)}
@@ -4050,8 +4070,8 @@ export function Workspace({
             dataSaver={preferences.dataSaver}
             autoplayMedia={preferences.autoplayMedia}
             onLoadLinkPreview={onLoadLinkPreview}
-          />
-          {collapsedPanels.conversation ? <button className="workspace-collapsed-panel workspace-collapsed-panel--conversation" type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={18} /></button> : null}
+          />}
+          {!showingHome && collapsedPanels.conversation ? <button className="workspace-collapsed-panel workspace-collapsed-panel--conversation" type="button" aria-label="Expand conversation" title="Expand conversation" onClick={() => setPanelCollapsed('conversation', false)}><MessageCircle size={18} /></button> : null}
           {contextPanel ? <div className="workspace-panel-resize workspace-panel-resize--details" role="separator" aria-label="Resize conversation and details" aria-orientation="vertical" aria-valuemin={260} aria-valuemax={contextMaximum} aria-valuenow={Math.round(contextWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('details', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('details', contextWidth + 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('details', contextWidth - 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('details', 260); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('details', 560); } }} /> : null}
           <div ref={setContextHost} className="context-panel" hidden={!contextPanel} role={contextDocked ? undefined : 'main'} aria-label={contextDocked ? undefined : 'Conversation context'}>
             <div hidden={!detailsOpen} inert={!detailsOpen} className="details-surface">
@@ -4123,6 +4143,7 @@ export function Workspace({
         {deleteTarget ? <ConfirmDialog title="Delete this message?" description="This removes the message for everyone in the room. This cannot be undone." actionLabel="Delete message" onClose={() => setDeleteTarget(undefined)} onConfirm={async () => { if (workspace.mode === 'demo') setDemoMessageOverrides((current) => ({ ...current, [deleteTarget.id]: null })); else { if (!onRedactMessage) throw new Error('Deletion is unavailable.'); await onRedactMessage(deleteTarget.roomId, deleteTarget.id); } setNotice('Message deleted.'); }} /> : null}
         {settingsOpen ? (
           <SettingsDialog
+            initialSection={showingHome ? 'matrix' : 'profile'}
             user={workspace.user}
             theme={theme}
             preferences={preferences}

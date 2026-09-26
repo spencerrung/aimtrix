@@ -32,8 +32,9 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 - [x] One contextual thread/details/search surface, bounded desktop widths, shared mobile/browser Back, retained reading anchors and drafts, accessible More/member menus, and reduced-height composition. See [conversation shell](docs/conversation-shell.md); physical keyboard/native Back acceptance remains separate.
 - [x] Keyboard/touch quick switching, standard Matrix favorites, scoped unread/favorite filters, account-wide next-unread navigation, Matrix links, and Back/Forward reading positions. See [quick navigation](docs/quick-navigation.md) for privacy, failure states, and evidence boundaries.
 - [x] Movable history bounded to 250 visible messages, older/newer navigation, old-event/reply context, stable reading anchors, truthful loading/retry/end states, and return to live. See [history navigation](docs/history-navigation.md); full search retains its separate gate; thread history and read reconciliation are documented below.
-- [x] Independent old thread roots and bounded reply history, standard reply links, separate room/thread Back/Forward anchors, root fallbacks and focused live-tail read guards. See [thread history](docs/thread-history.md) and [shared room/thread messaging](docs/room-thread-messaging.md); Home activity remains separate work.
+- [x] Independent old thread roots and bounded reply history, standard reply links, separate room/thread Back/Forward anchors, root fallbacks and focused live-tail read guards. See [thread history](docs/thread-history.md) and [shared room/thread messaging](docs/room-thread-messaging.md); Home coverage and followed-thread behavior are documented in [attention and catch-up](docs/attention-and-catch-up.md).
 - [x] Text, notices, emotes, replies, edits, redaction, reactions, pins, typing state, and read-receipt sending.
+- [x] Home catch-up with bounded notification/thread discovery, filters, exact context return, explicit coverage and cross-device Aimtrix thread-follow preferences. See [attention and catch-up](docs/attention-and-catch-up.md).
 - [x] Private main/thread read tracking, focused live-tail advancement, consistent mute/highlight badges, explicit read/unread reminders and saved message context. See [read state](docs/unread-state.md) for cross-device semantics and older-server/physical-device boundaries.
 - [x] Image/video/audio/file rendering and authenticated encrypted-attachment decryption.
 - [x] Encrypted/unencrypted uploads with limits, progress, cancellation, and retry.
@@ -149,7 +150,7 @@ These retain compatibility depth and validation obligations alongside additive f
 - [ ] Complete deeper per-event decryption diagnostics beyond delivery state and read-position avatars. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Add aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
 - [ ] Add suggested-child controls, canonical-parent selection, and explicit removal from every space. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
-- [ ] Add per-room mention/keyword push-rule editing and notification troubleshooting. — [#159](https://github.com/spencerrung/aimtrix/issues/159), [#176](https://github.com/spencerrung/aimtrix/issues/176).
+- [x] Room all/mentions/nothing, keyword/thread rules, account DND, local quiet time and safe delivery troubleshooting. — [#159](https://github.com/spencerrung/aimtrix/issues/159); [behavior and boundaries](docs/attention-and-catch-up.md). Actual closed-app provider acceptance remains [#176](https://github.com/spencerrung/aimtrix/issues/176).
 
 ### Encryption and identity depth
 

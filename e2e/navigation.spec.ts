@@ -36,7 +36,10 @@ test('quick switching preserves drafts and real favorites filter independently o
   await expect(composer).toHaveText('Keep my draft while finding another buddy');
   await page.getByRole('button', { name: 'Add to favorites', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Remove from favorites' })).toHaveAttribute('aria-pressed', 'true');
-  if (info.project.name === 'mobile') await page.getByRole('button', { name: 'Home', exact: true }).click();
+  if (info.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+    await page.getByRole('button', { name: 'Browse conversations', exact: true }).click();
+  }
   const buddies = page.getByRole('complementary', { name: 'Buddy list' });
   const filter = page.getByRole('combobox', { name: 'Conversation filter' });
   await filter.selectOption('favorites');
@@ -45,7 +48,10 @@ test('quick switching preserves drafts and real favorites filter independently o
   await page.screenshot({ path: info.outputPath('favorites-filter.png') });
   await buddies.getByRole('button', { name: /Welcome Lounge/ }).click();
   await page.getByRole('button', { name: 'Remove from favorites' }).click();
-  if (info.project.name === 'mobile') await page.getByRole('button', { name: 'Home', exact: true }).click();
+  if (info.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Home', exact: true }).click();
+    await page.getByRole('button', { name: 'Browse conversations', exact: true }).click();
+  }
   await expect(buddies.getByRole('button', { name: /Welcome Lounge/ })).toBeHidden();
   await filter.selectOption('unread');
   await expect(buddies.getByRole('button', { name: /Mara Chen/ })).toBeVisible();

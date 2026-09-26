@@ -3,7 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 export type ShellPanel = 'thread' | 'details' | 'search';
 
 export interface ShellRoute {
-  surface: 'list' | 'conversation' | 'context';
+  surface: 'list' | 'conversation' | 'context' | 'activity';
   panel: ShellPanel | null;
   roomId?: string;
   spaceId?: string;

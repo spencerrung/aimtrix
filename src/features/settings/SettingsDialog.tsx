@@ -37,6 +37,7 @@ export interface ProfileUpdate {
 }
 
 interface SettingsDialogProps {
+  initialSection?: 'profile' | 'appearance' | 'matrix';
   user: UserSummary;
   theme: ThemeName;
   preferences: UserPreferences;
@@ -66,6 +67,7 @@ const accentLabels: Record<AccentName, string> = {
 };
 
 export function SettingsDialog({
+  initialSection = 'profile',
   user,
   theme,
   preferences,
@@ -79,7 +81,7 @@ export function SettingsDialog({
   onSignOut,
   onClose,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<'profile' | 'appearance' | 'matrix'>('profile');
+  const [section, setSection] = useState<'profile' | 'appearance' | 'matrix'>(initialSection);
   const [displayName, setDisplayName] = useState(user.displayName);
   const [presence, setPresence] = useState<PresenceState>(user.presence);
   const [statusMessage, setStatusMessage] = useState(user.statusMessage);

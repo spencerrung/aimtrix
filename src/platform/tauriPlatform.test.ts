@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { onAction, registerActionTypes, sendNotification } from '@tauri-apps/plugin-notification';
 import { SESSION_KEY } from '../matrix/sessionStore';
 import { createTauriPlatform } from './tauriPlatform';
 
@@ -37,6 +38,40 @@ describe('Tauri platform', () => {
     mocks.getCurrent.mockResolvedValue(null);
     mocks.check.mockReset();
     mocks.relaunch.mockReset();
+  });
+
+  it('rejects queued local notifications after account changes or a new local pause', async () => {
+    const platform = createTauriPlatform();
+    const policy = { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } };
+    await platform.notifications.requestPermission();
+    for (const change of ['account', 'pause']) {
+      await platform.notifications.setContext?.({ owner: 'synthetic-owner-001', policy });
+      let finish!: () => void;
+      vi.mocked(registerActionTypes).mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+      vi.mocked(sendNotification).mockClear();
+      platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: `$${change}` });
+      await vi.waitFor(() => expect(finish).toBeTypeOf('function'));
+      await platform.notifications.setContext?.({ owner: change === 'account' ? 'synthetic-owner-002' : 'synthetic-owner-001', policy: change === 'pause' ? { ...policy, pauseUntil: Date.now() + 60000 } : policy });
+      finish();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(sendNotification).not.toHaveBeenCalled();
+    }
+  });
+
+  it('deduplicates desktop events and rejects clicks after logout', async () => {
+    const platform = createTauriPlatform(); const clicked = vi.fn();
+    await platform.notifications.requestPermission();
+    await platform.notifications.setContext?.({ owner: 'synthetic-owner-001', policy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } } });
+    vi.mocked(sendNotification).mockClear();
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$event', silent: true, onClick: clicked });
+    platform.notifications.show({ title: 'Synthetic', body: 'Activity', eventId: '$event' });
+    await vi.waitFor(() => expect(sendNotification).toHaveBeenCalledOnce());
+    const notice = vi.mocked(sendNotification).mock.calls[0][0];
+    expect(notice).toMatchObject({ silent: true });
+    platform.notifications.clearContext?.('synthetic-owner-001');
+    vi.mocked(onAction).mock.calls.at(-1)![0](notice as Parameters<Parameters<typeof onAction>[0]>[0]);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(clicked).not.toHaveBeenCalled();
   });
 
   it('exposes secure desktop capabilities and allowlisted credentials', async () => {

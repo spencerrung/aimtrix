@@ -99,9 +99,23 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
     update();
     return controller.subscribe(update);
   }, [controller, structuredDraftStore, clearDrafts, reportDraftState]);
+  const threadAttentionActions = useMemo(() => ({
+    load: (roomId: string, rootId: string) => controller.loadThreadAttention(roomId, rootId),
+    follow: (roomId: string, rootId: string, value: boolean) => controller.activity.setThreadFollow(roomId, rootId, value),
+    mute: (roomId: string, rootId: string, value: boolean) => controller.notificationRules.setThreadMuted(roomId, rootId, value),
+  }), [controller]);
   const matrixSettingsActions = useMemo(
     () => ({
       load: () => controller.loadSettings(),
+      attention: {
+        load: () => controller.loadNotificationSettings(),
+        setRoom: (roomId: string, mode: Exclude<import('./matrix/notificationRules').RoomNotificationMode, 'custom'>) => controller.setRoomNotificationMode(roomId, mode),
+        setDoNotDisturb: (enabled: boolean) => controller.notificationRules.setDoNotDisturb(enabled),
+        addKeyword: (pattern: string) => controller.notificationRules.addKeyword(pattern),
+        removeKeyword: (id: string) => controller.notificationRules.removeKeyword(id),
+        setLocalPolicy: (policy: import('./pwa/notificationPolicy').LocalNotificationPolicy) => controller.setLocalNotificationPolicy(policy),
+        testNotification: () => controller.testNotification(),
+      },
       verifyDevice: (deviceId: string, signal?: AbortSignal) => controller.verifyDevice(deviceId, signal),
       renameDevice: (deviceId: string, displayName: string) =>
         controller.renameDevice(deviceId, displayName),
@@ -299,6 +313,8 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
+          threadAttentionActions={threadAttentionActions}
+          activityActions={{ refresh: () => controller.activity.refresh(), loadOlder: () => controller.activity.loadOlder(), loadMoreThreads: () => controller.activity.loadMoreThreads(), setThreadFollow: (roomId, rootId, following) => controller.activity.setThreadFollow(roomId, rootId, following) }}
         install={platform.install}
         pushRoute={pushRoute}
         onSendMessage={(roomId, body, mentions, inlineEmojis) => controller.sendMessage(roomId, body, mentions, inlineEmojis)}

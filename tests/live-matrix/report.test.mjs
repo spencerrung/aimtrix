@@ -75,3 +75,15 @@ test('optional Element evidence records the pinned client without session or ren
   assert.deepEqual(result.checks, [{ name, passed: true }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
+
+test('attention evidence discards notification policies, patterns, routes, activity and follow data', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const name of ['notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync']) {
+    const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
+      rules: privateValue, keyword: privateValue, roomId: privateValue, owner: privateValue,
+      eventId: privateValue, pusher: privateValue, activity: [privateValue], accountData: { privateValue } }],
+    });
+    assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});

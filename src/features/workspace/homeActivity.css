@@ -1,0 +1,28 @@
+.home-activity { grid-column: 5 / span 3; grid-row: 1; display:flex; flex-direction:column; min-width:0; min-height:0; background:var(--surface-soft); color:var(--text); overflow:hidden; }
+.home-activity__header { padding:24px 24px 16px; background:linear-gradient(145deg, #d8f5ff80, #e5dbff70); }
+.home-activity__header > div:first-child { display:flex; align-items:center; gap:12px; }
+.home-activity h1 { font-size:clamp(20px, 2vw, 28px); margin:0; }
+.home-activity h2 { font-size:16px; margin:12px 0; }
+.home-activity__header p { margin:10px 0 16px; }
+.home-activity__tools,.home-activity__filters { display:flex; flex-wrap:wrap; gap:8px; }
+.home-activity__tools button { display:inline-flex; align-items:center; gap:6px; }
+.home-activity__filters { padding:12px 24px; border-bottom:1px solid #8299b344; }
+.home-activity button { min-height:44px; }
+.home-activity__filters [aria-pressed=true] { outline:2px solid #2477ae; outline-offset:-2px; font-weight:700; }
+.home-activity__list { min-height:0; overflow:auto; padding:4px 24px 24px; overscroll-behavior:contain; }
+.home-activity__card { margin:10px 0; border:1px solid #8299b366; border-radius:12px; padding:8px; background:var(--surface-raised); box-shadow:0 2px 4px #17314b0a; }
+.home-activity__open { width:100%; display:flex; align-items:center; gap:12px; border:0; background:transparent; color:inherit; padding:10px; text-align:left; border-radius:8px; }
+.home-activity__open > span { flex:1; min-width:0; display:grid; gap:6px; }
+.home-activity__open span span { overflow-wrap:anywhere; white-space:pre-wrap; max-height:5.5em; overflow:hidden; }
+.home-activity__open small,.home-activity__hint,.home-activity__coverage { font-size:12px; line-height:1.6; }
+.home-activity__coverage { border-top:1px solid #8299b344; margin-top:20px; padding-top:16px; }
+@media(max-width:767px) { .home-activity { grid-column:1 / -1; } .home-activity__header { padding:16px; } .home-activity__list { padding:4px 16px 20px; } .home-activity__filters { padding:12px 16px; } }
+
+@media(max-height:540px) {
+  .home-activity { display:block; overflow:auto; overscroll-behavior:contain; }
+  .home-activity__header { padding:12px 16px; }
+  .home-activity__header p { margin:6px 0 10px; }
+  .home-activity__filters { padding:8px 16px; }
+  .home-activity__list { overflow:visible; min-height:160px; }
+}
+:root[data-theme="midnight"] .home-activity__header { background:linear-gradient(145deg, #26435e, #3c345e); }

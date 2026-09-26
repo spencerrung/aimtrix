@@ -1,3 +1,4 @@
+import { ActivityStore } from './activity';
 import type {
   EventType,
   MatrixClient,
@@ -14,6 +15,8 @@ import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
 import type { ISyncStateData } from 'matrix-js-sdk/lib/sync.js';
 import { connectionIssue, connectionIssueMessage, isSessionRejected, type ConnectionIssue, type SessionRecovery } from './sessionRecovery';
 export type { ConnectionIssue, SessionRecovery } from './sessionRecovery';
+import { NotificationRules, threadSilenceRuleId, type RoomNotificationMode } from './notificationRules';
+import { normalizeNotificationPolicy, notificationsPaused, type LocalNotificationPolicy } from '../pwa/notificationPolicy';
 import type { IPusherRequest } from 'matrix-js-sdk/lib/@types/PushRules.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
 import {
@@ -236,6 +239,7 @@ export class MatrixController {
     this.bumpRoomVersion(roomId);
     this.scheduleWorkspacePublish();
   });
+  public readonly activity = new ActivityStore(() => this.client, () => this.scheduleWorkspacePublish());
   private readonly mediaRequests = new Map<string, Promise<string | undefined>>();
   private readonly mediaObjectUrls = new Set<string>();
   private readonly pendingDeviceAuth = new Map<string, string>();
@@ -274,6 +278,83 @@ export class MatrixController {
   };
   private pushRegistration?: { pushKey: string; appId: string };
   private pushRefreshPending = false;
+  private pushWork: Promise<unknown> = Promise.resolve();
+  private notificationOwner = crypto.randomUUID();
+  private notificationPolicyIssue = false;
+  private localNotificationPolicy = normalizeNotificationPolicy(undefined);
+  private readonly notifiedEvents = new Set<string>();
+  public readonly notificationRules = new NotificationRules(() => this.client, () => {
+    this.snapshotCache.roomVersions.clear();
+    this.snapshotCache.messages.clear();
+    this.scheduleWorkspacePublish();
+  });
+
+  private notificationPolicyKey(): string | undefined {
+    const session = this.activeSession;
+    return session ? `aimtrix.notification-policy.v1:${encodeURIComponent(session.baseUrl)}:${encodeURIComponent(session.userId)}` : undefined;
+  }
+
+  public async setLocalNotificationPolicy(policy: LocalNotificationPolicy): Promise<void> {
+    if (!this.client) throw new Error('Connect to Matrix to change notification settings.');
+    const owner = this.notificationOwner;
+    const normalized = normalizeNotificationPolicy(policy);
+    const key = this.notificationPolicyKey();
+    if (key) {
+      try { localStorage.setItem(key, JSON.stringify(normalized)); }
+      catch { throw new Error('Notification preferences could not be saved on this device.'); }
+    }
+    this.localNotificationPolicy = normalized;
+    try {
+      await this.platform.notifications.setContext?.({ owner, policy: normalized });
+      if (owner === this.notificationOwner) this.notificationPolicyIssue = false;
+    } catch {
+      if (owner === this.notificationOwner) this.notificationPolicyIssue = true;
+      throw new Error('Local alerts changed, but background quiet settings could not be saved. Retry after checking browser storage.');
+    }
+  }
+
+  public async loadNotificationSettings() {
+    const client = this.client;
+    const revision = this.lifecycleRevision;
+    if (!client) throw new Error('Connect to Matrix to view notifications.');
+    const check = () => { if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('The Matrix account changed. Open settings again.'); };
+    const rules = await this.notificationRules.load(); check();
+    let subscription = 'Unavailable';
+    let pusher: string;
+    try {
+      const current = await this.platform.push.getSubscription(); check();
+      subscription = current ? (current.expirationTime && current.expirationTime <= Date.now() ? 'Expired' : 'Present') : 'Missing';
+      const key = current?.pushKey ?? current?.keys.p256dh;
+      const { pushers } = await client.getPushers(); check();
+      pusher = key && pushers.some((item) => item.pushkey === key && item.app_id === this.config.push?.appId && item.kind === 'http' && item.data?.url === this.config.push?.gatewayUrl && item.data?.format === 'event_id_only') ? 'Registered on homeserver' : 'No matching registration';
+    } catch { check(); pusher = 'Could not check homeserver registration'; }
+    return { ...rules, localPolicy: this.localNotificationPolicy, health: {
+      permission: this.platform.notifications.permission,
+      background: this.notificationPolicyIssue ? 'Background quiet settings could not be saved; retry local settings' : this.config.push && this.platform.capabilities.push && this.platform.push.supported && (this.platform.push.provider === 'native' || this.config.push.webPush?.applicationServerKey) ? 'Configured; delivery not verified' : 'Not configured for this installation',
+      subscription, pusher,
+    } };
+  }
+
+  public async loadThreadAttention(roomId: string, rootId: string) {
+    const client = this.client;
+    const rules = await this.notificationRules.load();
+    if (!client || client !== this.client || client.getRoom(roomId)?.getMyMembership() !== 'join') throw new Error('Thread unavailable.');
+    const thread = client.getRoom(roomId)?.getThread(rootId);
+    return { following: this.activity.followState(roomId, rootId) ?? Boolean(thread?.hasCurrentUserParticipated),
+      supported: rules.threadRulesSupported,
+      muted: client.pushRules?.global.override?.some((rule) => rule.rule_id === threadSilenceRuleId(roomId, rootId) && rule.enabled !== false) ?? false };
+  }
+
+  public async testNotification(): Promise<void> {
+    if (!this.client || this.platform.notifications.permission !== 'granted') throw new Error('Grant notification permission before testing.');
+    if (notificationsPaused(this.localNotificationPolicy)) throw new Error('Resume local alerts before testing.');
+    this.platform.notifications.show({ title: 'Aimtrix notification test', body: 'Local notifications are working. This does not test background delivery.', silent: true });
+  }
+
+  public setRoomNotificationMode(roomId: string, mode: Exclude<RoomNotificationMode, 'custom'>): Promise<void> {
+    return this.notificationRules.setRoom(roomId, mode);
+  }
+
 
   private readonly platform: AimtrixPlatform;
 
@@ -309,7 +390,23 @@ export class MatrixController {
     this.notificationPreferences = preferences;
   }
 
-  public async registerPushNotifications(): Promise<PushRegistrationResult> {
+  public registerPushNotifications(): Promise<PushRegistrationResult> {
+    const client = this.client;
+    const revision = this.lifecycleRevision;
+    const result = this.pushWork.catch(() => undefined).then(() => {
+      if (client !== this.client || revision !== this.lifecycleRevision) return { status: 'error' as const, message: 'The account changed. Enable notifications again.' };
+      return this.registerPushForCurrentAccount();
+    });
+    this.pushWork = result;
+    return result;
+  }
+
+  private async registerPushForCurrentAccount(): Promise<PushRegistrationResult> {
+    const client = this.client;
+    const revision = this.lifecycleRevision;
+    const current = () => client === this.client && revision === this.lifecycleRevision;
+    const check = () => { if (!current()) throw new Error('Notification account changed'); };
+
     if (!this.platform.notifications.supported) {
       return { status: 'unavailable', message: 'This browser does not support notifications.' };
     }
@@ -321,6 +418,7 @@ export class MatrixController {
     } catch {
       return { status: 'error', message: 'Aimtrix could not request notification permission.' };
     }
+    if (!current()) return { status: 'error', message: 'The account changed. Enable notifications again.' };
     if (permission !== 'granted') {
       return { status: 'denied', message: 'Notification permission was not granted.' };
     }
@@ -333,7 +431,6 @@ export class MatrixController {
         message: 'Foreground notifications are enabled. Background delivery is not configured for this installation.',
       };
     }
-    const client = this.client;
     if (!client) return { status: 'error', message: 'Connect to Matrix before enabling background notifications.' };
 
     let createdSubscription = false;
@@ -344,9 +441,11 @@ export class MatrixController {
       } catch {
         existingSubscription = undefined;
       }
+      check();
       const subscription = existingSubscription ?? await this.platform.push.subscribe(
         usesWebPush ? pushConfig.webPush?.applicationServerKey : undefined,
       );
+      check();
       createdSubscription = !existingSubscription;
       const pushKey = subscription.pushKey ?? subscription.keys.p256dh;
       if (!pushKey) throw new Error('The platform did not provide a usable push key.');
@@ -374,21 +473,40 @@ export class MatrixController {
         data,
       };
       await client.setPusher(pusher);
+      if (!current()) {
+        await client.removePusher(pushKey, pushConfig.appId).catch(() => undefined);
+        throw new Error('Notification account changed');
+      }
       if (this.activeSession) {
-        await this.removePushersForDevice(client, this.activeSession.deviceId, pushKey);
+        await this.removePushersForDevice(client, this.activeSession.deviceId, pushKey); check();
       }
       if (this.pushRegistration && this.pushRegistration.pushKey !== pushKey) {
         await client.removePusher(this.pushRegistration.pushKey, this.pushRegistration.appId).catch(() => undefined);
       }
+      check();
       this.pushRegistration = { pushKey, appId: pushConfig.appId };
       return { status: 'registered', message: 'Background notifications are enabled with privacy-safe event identifiers.' };
     } catch (error) {
-      if (createdSubscription) await this.platform.push.unsubscribe().catch(() => undefined);
+      if (createdSubscription && current()) await this.platform.push.unsubscribe().catch(() => undefined);
       return { status: 'error', message: friendlyError(error) };
     }
   }
 
-  public async unregisterPushNotifications(): Promise<void> {
+  public unregisterPushNotifications(): Promise<void> {
+    const client = this.client;
+    const revision = this.lifecycleRevision;
+    const result = this.pushWork.catch(() => undefined).then(() => {
+      if (client !== this.client || revision !== this.lifecycleRevision) throw new Error('The account changed. Open notification settings again.');
+      return this.unregisterPushForCurrentAccount();
+    });
+    this.pushWork = result;
+    return result;
+  }
+
+  private async unregisterPushForCurrentAccount(): Promise<void> {
+    const revision = this.lifecycleRevision;
+    const check = () => { if (revision !== this.lifecycleRevision || client !== this.client) throw new Error('The account changed. Open notification settings again.'); };
+
     const pushConfig = this.config.push;
     const client = this.client;
     let subscription;
@@ -399,6 +517,7 @@ export class MatrixController {
         subscription = undefined;
       }
     }
+    check();
     const pushKey = subscription?.pushKey ?? subscription?.keys.p256dh ?? this.pushRegistration?.pushKey;
     const appId = pushConfig?.appId ?? this.pushRegistration?.appId;
     let cleanupError: unknown;
@@ -407,18 +526,21 @@ export class MatrixController {
     } catch (error) {
       cleanupError = error;
     }
+    check();
     try {
       if (this.platform.push.supported) await this.platform.push.unsubscribe();
+      check();
     } catch (error) {
       cleanupError ??= error;
     }
+    check();
     this.pushRegistration = undefined;
     if (cleanupError) throw cleanupError;
   }
 
-  private focusNotification(roomId?: string): void {
+  private focusNotification(roomId?: string, eventId?: string): void {
     if (roomId) {
-      const route: PushRoute = { roomId };
+      const route: PushRoute = { roomId, ...(eventId ? { eventId } : {}) };
       this.platform.deepLinks.openRoute(route);
     }
     this.platform.deepLinks.focus();
@@ -680,7 +802,12 @@ export class MatrixController {
         try { await client.logout(false); } catch { /* A revoked/offline token cannot prevent local sign-out. */ }
       }
       if (revision !== this.lifecycleRevision) return;
-      try { await this.platform.push.unsubscribe(); } catch { /* Device provider may be offline. */ }
+      const cleanup = this.pushWork.catch(() => undefined).then(async () => {
+        if (revision !== this.lifecycleRevision) return;
+        try { await this.platform.push.unsubscribe(); } catch { /* Device provider may be offline. */ }
+      });
+      this.pushWork = cleanup;
+      await cleanup;
       if (revision !== this.lifecycleRevision) return;
       this.pushRegistration = undefined;
       if (stored) await deleteAccountDatabases(stored);
@@ -2619,8 +2746,7 @@ export class MatrixController {
   }
 
   public async setRoomMuted(roomId: string, muted: boolean): Promise<void> {
-    const result = this.client?.setRoomMutePushRule('global', roomId, muted);
-    await result;
+    await this.notificationRules.setRoom(roomId, muted ? 'nothing' : 'default');
   }
 
   public async sendMessage(
@@ -2800,6 +2926,14 @@ export class MatrixController {
     this.client = client;
     this.sdk = sdk;
     this.activeSession = session;
+    this.notificationOwner = crypto.randomUUID();
+    const policyKey = this.notificationPolicyKey();
+    try { this.localNotificationPolicy = normalizeNotificationPolicy(policyKey ? JSON.parse(localStorage.getItem(policyKey) ?? 'null') : undefined); }
+    catch { this.localNotificationPolicy = normalizeNotificationPolicy(undefined); }
+    const notificationOwner = this.notificationOwner;
+    this.notificationPolicyIssue = false;
+    void Promise.resolve(this.platform.notifications.setContext?.({ owner: notificationOwner, policy: this.localNotificationPolicy })).catch(() => { if (notificationOwner === this.notificationOwner) this.notificationPolicyIssue = true; });
+
     this.connection = 'connecting';
     this.attachClientListeners();
 
@@ -2844,6 +2978,13 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    void Promise.resolve(this.platform.notifications.clearContext?.(this.notificationOwner)).catch(() => undefined);
+    this.notificationOwner = crypto.randomUUID();
+    this.localNotificationPolicy = normalizeNotificationPolicy(undefined);
+    this.notifiedEvents.clear();
+    this.pushRegistration = undefined;
+
+    this.activity.clear();
     this.roomHistory.clear();
     this.threadHistory.clear();
     this.retryingMessages = new WeakSet();
@@ -2887,10 +3028,13 @@ export class MatrixController {
       call.reject();
       return;
     }
+    const owner = this.notificationOwner;
     this.activeCall = call;
     this.attachCall(call);
     this.updateCallSummary();
     if (
+      !notificationsPaused(this.localNotificationPolicy) &&
+      !this.client?.pushRules?.global.override?.some((rule) => rule.rule_id === '.m.rule.master' && rule.enabled) &&
       this.notificationPreferences.desktopNotifications &&
       this.platform.lifecycle.isHidden() &&
       this.platform.notifications.permission === 'granted'
@@ -2900,7 +3044,7 @@ export class MatrixController {
         body: 'A Matrix contact is calling. Open Aimtrix to answer.',
         tag: `call-${call.callId}`,
         silent: !this.notificationPreferences.notificationSounds,
-        onClick: () => this.focusNotification(call.roomId),
+        onClick: () => { if (owner === this.notificationOwner) this.focusNotification(call.roomId); },
       });
     }
     if (this.notificationPreferences.notificationSounds) this.playMessageTone();
@@ -3003,7 +3147,7 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
-    if (room) { this.roomHistory.refresh(room); this.threadHistory.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); }
+    if (room) { this.activity.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); this.roomHistory.refresh(room); this.threadHistory.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); }
     if (room && this.client?.getRoom(room.roomId) === room) {
       const events = this.snapshotCache.localEvents.get(room.roomId);
       for (const localEvent of events?.values() ?? []) {
@@ -3035,13 +3179,17 @@ export class MatrixController {
   private notifyForMessage(event: MatrixEvent, room: Room): void {
     if (event.getType() !== 'm.room.message') return;
     if (!this.client?.getPushActionsForEvent(event)?.notify) return;
-    const pushRule = this.client?.getRoomPushRule('global', room.roomId);
-    const muted = pushRule?.enabled !== false && pushRule?.actions.some((action) => action === 'dont_notify');
-    if (muted) return;
+    if (notificationsPaused(this.localNotificationPolicy)) return;
+    const eventId = event.getId();
+    const owner = this.notificationOwner;
+    if (eventId && this.notifiedEvents.has(eventId)) return;
+    if (eventId) this.notifiedEvents.add(eventId);
+    while (this.notifiedEvents.size > 500) this.notifiedEvents.delete(this.notifiedEvents.values().next().value!);
     if (this.notificationPreferences.notificationSounds && this.connection === 'online') {
       this.playMessageTone();
     }
     if (
+      !notificationsPaused(this.localNotificationPolicy) &&
       this.notificationPreferences.desktopNotifications &&
       this.platform.lifecycle.isHidden() &&
       this.platform.notifications.permission === 'granted'
@@ -3054,8 +3202,9 @@ export class MatrixController {
         title: room.name || 'Aimtrix',
         body,
         tag: room.roomId,
+        eventId,
         silent: !this.notificationPreferences.notificationSounds,
-        onClick: () => this.focusNotification(room.roomId),
+        onClick: () => { if (owner === this.notificationOwner) this.focusNotification(room.roomId, eventId); },
       });
     }
   }
@@ -3076,6 +3225,7 @@ export class MatrixController {
     notes: Array<{ frequency: number; start: number; duration: number }>,
     volumeScale: number,
   ): void {
+    if (notificationsPaused(this.localNotificationPolicy) || this.client?.pushRules?.global.override?.some((rule) => rule.rule_id === '.m.rule.master' && rule.enabled)) return;
     const context = this.ensureAudioContext();
     if (!context) return;
     try {
@@ -3117,6 +3267,7 @@ export class MatrixController {
   }
 
   private playSignOnTone(): void {
+    if (notificationsPaused(this.localNotificationPolicy) || this.client?.pushRules?.global.override?.some((rule) => rule.rule_id === '.m.rule.master' && rule.enabled)) return;
     const context = this.ensureAudioContext();
     if (!context) return;
     try {
@@ -3168,7 +3319,8 @@ export class MatrixController {
     const roomId = event.getRoomId();
     const eventId = event.getId();
     const room = roomId && eventId ? this.client?.getRoom(roomId) : undefined;
-    if (!eventId || !room || (!room.findEventById(eventId) && !this.threadHistory.hasEvent(room.roomId, eventId))) return;
+    if (!eventId || !room || (!room.findEventById(eventId) && !this.threadHistory.hasEvent(room.roomId, eventId) && !this.activity.owns(event))) return;
+    this.activity.observe(event, room);
     this.roomHistory.refresh(room);
     this.threadHistory.observe(event, room);
     this.bumpRoomVersion(roomId);
@@ -3220,7 +3372,7 @@ export class MatrixController {
   private readonly handleRoomState = (event: MatrixEvent): void => {
     const roomId = event.getRoomId();
     const room = roomId ? this.client?.getRoom(roomId) : undefined;
-    if (room) { this.roomHistory.refresh(room); this.threadHistory.refresh(room); }
+    if (room) { this.activity.observe(event, room); this.roomHistory.refresh(room); this.threadHistory.refresh(room); }
     this.bumpRoomVersion(event.getRoomId());
     this.scheduleWorkspacePublish();
   };
@@ -3352,7 +3504,7 @@ export class MatrixController {
         this.setSnapshot({
           status: 'ready',
           issue: this.currentIssue,
-          workspace: { ...workspace, call: this.callSummary },
+          workspace: { ...workspace, call: this.callSummary, activity: this.activity.snapshot(), threadsByRoot: Object.fromEntries(Object.entries(workspace.threadsByRoot).map(([id, thread]) => [id, { ...thread, followed: thread.roomId ? this.activity.followState(thread.roomId, id) : undefined }])) },
         });
       } catch {
         this.setSnapshot({

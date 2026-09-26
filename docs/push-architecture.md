@@ -52,7 +52,7 @@ Each Matrix device opts in independently. Push registration is never inferred fr
    `append: true` prevents a registration on one Aimtrix device from replacing another pusher with the same app identity.
 3. The homeserver evaluates the user's Matrix push rules. Muted rooms and rules that do not notify do not reach the gateway.
 4. For a notification that passes those rules, the homeserver sends `POST /_matrix/push/v1/notify` to the registered gateway. With `event_id_only`, the payload contains the room/event identifiers and counts but no event content.
-5. The gateway forwards the minimal payload to APNs, FCM, or Web Push. The native app or service worker wakes, opens the relevant web/native route, and the client syncs and decrypts locally before showing any message preview.
+5. The gateway forwards the minimal payload to APNs, FCM, or Web Push. The native app or service worker shows generic activity. A provider tap opens/focuses Aimtrix; the authenticated client syncs and decrypts locally before displaying room content.
 
 The event ID is a routing hint, not trusted notification content. The client must fetch the event over the authenticated Matrix session and verify/decrypt it before displaying sender, room, body, mention, or call details.
 
@@ -68,7 +68,7 @@ The event ID is a routing hint, not trusted notification content. The client mus
 
 The first release shows a generic notification such as “New Matrix activity” until the app has synced and locally evaluated the event. User-configurable sounds, previews, and badges are applied locally. A future native notification service extension may replace the generic text only if it can preserve this contract.
 
-For the browser/PWA path, the public runtime contract is `push.gatewayUrl`, `push.appId`, and `push.webPush.applicationServerKey`. The service worker accepts only opaque `room_id` and `event_id` routing fields, groups queued events with `only_last_per_room`, and opens an existing Aimtrix window through a validated route message. Aimtrix re-reads the PushManager subscription when the authenticated app resumes, so provider token rotation is re-registered. It never places provider content in the notification body. If the gateway or VAPID key is absent, the preference remains an honest foreground-only mode.
+For the browser/PWA path, the public runtime contract is `push.gatewayUrl`, `push.appId`, and `push.webPush.applicationServerKey`. The service worker validates opaque event identifiers for bounded deduplication, applies locally stored quiet policy, and opens/focuses Aimtrix generically. Provider identifiers do not prove account ownership; they are not used to choose a conversation. Aimtrix re-reads the PushManager subscription when the authenticated app resumes, so provider token rotation is re-registered. It never places provider content in the notification body. If the gateway or VAPID key is absent, the preference remains an honest foreground-only mode.
 
 The gateway stores no event payloads. Logs must exclude pushkeys, room IDs, event IDs, and notification bodies; metrics may contain aggregate delivery counts and latency. Pushkey rejection removes the stale pusher from the homeserver on the next client maintenance pass.
 
@@ -79,7 +79,7 @@ The gateway stores no event payloads. Logs must exclude pushkeys, room IDs, even
 - **Logout:** call `/pushers/set` with the same `pushkey` and `app_id`, `kind: null`, while the access token is still valid; then clear the local provider subscription.
 - **Device removal:** remove the pusher during explicit device removal where the server permits it. A deleted Matrix device must not be allowed to keep receiving pushes; the gateway also removes provider tokens rejected by APNs/FCM/Web Push.
 - **Gateway failure:** the homeserver retains the pusher and retries according to its push-gateway behavior. Aimtrix must show a truthful “notifications unavailable” state rather than retrying with direct provider calls.
-- **Tap routing:** native taps carry only an opaque room/event route. Web Push taps open the configured HTTPS origin with a validated room/event query. The app treats all routes as untrusted input and requires an authenticated session before selecting a room.
+- **Tap routing:** authenticated foreground notifications capture an opaque account generation and exact room/event destination. Stale clicks are rejected. Provider taps open/focus the app generically because an event-only payload cannot prove account ownership. Ordinary Matrix links still require authenticated access checks.
 - **Duplicate delivery:** notification IDs and Matrix event IDs are deduplication hints only. Sync remains authoritative, and local notification presentation is idempotent.
 
 ## Credential ownership and environments
@@ -102,7 +102,7 @@ APNs `.p8` keys, FCM service-account JSON, VAPID private keys, and gateway signi
 
 ## Proof and remaining external dependency
 
-`npm run proof:push` runs a disposable local HTTP gateway and sends a representative `event_id_only` Matrix notification through it. `npm run proof:push-sw` executes the service worker's push and click handlers in an isolated runtime. Together they assert that the request and the displayed notification can be handled without `content` or an `access_token`, and that taps carry only validated opaque routing identifiers.
+`npm run proof:push` runs a disposable local HTTP gateway and sends a representative `event_id_only` Matrix notification through it. `npm run proof:push-sw` executes the service worker's push and click handlers in an isolated runtime. Together they assert that the request and the displayed notification can be handled without `content` or an `access_token`, and that unproven provider taps cannot route into another account. Foreground callbacks retain exact event routing with ownership checks.
 
 It intentionally does **not** claim closed-app delivery. A live proof requires all of the following external pieces that are not present in this repository: a disposable account on a supported homeserver, an authenticated pusher registration, a configured Sygnal/Web Push endpoint, a native bundle with APNs/FCM credentials or a VAPID deployment, and a real suspended device. No production credentials or live notification traffic belong in this PR; the live test is a release-gate task for the native/mobile implementation.
 
@@ -112,3 +112,5 @@ It intentionally does **not** claim closed-app delivery. A live proof requires a
 - [Matrix Push Gateway API](https://spec.matrix.org/latest/push-gateway-api/)
 - [Sygnal application notes](https://github.com/element-hq/sygnal/blob/main/docs/applications.md)
 - [Sygnal](https://github.com/element-hq/sygnal)
+
+Everyday rules, local quiet policy, health checks and their boundaries are documented in [Home and notification controls](attention-and-catch-up.md).
