@@ -1,6 +1,6 @@
 # Home activity and notification controls
 
-Home opens from the sparkle button in the title bar or the Home space. It gathers unread conversations, highlighted notifications and threads in one surface, with All activity, Unread, Mentions and My threads filters. Drafts opens the existing private draft list. Event rows use authenticated Matrix context navigation; browser Back restores the filter and scroll position. The conversation is unmounted while Home is visible, so hidden timelines cannot advance their receipts.
+Home opens from the sparkle button in the title bar or the Home space. It gathers unread conversations, highlighted notifications and threads in one surface, with All activity, Unread, Mentions and My threads filters. Browse conversations opens the room list directly, including on narrow screens. Drafts opens the existing private draft list. Event rows use authenticated Matrix context navigation; browser Back restores the filter and scroll position. The conversation is unmounted while Home is visible, so hidden timelines cannot advance their receipts.
 
 ## History and read state
 

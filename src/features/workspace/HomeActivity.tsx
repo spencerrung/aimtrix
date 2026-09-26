@@ -12,9 +12,9 @@ export interface ActivityActions {
   setThreadFollow(roomId: string, rootId: string, following: boolean): Promise<void>;
 }
 export interface HomePosition { filter: 'all' | 'unread' | 'mentions' | 'threads'; scroll: number; outerScroll?: number; initialized: boolean }
-export default function HomeActivity({ workspace, activity, actions, position, onPosition, onOpen, onBack, onSettings, onDrafts, draftCount, onMarkRead }: {
+export default function HomeActivity({ workspace, activity, actions, position, onPosition, onOpen, onBack, onBrowse, onSettings, onDrafts, draftCount, onMarkRead }: {
   workspace: WorkspaceSnapshot; activity?: ActivitySnapshot; actions?: ActivityActions; position: HomePosition; onPosition: (patch: Partial<HomePosition>) => void;
-  onOpen: (target: MatrixNavigationTarget) => Promise<void>; onBack: () => void; onSettings: () => void; onDrafts: () => void; draftCount: number;
+  onOpen: (target: MatrixNavigationTarget) => Promise<void>; onBack: () => void; onBrowse?: () => void; onSettings: () => void; onDrafts: () => void; draftCount: number;
   onMarkRead?: (roomId: string) => Promise<void>;
 }) {
   const filter = position.filter;
@@ -47,6 +47,7 @@ export default function HomeActivity({ workspace, activity, actions, position, o
       <div><button className="icon-button" type="button" aria-label="Back from Home" onClick={onBack}><ArrowLeft size={18} /></button><Sparkles size={24} /><h1>Hey, welcome back.</h1></div>
       <p>A little catch-up, then back to your people.</p>
       <div className="home-activity__tools">
+        {onBrowse ? <button className="aqua-button" type="button" onClick={onBrowse}>Browse conversations</button> : null}
         {actions ? <button className="aqua-button" type="button" disabled={busy || activity?.loading} onClick={() => void run(actions.refresh)}><RefreshCw size={15} /> Refresh activity</button> : null}
         <button className="aqua-button" type="button" onClick={onDrafts}>Drafts ({draftCount})</button>
         <button className="aqua-button" type="button" onClick={onSettings}><Bell size={15} /> Notification settings</button>
