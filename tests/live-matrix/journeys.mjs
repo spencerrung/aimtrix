@@ -916,8 +916,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await attentionThread.getByRole('button', { name: 'Mute thread alerts', exact: true }).waitFor();
       invariant(!(await api('/_matrix/client/v3/pushrules/', { token: secondSession.accessToken })).global.override.some((rule) => rule.rule_id === threadRuleId), 'notification-thread-rule-readback');
       stage = 'home-follow-thread';
-      await attentionThread.getByRole('button', { name: 'Hide from Home', exact: true }).click();
+      await attentionThread.getByRole('button', { name: /^(Hide from Home|Follow in Home)$/ }).waitFor();
+      if (await attentionThread.getByRole('button', { name: 'Hide from Home', exact: true }).isVisible()) {
+        stage = 'home-hide-before-follow';
+        await attentionThread.getByRole('button', { name: 'Hide from Home', exact: true }).click();
+      }
+      stage = 'home-follow-click';
       await attentionThread.getByRole('button', { name: 'Follow in Home', exact: true }).click();
+      stage = 'home-follow-saved';
       await attentionThread.getByRole('button', { name: 'Hide from Home', exact: true }).waitFor();
       invariant((await api(followPath, { token: secondSession.accessToken })).threads?.[formattedPeer.rootId] === true, 'home-follow-account-data');
       await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
@@ -973,11 +979,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await home.getByRole('button', { name: 'Mentions', exact: true }).click();
         stage = 'home-open-exact';
         await home.getByRole('region', { name: 'Recent activity', exact: true }).getByRole('button').filter({ hasText: 'Synthetic Home highlighted message' }).click();
-        await alice.getByRole('main', { name, exact: true }).locator(`[data-event-id=${JSON.stringify(mention.event_id)}]`).waitFor();
+        stage = 'home-exact-render';
+        try { await alice.getByRole('main', { name: `Conversation with ${name}`, exact: true }).locator(`[data-event-id=${JSON.stringify(mention.event_id)}]`).waitFor(); }
+        catch {
+          stage = await home.isVisible() ? 'home-exact-still-home' : !await alice.getByRole('main', { name: `Conversation with ${name}`, exact: true }).count() ? 'home-exact-wrong-room' : !await alice.locator(`[data-event-id=${JSON.stringify(mention.event_id)}]`).count() ? 'home-exact-event-missing' : 'home-exact-event-hidden';
+          throw new Error(stage);
+        }
+        stage = 'home-return';
         await alice.evaluate(() => window.history.back());
         await home.waitFor();
         invariant(await home.getByRole('button', { name: 'Mentions', exact: true }).getAttribute('aria-pressed') === 'true', 'home-return-filter');
       } finally { alice.off('request', observe); aliceSecond.off('request', observe); }
+      stage = 'home-cleanup-rooms';
       for (const page of [alice, aliceSecond]) await openRoom(page, roomName);
       } catch { throw new Error(stage); }
     });
