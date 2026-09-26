@@ -5,6 +5,11 @@ export type RoomNotificationMode = 'default' | 'all' | 'mentions' | 'nothing' | 
 export const ROOM_SILENCE_PREFIX = 'dev.alucard.aimtrix.silence.';
 export const THREAD_SILENCE_PREFIX = 'dev.alucard.aimtrix.thread_silence.';
 export const KEYWORD_PREFIX = 'dev.alucard.aimtrix.keyword.';
+// Push rule IDs cannot contain slashes. Encode each opaque Matrix identifier
+// before composing the rule ID; the SDK separately encodes the HTTP path.
+export const roomSilenceRuleId = (roomId: string): string => ROOM_SILENCE_PREFIX + encodeURIComponent(roomId);
+export const threadSilenceRuleId = (roomId: string, rootId: string): string =>
+  THREAD_SILENCE_PREFIX + encodeURIComponent(roomId) + ':' + encodeURIComponent(rootId);
 const suppresses = (rule: IPushRule) => rule.enabled !== false && rule.actions.every((action) => action === PushRuleActionName.DontNotify);
 const roomCondition = (rule: IPushRule, roomId: string) => rule.conditions?.some((condition) => condition.key === 'room_id' && ((condition.kind === ConditionKind.EventMatch && !/[?*]/.test(roomId) && condition.pattern === roomId) || (condition.kind === ConditionKind.EventPropertyIs && condition.value === roomId)));
 export function roomNotificationMode(rules: IPushRules | undefined, roomId: string): RoomNotificationMode {
@@ -79,13 +84,13 @@ export class NotificationRules {
         const versions = await client.getVersions(); check();
         const exact = versions.versions.some((version) => /^v1\.(\d+)$/.test(version) && Number(version.slice(3)) >= 7);
         if (!exact && /[?*]/.test(roomId)) throw new Error('Exact room rules unavailable');
-        await client.addPushRule('global', PushRuleKind.Override, ROOM_SILENCE_PREFIX + roomId, {
+        await client.addPushRule('global', PushRuleKind.Override, roomSilenceRuleId(roomId), {
           conditions: [exact ? { kind: ConditionKind.EventPropertyIs, key: 'room_id', value: roomId } : { kind: ConditionKind.EventMatch, key: 'room_id', pattern: roomId }], actions: [],
         }); check();
-        await client.setPushRuleEnabled('global', PushRuleKind.Override, ROOM_SILENCE_PREFIX + roomId, true); check();
+        await client.setPushRuleEnabled('global', PushRuleKind.Override, roomSilenceRuleId(roomId), true); check();
       }
       for (const rule of overrides) {
-        if (mode === 'nothing' && rule.rule_id === ROOM_SILENCE_PREFIX + roomId) continue;
+        if (mode === 'nothing' && rule.rule_id === roomSilenceRuleId(roomId)) continue;
         await client.deletePushRule('global', PushRuleKind.Override, rule.rule_id); check();
       }
       const old = rules?.global.room?.find((rule) => rule.rule_id === roomId);
@@ -119,7 +124,7 @@ export class NotificationRules {
       if (client.getRoom(roomId)?.getMyMembership() !== 'join' || !/^\$\S{1,1023}$/.test(rootId)) throw new Error('Thread unavailable');
       const versions = await client.getVersions(); check();
       if (!versions.versions.some((version) => /^v1\.(\d+)$/.test(version) && Number(version.slice(3)) >= 10)) throw new Error('Thread rules unsupported');
-      const id = THREAD_SILENCE_PREFIX + roomId + '/' + rootId;
+      const id = threadSilenceRuleId(roomId, rootId);
       if (muted) { await client.addPushRule('global', PushRuleKind.Override, id, { actions: [], conditions: [
         { kind: ConditionKind.EventPropertyIs, key: 'room_id', value: roomId },
         { kind: ConditionKind.EventPropertyIs, key: 'content.m\\.relates_to.rel_type', value: 'm.thread' },

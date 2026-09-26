@@ -15,7 +15,7 @@ import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
 import type { ISyncStateData } from 'matrix-js-sdk/lib/sync.js';
 import { connectionIssue, connectionIssueMessage, isSessionRejected, type ConnectionIssue, type SessionRecovery } from './sessionRecovery';
 export type { ConnectionIssue, SessionRecovery } from './sessionRecovery';
-import { NotificationRules, THREAD_SILENCE_PREFIX, type RoomNotificationMode } from './notificationRules';
+import { NotificationRules, threadSilenceRuleId, type RoomNotificationMode } from './notificationRules';
 import { normalizeNotificationPolicy, notificationsPaused, type LocalNotificationPolicy } from '../pwa/notificationPolicy';
 import type { IPusherRequest } from 'matrix-js-sdk/lib/@types/PushRules.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
@@ -342,7 +342,7 @@ export class MatrixController {
     const thread = client.getRoom(roomId)?.getThread(rootId);
     return { following: this.activity.followState(roomId, rootId) ?? Boolean(thread?.hasCurrentUserParticipated),
       supported: rules.threadRulesSupported,
-      muted: client.pushRules?.global.override?.some((rule) => rule.rule_id === THREAD_SILENCE_PREFIX + roomId + '/' + rootId && rule.enabled !== false) ?? false };
+      muted: client.pushRules?.global.override?.some((rule) => rule.rule_id === threadSilenceRuleId(roomId, rootId) && rule.enabled !== false) ?? false };
   }
 
   public async testNotification(): Promise<void> {

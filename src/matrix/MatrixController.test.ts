@@ -1302,7 +1302,7 @@ describe('MatrixController protocol integration', () => {
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
     inject(controller, { addPushRule, getPushRules: vi.fn().mockResolvedValue({ global: {} }), getVersions: vi.fn().mockResolvedValue({ versions: ['v1.10'] }), setPushRuleEnabled: vi.fn().mockResolvedValue({}), getRoom: () => ({ getMyMembership: () => 'join' }) } as unknown as Partial<MatrixClient>);
     await controller.setRoomMuted('!quiet:test', true);
-    expect(addPushRule).toHaveBeenCalledWith('global', 'override', 'dev.alucard.aimtrix.silence.!quiet:test', { actions: [], conditions: [{ kind: 'event_property_is', key: 'room_id', value: '!quiet:test' }] });
+    expect(addPushRule).toHaveBeenCalledWith('global', 'override', 'dev.alucard.aimtrix.silence.!quiet%3Atest', { actions: [], conditions: [{ kind: 'event_property_is', key: 'room_id', value: '!quiet:test' }] });
   });
 
   it('sends a read receipt only once per latest event', async () => {

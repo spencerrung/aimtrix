@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { MatrixClient } from 'matrix-js-sdk';
 import { ConditionKind, PushRuleActionName, PushRuleKind, type IPushRules } from 'matrix-js-sdk/lib/@types/PushRules.js';
-import { NotificationRules, ROOM_SILENCE_PREFIX, roomNotificationMode } from './notificationRules';
+import { NotificationRules, ROOM_SILENCE_PREFIX, THREAD_SILENCE_PREFIX, roomNotificationMode, roomSilenceRuleId, threadSilenceRuleId } from './notificationRules';
 
 function fixture() {
   const rules: IPushRules = { global: { override: [], room: [], content: [] } };
@@ -23,19 +23,34 @@ describe('notification rules', () => {
     rules.global.override![0].conditions!.push({ kind: ConditionKind.EventMatch, key: 'sender', pattern: '@someone:test' });
     expect(roomNotificationMode(rules, '!room:test')).toBe('custom');
   });
+  it('uses slash-free, collision-free IDs for opaque room and thread identifiers', async () => {
+    const { store, client } = fixture();
+    const roomId = '!room/part\\more:test', rootId = '$root/part\\more';
+    expect(roomSilenceRuleId(roomId)).toBe(ROOM_SILENCE_PREFIX + '!room%2Fpart%5Cmore%3Atest');
+    expect(threadSilenceRuleId(roomId, rootId)).toBe(THREAD_SILENCE_PREFIX + '!room%2Fpart%5Cmore%3Atest:%24root%2Fpart%5Cmore');
+    expect(threadSilenceRuleId('!a:b', '$c')).not.toBe(threadSilenceRuleId('!a', 'b:$c'));
+    await store.setRoom(roomId, 'nothing');
+    await store.setThreadMuted(roomId, rootId, true);
+    for (const call of client.addPushRule.mock.calls) { expect(call[2]).not.toContain('/'); expect(call[2]).not.toContain('\\'); }
+    expect(client.addPushRule).toHaveBeenLastCalledWith('global', 'override', threadSilenceRuleId(roomId, rootId), expect.objectContaining({ conditions: expect.arrayContaining([
+      { kind: 'event_property_is', key: 'room_id', value: roomId },
+      { kind: 'event_property_is', key: 'content.m\\.relates_to.event_id', value: rootId },
+    ]) }));
+  });
+
   it('writes an exact override mute even for wildcard-shaped opaque room identifiers', async () => {
     const { store, client } = fixture();
     await store.setRoom('!room*:test', 'nothing');
-    expect(client.addPushRule).toHaveBeenCalledWith('global', PushRuleKind.Override, ROOM_SILENCE_PREFIX + '!room*:test', { actions: [], conditions: [{ kind: ConditionKind.EventPropertyIs, key: 'room_id', value: '!room*:test' }] });
+    expect(client.addPushRule).toHaveBeenCalledWith('global', PushRuleKind.Override, roomSilenceRuleId('!room*:test'), { actions: [], conditions: [{ kind: ConditionKind.EventPropertyIs, key: 'room_id', value: '!room*:test' }] });
     expect(client.getPushRules).toHaveBeenCalledTimes(2);
   });
   it('re-enables a previously disabled managed room and thread rule', async () => {
     const { store, client, rules } = fixture();
-    rules.global.override!.push({ rule_id: ROOM_SILENCE_PREFIX + '!room:test', enabled: false, default: false, actions: [], conditions: [{ kind: ConditionKind.EventPropertyIs, key: 'room_id', value: '!room:test' }] });
+    rules.global.override!.push({ rule_id: roomSilenceRuleId('!room:test'), enabled: false, default: false, actions: [], conditions: [{ kind: ConditionKind.EventPropertyIs, key: 'room_id', value: '!room:test' }] });
     await store.setRoom('!room:test', 'nothing');
-    expect(client.setPushRuleEnabled).toHaveBeenCalledWith('global', 'override', ROOM_SILENCE_PREFIX + '!room:test', true);
+    expect(client.setPushRuleEnabled).toHaveBeenCalledWith('global', 'override', roomSilenceRuleId('!room:test'), true);
     await store.setThreadMuted('!room:test', '$root', true);
-    expect(client.setPushRuleEnabled).toHaveBeenCalledWith('global', 'override', 'dev.alucard.aimtrix.thread_silence.!room:test/$root', true);
+    expect(client.setPushRuleEnabled).toHaveBeenCalledWith('global', 'override', threadSilenceRuleId('!room:test', '$root'), true);
   });
   it('does not rewrite unfamiliar suppression actions', async () => {
     const { store, client, rules } = fixture();

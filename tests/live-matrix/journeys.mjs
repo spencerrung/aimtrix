@@ -848,6 +848,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       for (const page of [alice, bob]) await openRoom(page, roomName);
     });
     await check('notification-rules-and-own-device-sync', async () => {
+      let stage = 'notification-open-controls';
+      try {
       const open = async (page) => {
         await page.bringToFront();
         await page.getByRole('button', { name: 'Open settings', exact: true }).click();
@@ -861,23 +863,27 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const settings = await open(alice);
       const mode = settings.getByLabel(`Notifications for ${roomName}`, { exact: true });
       for (const value of ['all', 'mentions', 'nothing', 'default']) {
+        stage = `notification-mode-${value}`;
         await mode.selectOption(value);
         await settings.getByText('Room notification rule saved.', { exact: true }).waitFor();
         const current = (await rules()).global;
         const roomRule = current.room.find((rule) => rule.rule_id === roomId);
-        const silence = current.override.find((rule) => rule.rule_id === `dev.alucard.aimtrix.silence.${roomId}`);
+        const silence = current.override.find((rule) => rule.rule_id === `dev.alucard.aimtrix.silence.${encode(roomId)}`);
         invariant(value === 'all' ? roomRule?.actions.includes('notify') : value === 'mentions' ? roomRule && !roomRule.actions.includes('notify') : value === 'nothing' ? silence && !silence.actions.includes('notify') && !roomRule : !silence && !roomRule, 'notification-room-rule-readback');
       }
-      await settings.getByRole('checkbox', { name: /^Do not disturb across devices/ }).check();
+      stage = 'notification-account-dnd';
+      await settings.getByRole('checkbox', { name: /^Do not disturb across devices/ }).click();
       await settings.getByText('Account notification rule saved.', { exact: true }).waitFor();
       invariant((await rules()).global.override.some((rule) => rule.rule_id === '.m.rule.master' && rule.enabled), 'notification-account-rule-readback');
+      stage = 'notification-second-device';
       const secondSettings = await open(aliceSecond);
       invariant(await secondSettings.getByRole('checkbox', { name: /^Do not disturb across devices/ }).isChecked(), 'notification-own-device-sync');
       await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
       await alice.bringToFront();
-      await settings.getByRole('checkbox', { name: /^Do not disturb across devices/ }).uncheck();
+      await settings.getByRole('checkbox', { name: /^Do not disturb across devices/ }).click();
       await settings.getByText('Account notification rule saved.', { exact: true }).waitFor();
       invariant(!(await rules()).global.override.some((rule) => rule.rule_id === '.m.rule.master' && rule.enabled), 'notification-account-rule-readback');
+      stage = 'notification-keyword-add-remove';
       await settings.getByLabel('New keyword pattern', { exact: true }).fill('synthetic-attention-*');
       await settings.getByRole('button', { name: 'Add keyword', exact: true }).click();
       await settings.getByText('Keyword saved.', { exact: true }).waitFor();
@@ -885,30 +891,38 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await settings.getByRole('button', { name: 'Remove keyword synthetic-attention-*', exact: true }).click();
       await settings.getByText('Keyword removed.', { exact: true }).waitFor();
       invariant(!(await rules()).global.content.some((rule) => rule.pattern === 'synthetic-attention-*'), 'notification-keyword-readback');
+      stage = 'notification-health';
       await settings.getByText('Device subscription', { exact: true }).waitFor();
       await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
     });
     await check('home-activity-and-follow-own-device-sync', async () => {
+      let stage = 'home-open-thread';
+      try {
       const name = 'Disposable formatted API peer';
       const followType = 'dev.alucard.aimtrix.followed_threads.v1';
       const followPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/rooms/${encode(formattedPeer.roomId)}/account_data/${followType}`;
       await alice.bringToFront();
       await openMatrixEvent(alice, formattedPeer.roomId, formattedPeer.rootId);
       const attentionThread = alice.getByRole('complementary', { name: 'Thread', exact: true });
+      stage = 'home-mute-thread';
       await attentionThread.getByRole('button', { name: 'Mute thread alerts', exact: true }).click();
+      stage = 'home-thread-mute-saved';
       await attentionThread.getByRole('button', { name: 'Use room alerts', exact: true }).waitFor();
-      const threadRuleId = `dev.alucard.aimtrix.thread_silence.${formattedPeer.roomId}/${formattedPeer.rootId}`;
+      const threadRuleId = `dev.alucard.aimtrix.thread_silence.${encode(formattedPeer.roomId)}:${encode(formattedPeer.rootId)}`;
       const mutedRules = (await api('/_matrix/client/v3/pushrules/', { token: secondSession.accessToken })).global.override;
       invariant(mutedRules.some((rule) => rule.rule_id === threadRuleId && !rule.actions.includes('notify') && rule.conditions.some((condition) => condition.value === formattedPeer.rootId)), 'notification-thread-rule-readback');
       await attentionThread.getByRole('button', { name: 'Use room alerts', exact: true }).click();
       await attentionThread.getByRole('button', { name: 'Mute thread alerts', exact: true }).waitFor();
       invariant(!(await api('/_matrix/client/v3/pushrules/', { token: secondSession.accessToken })).global.override.some((rule) => rule.rule_id === threadRuleId), 'notification-thread-rule-readback');
+      stage = 'home-follow-thread';
       await attentionThread.getByRole('button', { name: 'Hide from Home', exact: true }).click();
       await attentionThread.getByRole('button', { name: 'Follow in Home', exact: true }).click();
       await attentionThread.getByRole('button', { name: 'Hide from Home', exact: true }).waitFor();
       invariant((await api(followPath, { token: secondSession.accessToken })).threads?.[formattedPeer.rootId] === true, 'home-follow-account-data');
       await alice.getByRole('button', { name: 'Close thread', exact: true }).click();
       const send = (content) => api(`/_matrix/client/v3/rooms/${encode(formattedPeer.roomId)}/send/m.room.message/${randomBytes(12).toString('hex')}`, { token: bobSession.accessToken, method: 'PUT', body: content });
+      stage = 'home-open-home';
       for (const page of [alice, aliceSecond]) {
         await page.getByRole('button', { name: 'Home activity', exact: true }).click();
         await page.getByRole('main', { name: 'Home activity', exact: true }).waitFor();
@@ -927,19 +941,23 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       alice.on('request', observe); aliceSecond.on('request', observe);
       let mention, reply;
       try {
+        stage = 'home-send-activity';
         mention = await send({ msgtype: 'm.text', body: 'Synthetic Home highlighted message', 'm.mentions': { user_ids: [aliceSession.userId] } });
         reply = await send({ msgtype: 'm.text', body: 'Synthetic Home followed reply', 'm.relates_to': { rel_type: 'm.thread', event_id: formattedPeer.rootId, is_falling_back: true, 'm.in_reply_to': { event_id: formattedPeer.rootId } } });
+        stage = 'home-show-mention';
         const home = alice.getByRole('main', { name: 'Home activity', exact: true });
         await alice.bringToFront();
         await home.getByRole('button', { name: 'Refresh activity', exact: true }).click();
         await home.getByRole('button', { name: 'Mentions', exact: true }).click();
         await home.getByRole('region', { name: 'Recent activity', exact: true }).getByText('Synthetic Home highlighted message', { exact: true }).waitFor({ timeout: 45000 });
         await home.getByRole('complementary', { name: 'Activity coverage', exact: true }).waitFor();
+        stage = 'home-show-thread';
         await home.getByRole('button', { name: 'My threads', exact: true }).click();
         const threadCard = home.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
         await threadCard.getByRole('button', { name: 'Hide from Home', exact: true }).waitFor();
         invariant((await api(followPath, { token: secondSession.accessToken })).threads?.[formattedPeer.rootId] === true, 'home-follow-account-data');
         await aliceSecond.bringToFront();
+        stage = 'home-second-follow';
         const secondHome = aliceSecond.getByRole('main', { name: 'Home activity', exact: true });
         await secondHome.getByRole('button', { name: 'Refresh activity', exact: true }).click();
         await secondHome.getByRole('button', { name: 'My threads', exact: true }).click();
@@ -949,9 +967,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant((await api(followPath, { token: aliceSession.accessToken })).threads?.[formattedPeer.rootId] === false, 'home-follow-account-data');
         await alice.bringToFront();
         await home.getByRole('button', { name: 'Refresh activity', exact: true }).click();
+        stage = 'home-hide-shared';
         await threadCard.waitFor({ state: 'hidden' });
         invariant(!receiptTargets.includes(mention.event_id) && !receiptTargets.includes(reply.event_id), 'home-no-passive-receipts');
         await home.getByRole('button', { name: 'Mentions', exact: true }).click();
+        stage = 'home-open-exact';
         await home.getByRole('region', { name: 'Recent activity', exact: true }).getByRole('button').filter({ hasText: 'Synthetic Home highlighted message' }).click();
         await alice.getByRole('main', { name, exact: true }).locator(`[data-event-id=${JSON.stringify(mention.event_id)}]`).waitFor();
         await alice.evaluate(() => window.history.back());
@@ -959,6 +979,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(await home.getByRole('button', { name: 'Mentions', exact: true }).getAttribute('aria-pressed') === 'true', 'home-return-filter');
       } finally { alice.off('request', observe); aliceSecond.off('request', observe); }
       for (const page of [alice, aliceSecond]) await openRoom(page, roomName);
+      } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {
       let stage = 'element-login-ui';

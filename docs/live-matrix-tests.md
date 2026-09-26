@@ -152,6 +152,15 @@ The combined messaging batch adds four checks, bringing a normal complete run to
 
 The original encrypted-thread retry journey now starts in the shared thread composer. Reports still contain only fixed check identifiers and aggregate results. Draft contents, filenames, captions, attachment bytes, room/event IDs and wire payloads remain in disposable browser/process memory. Successful runs and the diagnostic failure probe are recorded on the delivery PR; no production homeserver or infrastructure is used.
 
+## Polish 15 and 19 extension
+
+Two attention checks bring normal runs to 28 checks (29 with the optional Element UI peer):
+
+- `notification-rules-and-own-device-sync` changes all four room alert modes through settings and reads their standard push rules back from Synapse. Account DND is observed on a second device, then disabled; a synthetic keyword rule is added and removed with server readback.
+- `home-activity-and-follow-own-device-sync` mutes and unmutes a thread with server readback, follows it in Home, and observes the private room account-data preference on another device. Synthetic mention and thread activity render while both clients are on Home. Hiding the followed thread on the second device updates the first; passive Home viewing must send no receipts for the new events. Opening the exact mention and returning restores the Home filter.
+
+Only fixed check names and failure stages enter the report. Rule payloads, account data, message text and event IDs stay in disposable process/browser memory. These checks establish behavior against the pinned Synapse instance; they do not establish closed-app Web Push, APNs/FCM delivery, federation or physical native behavior. Those provider acceptance boundaries remain tracked separately.
+
 ### Optional Element Web UI peer
 
 `npm run test:matrix -- --element-ui` adds `element-ui-formatted-interoperability` to the normal journeys. This runs the separately distributed Element Web UI, signs a disposable peer in through its login form, and checks that actual server events render as readable emphasis, inline code, quotations and lists. It includes a message sent from Aimtrix's composer, then sends emphasis and inline code back through Element's actual composer and verifies their rendered structure in Aimtrix. The adjacent API-peer check independently covers formatted roots, thread replies and outbound thread content. Execution results must identify whether this optional check actually ran.
