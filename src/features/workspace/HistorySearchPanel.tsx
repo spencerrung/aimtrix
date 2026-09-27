@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { HistorySearchFilters, HistorySearchHit, HistorySearchPage } from '../../matrix/historySearch';
 import type { MessageSummary, RoomSummary } from '../../matrix/viewModels';
+import type { IndexedRoom, PrivateSearchStatus } from '../../matrix/privateSearchStore';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
+
+export interface PrivateSearchActions {
+  status: () => Promise<PrivateSearchStatus>;
+  unlock: (passphrase: string) => Promise<PrivateSearchStatus>;
+  index: (roomId: string, onProgress: (room: IndexedRoom) => void, signal?: AbortSignal) => Promise<PrivateSearchStatus>;
+  clear: () => Promise<void>;
+}
 
 interface Props {
   open: boolean;
@@ -8,6 +17,7 @@ interface Props {
   loadedMessages: MessageSummary[];
   initialRoomId?: string;
   onSearch?: (filters: HistorySearchFilters, nextBatch?: string, signal?: AbortSignal) => Promise<HistorySearchPage>;
+  privateSearch?: PrivateSearchActions;
   onOpen: (roomId: string, eventId: string) => Promise<void>;
   onClose: () => void;
 }
@@ -37,7 +47,7 @@ function loadedHits(messages: MessageSummary[], filters: HistorySearchFilters): 
   }));
 }
 
-export function HistorySearchPanel({ open: isOpen, rooms, loadedMessages, initialRoomId, onSearch, onOpen, onClose }: Props) {
+export function HistorySearchPanel({ open: isOpen, rooms, loadedMessages, initialRoomId, onSearch, privateSearch, onOpen, onClose }: Props) {
   const [term, setTerm] = useState('');
   const [roomId, setRoomId] = useState(initialRoomId ?? '');
   const [senderId, setSenderId] = useState('');
@@ -48,7 +58,15 @@ export function HistorySearchPanel({ open: isOpen, rooms, loadedMessages, initia
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [opening, setOpening] = useState<string>();
+  const [privateStatus, setPrivateStatus] = useState<PrivateSearchStatus>();
+  const [passphrase, setPassphrase] = useState('');
+  const [privateBusy, setPrivateBusy] = useState(false);
+  const [indexing, setIndexing] = useState(false);
+  const [privateError, setPrivateError] = useState('');
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [privateVisible, setPrivateVisible] = useState(30);
   const request = useRef<AbortController | undefined>(undefined);
+  const indexRequest = useRef<AbortController | undefined>(undefined);
   const generation = useRef(0);
   const filters: HistorySearchFilters = { term, roomId: roomId || undefined, senderId: senderId.trim() || undefined,
     after: dateBoundary(from), before: dateBoundary(to, true), kind };
@@ -57,21 +75,29 @@ export function HistorySearchPanel({ open: isOpen, rooms, loadedMessages, initia
   const local = loadedHits(loadedMessages.filter((message) => rooms.some((room) => room.id === message.roomId && room.membership === 'join')), filters);
   const serverHits = (page?.hits ?? []).filter((hit) => rooms.some((room) => room.id === hit.roomId && room.membership === 'join' && !room.encrypted));
   const seen = new Set<string>();
-  const hits = [...serverHits, ...local].filter((hit) => {
+  const privateHits = (page?.privateHits ?? []).slice(0, privateVisible).filter((hit) => rooms.some((room) => room.id === hit.roomId && room.membership === 'join' && room.encrypted));
+  const hits = [...serverHits, ...privateHits, ...local].filter((hit) => {
     const key = `${hit.roomId}:${hit.eventId}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
-  useEffect(() => () => { request.current?.abort(); generation.current += 1; }, []);
+  useEffect(() => () => { request.current?.abort(); indexRequest.current?.abort(); generation.current += 1; }, []);
+  useEffect(() => {
+    if (!isOpen || !privateSearch) return;
+    let current = true;
+    void privateSearch.status().then((status) => { if (current) setPrivateStatus(status); }).catch(() => undefined);
+    return () => { current = false; };
+  }, [isOpen, privateSearch]);
   useEffect(() => {
     if (isOpen) return;
     request.current?.abort();
+    indexRequest.current?.abort();
     generation.current += 1;
-    queueMicrotask(() => setLoading(false));
+    queueMicrotask(() => { setLoading(false); setPassphrase(''); });
   }, [isOpen]);
-  const invalidate = () => { request.current?.abort(); generation.current += 1; setLoading(false); setPage(undefined); setError(''); };
+  const invalidate = () => { request.current?.abort(); generation.current += 1; setLoading(false); setPage(undefined); setPrivateVisible(30); setError(''); };
   const search = async (more = false) => {
     request.current?.abort();
     const controller = new AbortController();
@@ -95,6 +121,13 @@ export function HistorySearchPanel({ open: isOpen, rooms, loadedMessages, initia
     catch { setError('This message is unavailable or you no longer have access. Refresh search or choose another result.'); }
     finally { setOpening(undefined); }
   };
+  const runPrivate = async (action: () => Promise<void>) => {
+    setPrivateBusy(true); setPrivateError('');
+    try { await action(); }
+    catch (cause) { if ((cause as { name?: string })?.name !== 'AbortError') setPrivateError(cause instanceof Error ? cause.message : 'Private search failed.'); }
+    finally { setPrivateBusy(false); }
+  };
+  const roomCoverage = privateStatus?.rooms.find((room) => room.roomId === roomId);
 
   return <aside hidden={!isOpen} inert={!isOpen} className="search-panel" aria-label="Message search">
     <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Find messages</strong><button type="button" aria-label="Close message search" onClick={onClose}>×</button></header>
@@ -106,11 +139,39 @@ export function HistorySearchPanel({ open: isOpen, rooms, loadedMessages, initia
       <div className="history-search-dates"><label>After<input aria-label="Search after date" type="date" value={from} onChange={(event) => { invalidate(); setFrom(event.target.value); }} /></label><label>Before<input aria-label="Search before date" type="date" value={to} onChange={(event) => { invalidate(); setTo(event.target.value); }} /></label></div>
       <button className="aqua-button" type="submit" disabled={!term.trim() || loading}>{loading ? 'Searching…' : 'Search history'}</button>
     </form>
-    <p className="search-scope">{selected?.encrypted ? 'Encrypted conversation: only messages loaded on this device are searched.' : eligible.length ? `Homeserver search covers ${roomId ? 'this unencrypted conversation' : `${eligible.length} joined unencrypted conversations`}. Encrypted history is limited to loaded messages.` : 'Only loaded messages can be searched.'} Date and link filters apply to returned pages; keep loading pages for older matches.</p>
+    <p className="search-scope">{selected?.encrypted ? 'Encrypted conversation: search covers loaded messages and any history indexed on this device.' : eligible.length ? `Homeserver search covers ${roomId ? 'this unencrypted conversation' : `${eligible.length} joined unencrypted conversations`}. Encrypted history covers loaded and locally indexed messages.` : 'Search covers loaded and locally indexed messages.'} Date and link filters apply to returned server pages; keep loading pages for older matches.</p>
+    {privateSearch ? <details className="private-search-controls">
+      <summary>Encrypted history on this device{privateStatus?.unlocked ? ` · ${privateStatus.total} indexed` : ''}</summary>
+      <p>Indexing is optional. Set a local passphrase to encrypt the index in this browser; enter it again after a restart. Aimtrix does not upload the passphrase or indexed text.</p>
+      {!privateStatus?.unlocked ? <form onSubmit={(event) => { event.preventDefault(); void runPrivate(async () => { const status = await privateSearch.unlock(passphrase); setPrivateStatus(status); setPassphrase(''); }); }}>
+        <label>Local index passphrase<input type="password" autoComplete="off" minLength={12} value={passphrase} onChange={(event) => setPassphrase(event.target.value)} /></label>
+        <button type="submit" className="aqua-button" disabled={privateBusy || passphrase.length < 12}>Create or unlock index</button>
+      </form> : <>
+        <p role="status">{privateStatus.total} indexed messages across {privateStatus.rooms.length} rooms. {roomCoverage ? `${roomCoverage.indexed} in this room, ${roomCoverage.skipped} skipped without keys${roomCoverage.oldest ? `; oldest indexed ${new Date(roomCoverage.oldest).toLocaleDateString()}` : ''}${roomCoverage.newest ? `, newest ${new Date(roomCoverage.newest).toLocaleDateString()}` : ''}. ${roomCoverage.complete ? 'Available history scanned.' : 'More history may remain.'}` : 'Select an encrypted conversation to build its index.'}</p>
+        {selected?.encrypted ? <button type="button" className="aqua-button" disabled={privateBusy || roomCoverage?.complete} onClick={() => {
+          const controller = new AbortController(); indexRequest.current = controller;
+          setIndexing(true);
+          void runPrivate(async () => {
+            try { setPrivateStatus(await privateSearch.index(selected.id, (room) => setPrivateStatus((previous) => previous ? { ...previous, rooms: [...previous.rooms.filter((entry) => entry.roomId !== room.roomId), room] } : previous), controller.signal)); }
+            finally { indexRequest.current = undefined; setIndexing(false); setPrivateStatus(await privateSearch.status().catch(() => ({ unlocked: false, rooms: [], total: 0 }))); }
+          });
+        }}>{roomCoverage?.complete ? 'Available history indexed' : 'Index up to 1,000 older messages'}</button> : null}
+        {indexing ? <button type="button" onClick={() => indexRequest.current?.abort()}>Cancel after current request</button> : null}
+      </>}
+      <button type="button" disabled={privateBusy} onClick={() => setConfirmClear(true)}>Delete local index</button>
+      {privateStatus?.cleanupIssue ? <p role="alert">Some removed message or room data could not be cleared from the local index. Delete the index or clear this site's data.</p> : null}
+      {privateError ? <p role="alert">{privateError}</p> : null}
+    </details> : null}
     {error ? <p role="alert" className="history-feedback">{error} <button type="button" onClick={() => void search(Boolean(page?.nextBatch))}>Retry</button></p> : null}
     <div className="search-results" aria-live="polite">
       {term.trim() ? <><p role="status">{hits.length} shown{page?.count ? ` · about ${page.count} server matches before local filters` : ''}</p>{hits.map((hit) => <button key={`${hit.roomId}:${hit.eventId}`} type="button" disabled={Boolean(opening)} onClick={() => void open(hit)}><strong>{rooms.find((room) => room.id === hit.roomId)?.name ?? 'Conversation'} · {hit.senderId}</strong><span>{hit.body}</span><small>{new Date(hit.timestamp).toLocaleString()}</small></button>)}{!hits.length && !loading ? <p>No matches in the searched coverage.</p> : null}</> : <p>Enter words to search message history.</p>}
       {page?.nextBatch ? <button className="aqua-button" type="button" disabled={loading} onClick={() => void search(true)}>Load more results</button> : null}
+      {(page?.privateHits?.length ?? 0) > privateVisible ? <button className="aqua-button" type="button" onClick={() => setPrivateVisible((count) => count + 30)}>Load more indexed results</button> : null}
+      {page?.privateCorrupt ? <p role="alert">{page.privateCorrupt} damaged local index entries were skipped. Delete and rebuild the index to repair coverage.</p> : null}
     </div>
+    {confirmClear ? <ConfirmDialog title="Delete private search index?" description="This removes this account’s indexed message text from this browser. You can rebuild it later if the room history and keys remain available." actionLabel="Delete local index" onClose={() => setConfirmClear(false)} onConfirm={async () => {
+      try { await privateSearch?.clear(); setPrivateStatus({ unlocked: false, rooms: [], total: 0 }); setPage(undefined); }
+      catch (error) { setPrivateStatus(await privateSearch?.status().catch(() => ({ unlocked: false, rooms: [], total: 0 }))); throw error; }
+    }} /> : null}
   </aside>;
 }

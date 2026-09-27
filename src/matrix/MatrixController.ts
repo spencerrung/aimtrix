@@ -7,6 +7,7 @@ import type {
   Room,
   SyncState,
 } from 'matrix-js-sdk';
+import type { IEvent } from 'matrix-js-sdk/lib/models/event.js';
 import type { RoomMessageEventContent, StickerEventContent } from 'matrix-js-sdk/lib/@types/events.js';
 import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
@@ -45,6 +46,8 @@ import { isMatrixNavigationTarget, type MatrixNavigationTarget } from './matrixL
 import { RoomHistory } from './RoomHistory';
 import { ThreadHistory } from './ThreadHistory';
 import { searchUnencryptedHistory, type HistorySearchFilters, type HistorySearchPage } from './historySearch';
+import { PrivateSearchStore, MAX_PRIVATE_SEARCH_EVENTS, allowPrivateSearchRoom, deletePrivateSearchDatabase, markPrivateSearchEdit, prunePrivateSearchEvent, prunePrivateSearchRoom, type PrivateSearchStatus, type IndexedRoom, type IndexedHit } from './privateSearchStore';
+import { Direction } from 'matrix-js-sdk/lib/models/event-timeline.js';
 import { SAVED_REFERENCES_EVENT, changeSavedReference, parseSavedReferences, type SavedReference } from './savedReferences';
 import { historyRelation, isVisibleTimelineEvent } from './historyEvents';
 import {
@@ -169,6 +172,13 @@ export class MatrixController {
   };
   private readonly subscribers = new Set<Subscriber>();
   private savedReferencesCache?: SavedReference[];
+  private privateSearch?: PrivateSearchStore;
+  private readonly privateSearchRedactions = new Set<string>();
+  private readonly privateSearchRoomRevisions = new Map<string, number>();
+  private readonly privateSearchRoomWrites = new Map<string, Promise<unknown>>();
+  private readonly privateSearchIndexingRooms = new Set<string>();
+  private readonly privateSearchDepartedRooms = new Set<string>();
+  private privateSearchCleanupFailed = false;
   private savedReferencesRevision = 0;
   private savedReferenceWork: Promise<unknown> = Promise.resolve();
   private client?: MatrixClient;
@@ -816,13 +826,18 @@ export class MatrixController {
       if (revision !== this.lifecycleRevision) return;
       this.pushRegistration = undefined;
       if (stored) await deleteAccountDatabases(stored);
+      let privateSearchDeletionFailed = false;
+      if (stored) {
+        try { await deletePrivateSearchDatabase({ userId: stored.userId, homeserver: stored.baseUrl }); }
+        catch { privateSearchDeletionFailed = true; }
+      }
       await this.credentialOperation(async () => {
         if (revision === this.lifecycleRevision) await this.platform.credentials.clear();
       });
       if (revision !== this.lifecycleRevision) return;
       this.recoverySession = undefined;
       this.cleanupPending = false;
-      this.setSnapshot({ status: 'signed-out' });
+      this.setSnapshot({ status: 'signed-out', ...(privateSearchDeletionFailed ? { error: 'Private search data could not be removed from this browser. Clear this site’s data to remove it.' } : {}) });
     } catch (error) {
       if (revision === this.lifecycleRevision) this.showConnectionError(error);
     }
@@ -1888,9 +1903,13 @@ export class MatrixController {
     const roomIds = rooms.map((room) => room.roomId);
     if (filters.roomId && !client.getRoom(filters.roomId)) throw new Error('This conversation is no longer available.');
     try {
-      const page = await searchUnencryptedHistory(client, filters, roomIds, nextBatch, signal);
+      const [page, privateResult] = await Promise.all([
+        searchUnencryptedHistory(client, filters, roomIds, nextBatch, signal),
+        this.privateSearch?.search(filters, signal) ?? Promise.resolve({ hits: [], corrupt: 0 }),
+      ]);
       if (this.client !== client) throw new Error('The session changed. Search again.');
-      return page;
+      const joinedEncrypted = new Set(client.getRooms().filter((room) => room.getMyMembership() === 'join' && client.isRoomEncrypted(room.roomId)).map((room) => room.roomId));
+      return { ...page, privateHits: privateResult.hits.filter((hit) => joinedEncrypted.has(hit.roomId)), privateCorrupt: privateResult.corrupt };
     } catch (error) {
       if (signal?.aborted) throw error;
       const status = error && typeof error === 'object' && 'httpStatus' in error ? Number(error.httpStatus) : undefined;
@@ -1899,6 +1918,129 @@ export class MatrixController {
       if (status === 403) throw new Error('The homeserver denied history search for this account or conversation.', { cause: error });
       throw new Error('History search failed. Check your connection and retry.', { cause: error });
     }
+  }
+
+  public async unlockPrivateSearch(passphrase: string): Promise<PrivateSearchStatus> {
+    const scope = this.getDraftScope();
+    if (!scope || this.snapshot.status !== 'ready') throw new Error('Sign in to unlock private search.');
+    const store = await PrivateSearchStore.unlock(scope, passphrase);
+    if (this.getDraftScope()?.userId !== scope.userId || this.getDraftScope()?.homeserver !== scope.homeserver || this.snapshot.status !== 'ready') {
+      store.close(); throw new Error('The session changed. Unlock private search again.');
+    }
+    this.privateSearch?.close();
+    this.privateSearch = store;
+    return this.privateSearchStatus();
+  }
+
+  public async privateSearchStatus(): Promise<PrivateSearchStatus> {
+    return { ...(await this.privateSearch?.status() ?? { unlocked: false, rooms: [], total: 0 }), cleanupIssue: this.privateSearchCleanupFailed };
+  }
+
+  public async clearPrivateSearch(): Promise<void> {
+    const scope = this.getDraftScope();
+    if (!scope) throw new Error('No Matrix account is active.');
+    this.privateSearch?.close(); this.privateSearch = undefined;
+    await deletePrivateSearchDatabase(scope);
+    this.privateSearchCleanupFailed = false;
+  }
+
+  private queuePrivateSearchRoomWrite<T>(roomId: string, action: () => Promise<T>): Promise<T> {
+    const previous = this.privateSearchRoomWrites.get(roomId);
+    const work = Promise.resolve(previous).catch(() => undefined).then(action);
+    this.privateSearchRoomWrites.set(roomId, work);
+    void work.then(() => { if (this.privateSearchRoomWrites.get(roomId) === work) this.privateSearchRoomWrites.delete(roomId); },
+      () => { if (this.privateSearchRoomWrites.get(roomId) === work) this.privateSearchRoomWrites.delete(roomId); });
+    return work;
+  }
+
+  private privateIndexedHit(event: MatrixEvent, roomId: string): IndexedHit | undefined {
+    if (!event.isEncrypted() || event.isRedacted() || event.isDecryptionFailure() || event.getType() !== 'm.room.message' && event.getType() !== 'm.sticker') return undefined;
+    const content = event.getContent();
+    const relation = historyRelation(event);
+    const edited = relation?.rel_type === 'm.replace' && typeof relation.event_id === 'string' && relation.event_id.startsWith('$');
+    const actual = edited && content['m.new_content'] && typeof content['m.new_content'] === 'object' ? content['m.new_content'] as Record<string, unknown> : content;
+    const body = actual.body;
+    const eventId = edited ? relation.event_id : event.getId();
+    if (typeof body !== 'string' || !eventId) return undefined;
+    const kind = event.getType() === 'm.sticker' || ['m.image', 'm.video', 'm.audio', 'm.file'].includes(String(actual.msgtype)) ? 'media' : /https?:\/\/\S+/i.test(body) ? 'link' : 'message';
+    return { roomId, eventId, senderId: event.getSender() ?? '', body: body.slice(0, 2_000), timestamp: event.getTs(), kind,
+      ...(edited ? { revisionTs: event.getTs() } : {}) };
+  }
+
+  private async authorizedPrivateEdit(event: MatrixEvent, room: Room, known?: Map<string, MatrixEvent>): Promise<boolean | undefined> {
+    const targetId = historyRelation(event)?.event_id;
+    const client = this.client;
+    if (!client || !targetId?.startsWith('$') || targetId === event.getId()) return false;
+    let original = known?.get(targetId) ?? room.findEventById(targetId);
+    if (!original) {
+      try { original = new this.sdk!.MatrixEvent(await client.fetchRoomEvent(room.roomId, targetId) as IEvent); }
+      catch { return undefined; }
+    }
+    if (this.client !== client) return undefined;
+    if (original.getSender() !== event.getSender() || original.getWireType() !== 'm.room.encrypted' || original.isRedacted()) return false;
+    try { await client.decryptEventIfNeeded(original); }
+    catch { return undefined; }
+    if (this.client !== client || original.isDecryptionFailure()) return undefined;
+    return original.getType() === 'm.room.message' || original.getType() === 'm.sticker';
+  }
+
+  public async indexEncryptedHistory(roomId: string, onProgress: (room: IndexedRoom) => void, signal?: AbortSignal): Promise<PrivateSearchStatus> {
+    const client = this.client;
+    const store = this.privateSearch;
+    const room = client?.getRoom(roomId);
+    if (!client || !store || !room || room.getMyMembership() !== 'join' || this.privateSearchDepartedRooms.has(roomId) || !client.isRoomEncrypted(roomId)) throw new Error('Unlock private search in a joined encrypted conversation first.');
+    if (this.privateSearchIndexingRooms.has(roomId)) throw new Error('This conversation is already being indexed.');
+    this.privateSearchIndexingRooms.add(roomId);
+    try {
+    let progress: IndexedRoom = await store.room(roomId) ?? { roomId, complete: false, indexed: 0, skipped: 0,
+      cursor: room.getLiveTimeline().getPaginationToken(Direction.Backward) ?? undefined };
+    const roomRevision = this.privateSearchRoomRevisions.get(roomId) ?? 0;
+    const check = () => {
+      if (signal?.aborted) throw new DOMException('Indexing cancelled.', 'AbortError');
+      if (this.client !== client || this.privateSearch !== store || room.getMyMembership() !== 'join' || this.privateSearchDepartedRooms.has(roomId) || (this.privateSearchRoomRevisions.get(roomId) ?? 0) !== roomRevision) throw new Error('Indexing stopped because room access or the session changed.');
+    };
+    const record = async (events: MatrixEvent[], cursor?: string, complete = false) => {
+      const hits: IndexedHit[] = [];
+      let skipped = 0;
+      const known = new Map(events.filter((event) => event.getId()).map((event) => [event.getId()!, event]));
+      for (const event of events) {
+        check();
+        if (!event.isEncrypted() || !event.getId() || this.privateSearchRedactions.has(`${roomId}\0${event.getId()}`)) continue;
+        if (event.isRedacted()) { await store.remove(roomId, event.getId()!); continue; }
+        await client.decryptEventIfNeeded(event).catch(() => undefined);
+        if (event.isDecryptionFailure() || event.getType() === 'm.room.encrypted') { skipped += 1; continue; }
+        if (historyRelation(event)?.rel_type === 'm.replace') {
+          const authorized = await this.authorizedPrivateEdit(event, room, known);
+          if (authorized !== true) { if (authorized === undefined) skipped += 1; continue; }
+        }
+        const hit = this.privateIndexedHit(event, roomId);
+        if (hit) hits.push(hit);
+      }
+      check();
+      progress = await this.queuePrivateSearchRoomWrite(roomId, async () => {
+        check();
+        return store.putPage(roomId, hits, { ...progress, cursor, complete, skipped: progress.skipped + skipped });
+      });
+      check();
+      for (const hit of hits) if (this.privateSearchRedactions.has(`${roomId}\0${hit.eventId}`)) await store.remove(roomId, hit.eventId);
+      onProgress(progress);
+    };
+    check();
+    if (progress.indexed === 0 && progress.skipped === 0) await record(room.getLiveTimeline().getEvents(), progress.cursor, !progress.cursor);
+    for (let page = 0; page < 20 && !progress.complete; page += 1) {
+      check();
+      const remaining = MAX_PRIVATE_SEARCH_EVENTS - (await store.status()).total;
+      if (remaining <= 0) break;
+      if (!progress.cursor) { progress = await store.putPage(roomId, [], { ...progress, complete: true }); break; }
+      const response = await client.createMessagesRequest(roomId, progress.cursor, Math.min(50, remaining), Direction.Backward);
+      check();
+      const events = response.chunk.map((raw) => new this.sdk!.MatrixEvent(raw));
+      const next = response.end;
+      await record(events, next, !next || next === progress.cursor || events.length === 0);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    return store.status();
+    } finally { this.privateSearchIndexingRooms.delete(roomId); }
   }
 
   public getSavedReferences(): SavedReference[] {
@@ -3034,6 +3176,9 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    const privateWrites = [...this.privateSearchRoomWrites.values()];
+    this.privateSearch?.close();
+    this.privateSearch = undefined;
     this.savedReferencesCache = undefined;
     this.savedReferenceWork = Promise.resolve();
     void Promise.resolve(this.platform.notifications.clearContext?.(this.notificationOwner)).catch(() => undefined);
@@ -3057,6 +3202,13 @@ export class MatrixController {
     client?.stopClient();
     this.client = undefined;
     this.activeSession = undefined;
+    await Promise.allSettled(privateWrites);
+    this.privateSearchRedactions.clear();
+    this.privateSearchRoomRevisions.clear();
+    this.privateSearchRoomWrites.clear();
+    this.privateSearchIndexingRooms.clear();
+    this.privateSearchDepartedRooms.clear();
+    this.privateSearchCleanupFailed = false;
     this.inMemoryRecoveryKey = undefined;
     this.personalizationLoaded = false;
     if (this.personalizationSaveTimer !== undefined) window.clearTimeout(this.personalizationSaveTimer);
@@ -3205,6 +3357,15 @@ export class MatrixController {
     _removed: boolean,
     data?: { liveEvent?: boolean },
   ): void => {
+    if (room && event.isRedaction()) {
+      const redactedId = event.getAssociatedId();
+      const scope = this.getDraftScope();
+      if (redactedId && scope) {
+        if (this.privateSearchRedactions.size > 5_000) this.privateSearchRedactions.clear();
+        this.privateSearchRedactions.add(`${room.roomId}\0${redactedId}`);
+        void this.queuePrivateSearchRoomWrite(room.roomId, () => prunePrivateSearchEvent(scope, room.roomId, redactedId)).catch(() => { this.privateSearchCleanupFailed = true; this.scheduleWorkspacePublish(); });
+      }
+    }
     if (room) { this.activity.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); this.roomHistory.refresh(room); this.threadHistory.observe(event, room, data?.liveEvent === true && !toStartOfTimeline); }
     if (room && this.client?.getRoom(room.roomId) === room) {
       const events = this.snapshotCache.localEvents.get(room.roomId);
@@ -3378,6 +3539,7 @@ export class MatrixController {
     const eventId = event.getId();
     const room = roomId && eventId ? this.client?.getRoom(roomId) : undefined;
     if (!eventId || !room || (!room.findEventById(eventId) && !this.threadHistory.hasEvent(room.roomId, eventId) && !this.activity.owns(event))) return;
+    if (this.privateSearch && historyRelation(event)?.rel_type === 'm.replace') this.refreshPrivateSearchEdit(event, room);
     this.activity.observe(event, room);
     this.roomHistory.refresh(room);
     this.threadHistory.observe(event, room);
@@ -3387,6 +3549,28 @@ export class MatrixController {
       this.notifyForMessage(event, room);
     }
   };
+
+  private refreshPrivateSearchEdit(event: MatrixEvent, room: Room): void {
+    if (!this.client?.isRoomEncrypted(room.roomId)) return;
+    const targetId = historyRelation(event)?.event_id;
+    const scope = this.getDraftScope();
+    if (!scope || !targetId?.startsWith('$')) return;
+    void this.authorizedPrivateEdit(event, room).then((authorized) => {
+      if (authorized !== true) {
+        if (authorized === undefined) { this.privateSearchCleanupFailed = true; this.scheduleWorkspacePublish(); }
+        return;
+      }
+      const hit = this.privateIndexedHit(event, room.roomId);
+      return this.queuePrivateSearchRoomWrite(room.roomId, async () => {
+      if (this.privateSearchDepartedRooms.has(room.roomId) || this.client?.getRoom(room.roomId) !== room) return;
+      await markPrivateSearchEdit(scope, room.roomId, targetId, event.getTs());
+      const store = this.privateSearch;
+      if (!store || !hit || room.getMyMembership() !== 'join' || this.privateSearchDepartedRooms.has(room.roomId)) return;
+      const progress = await store.room(room.roomId);
+      if (progress) await store.putPage(room.roomId, [hit], progress);
+      });
+    }).catch(() => { this.privateSearchCleanupFailed = true; this.scheduleWorkspacePublish(); });
+  }
 
   private readonly handleReceipt = (_event: MatrixEvent, room?: Room): void => {
     this.bumpRoomVersion(room?.roomId);
@@ -3430,9 +3614,38 @@ export class MatrixController {
   private readonly handleRoomState = (event: MatrixEvent): void => {
     const roomId = event.getRoomId();
     const room = roomId ? this.client?.getRoom(roomId) : undefined;
+    if (room && event.getType() === 'm.room.member' && event.getStateKey() === this.client?.getUserId()) {
+      if (event.getContent().membership === 'join') this.restorePrivateSearchRoom(room.roomId);
+      else this.prunePrivateSearchRoom(room.roomId);
+    }
     if (room) { this.activity.observe(event, room); this.roomHistory.refresh(room); this.threadHistory.refresh(room); }
     this.bumpRoomVersion(event.getRoomId());
     this.scheduleWorkspacePublish();
+  };
+
+  private prunePrivateSearchRoom(roomId: string): void {
+    const scope = this.getDraftScope();
+    if (!scope) return;
+    this.privateSearchDepartedRooms.add(roomId);
+    this.privateSearchRoomRevisions.set(roomId, (this.privateSearchRoomRevisions.get(roomId) ?? 0) + 1);
+    void this.queuePrivateSearchRoomWrite(roomId, () => prunePrivateSearchRoom(scope, roomId)).catch(() => {
+      this.privateSearchCleanupFailed = true;
+      this.scheduleWorkspacePublish();
+    });
+  }
+
+  private restorePrivateSearchRoom(roomId: string): void {
+    const scope = this.getDraftScope();
+    if (!scope) return;
+    const revision = this.privateSearchRoomRevisions.get(roomId) ?? 0;
+    void this.queuePrivateSearchRoomWrite(roomId, () => allowPrivateSearchRoom(scope, roomId)).then(() => {
+      if ((this.privateSearchRoomRevisions.get(roomId) ?? 0) === revision && this.client?.getRoom(roomId)?.getMyMembership() === 'join') this.privateSearchDepartedRooms.delete(roomId);
+    }).catch(() => { this.privateSearchCleanupFailed = true; this.scheduleWorkspacePublish(); });
+  }
+
+  private readonly handleMyMembership = (room: Room, membership: string): void => {
+    if (membership !== 'join') this.prunePrivateSearchRoom(room.roomId);
+    else this.restorePrivateSearchRoom(room.roomId);
   };
 
   private readonly handleAccountData = (event: MatrixEvent): void => {
@@ -3516,6 +3729,7 @@ export class MatrixController {
     this.client.on(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.on(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.on(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
+    this.client.on(this.sdk.RoomEvent.MyMembership, this.handleMyMembership);
     this.client.on(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.on(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
     this.client.on(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);
@@ -3537,6 +3751,7 @@ export class MatrixController {
     this.client.removeListener(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.removeListener(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.removeListener(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
+    this.client.removeListener(this.sdk.RoomEvent.MyMembership, this.handleMyMembership);
     this.client.removeListener(this.sdk.RoomEvent.Receipt, this.handleReceipt);
     this.client.removeListener(this.sdk.RoomEvent.LocalEchoUpdated, this.handleLocalEcho);
     this.client.removeListener(this.sdk.RoomEvent.AccountData, this.handleRoomAccountData);

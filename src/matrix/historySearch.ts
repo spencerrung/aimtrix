@@ -21,6 +21,8 @@ export interface HistorySearchHit {
 
 export interface HistorySearchPage {
   hits: HistorySearchHit[];
+  privateHits?: HistorySearchHit[];
+  privateCorrupt?: number;
   nextBatch?: string;
   count?: number;
   searchedRoomIds: string[];
