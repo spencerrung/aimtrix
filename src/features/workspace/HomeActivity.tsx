@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { ArrowLeft, Bell, MessageCircle, RefreshCw, Sparkles } from 'lucide-react';
 import type { ActivitySnapshot } from '../../matrix/activity';
 import type { WorkspaceSnapshot } from '../../matrix/viewModels';
@@ -12,10 +12,11 @@ export interface ActivityActions {
   setThreadFollow(roomId: string, rootId: string, following: boolean): Promise<void>;
 }
 export interface HomePosition { filter: 'all' | 'unread' | 'mentions' | 'threads'; scroll: number; outerScroll?: number; initialized: boolean }
-export default function HomeActivity({ workspace, activity, actions, position, onPosition, onOpen, onBack, onBrowse, onSettings, onDrafts, draftCount, onMarkRead }: {
+export default function HomeActivity({ workspace, activity, actions, position, onPosition, onOpen, onBack, onBrowse, onSettings, onDrafts, draftCount, onMarkRead, firstUse }: {
   workspace: WorkspaceSnapshot; activity?: ActivitySnapshot; actions?: ActivityActions; position: HomePosition; onPosition: (patch: Partial<HomePosition>) => void;
   onOpen: (target: MatrixNavigationTarget) => Promise<void>; onBack: () => void; onBrowse?: () => void; onSettings: () => void; onDrafts: () => void; draftCount: number;
   onMarkRead?: (roomId: string) => Promise<void>;
+  firstUse?: ReactNode;
 }) {
   const filter = position.filter;
   const [error, setError] = useState<string>();
@@ -44,8 +45,8 @@ export default function HomeActivity({ workspace, activity, actions, position, o
   const items = (activity?.items ?? []).filter((item) => filter === 'threads' ? item.kind === 'thread' : filter === 'mentions' ? item.highlighted : filter === 'unread' ? item.read !== 'read' : true);
   return <main className="home-activity" aria-label="Home activity" ref={surface} onScroll={(event) => { if (event.target === surface.current) onPosition({ outerScroll: surface.current?.scrollTop ?? 0 }); }}>
     <header className="home-activity__header">
-      <div><button className="icon-button" type="button" aria-label="Back from Home" onClick={onBack}><ArrowLeft size={18} /></button><Sparkles size={24} /><h1>Hey, welcome back.</h1></div>
-      <p>A little catch-up, then back to your people.</p>
+      <div><button className="icon-button" type="button" aria-label="Back from Home" onClick={onBack}><ArrowLeft size={18} /></button><Sparkles size={24} /><h1>{firstUse ? 'Welcome to Aimtrix.' : 'Hey, welcome back.'}</h1></div>
+      <p>{firstUse ? 'Start your first private conversation.' : 'A little catch-up, then back to your people.'}</p>
       <div className="home-activity__tools">
         {onBrowse ? <button className="aqua-button" type="button" onClick={onBrowse}>Browse conversations</button> : null}
         {actions ? <button className="aqua-button" type="button" disabled={busy || activity?.loading} onClick={() => void run(actions.refresh)}><RefreshCw size={15} /> Refresh activity</button> : null}
@@ -55,6 +56,7 @@ export default function HomeActivity({ workspace, activity, actions, position, o
     </header>
     <nav className="home-activity__filters" aria-label="Activity filters">{(['all', 'unread', 'mentions', 'threads'] as const).map((value) => <button type="button" className="aqua-button" aria-pressed={filter === value} key={value} onClick={() => { onPosition({ filter: value, scroll: 0, outerScroll: 0 }); if (list.current) list.current.scrollTop = 0; }}>{({ all: 'All activity', unread: 'Unread', mentions: 'Mentions', threads: 'My threads' })[value]}</button>)}</nav>
     <div className="home-activity__list" ref={list} onScroll={() => { if (list.current) onPosition({ scroll: list.current.scrollTop }); }}>
+      {firstUse}
       {error ? <p role="alert">{error}</p> : null}
       {(filter === 'all' || filter === 'unread') ? <section aria-label="Unread conversations"><h2>{unread.length ? `${unread.length} conversations to catch up on` : 'Your conversation badges are clear'}</h2>
         {unread.map((room) => <article className="home-activity__card" key={room.id}>

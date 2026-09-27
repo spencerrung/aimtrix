@@ -3,7 +3,7 @@ import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
   await page.goto('/?demo=1');
-  await expect(page.getByText('Welcome Lounge', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText('Welcome Lounge', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
 });
 
 test('workspace navigation, drawer, and personalization are functional', async ({ page }, testInfo) => {

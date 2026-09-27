@@ -20,11 +20,14 @@ import { NotificationRules, threadSilenceRuleId, type RoomNotificationMode } fro
 import { normalizeNotificationPolicy, notificationsPaused, type LocalNotificationPolicy } from '../pwa/notificationPolicy';
 import type { IPusherRequest } from 'matrix-js-sdk/lib/@types/PushRules.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
+import type { UIAuthCallback } from 'matrix-js-sdk/lib/interactive-auth.js';
+import { CryptoEvent } from 'matrix-js-sdk/lib/crypto-api/index.js';
 import {
   VerificationPhase,
   VerificationRequestEvent,
   VerifierEvent,
   type ShowSasCallbacks,
+  type VerificationRequest,
 } from 'matrix-js-sdk/lib/crypto-api/verification.js';
 import type {
   CallError,
@@ -38,7 +41,7 @@ import {
   type ProfilePersonalization,
 } from '../settings/profilePersonalization';
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
-import { resolveHomeserver } from './discovery';
+import { loginMethodsFromFlows, resolveHomeserver, type LoginMethods } from './discovery';
 import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
 import { AttachmentSender, type AttachmentSendOptions } from './AttachmentSender';
@@ -83,6 +86,7 @@ import {
 import type {
   DeviceRemovalResult,
   DeviceVerificationChallenge,
+  IncomingVerificationSummary,
   MatrixSettingsSnapshot,
 } from './settingsTypes';
 import type {
@@ -109,7 +113,7 @@ export type MatrixControllerSnapshot =
   | { status: 'authenticating'; message: string; recovery?: SessionRecovery }
   | { status: 'signed-out'; error?: string; recovery?: SessionRecovery }
   | { status: 'connecting'; message: string; error?: string }
-  | { status: 'ready'; workspace: WorkspaceSnapshot; issue?: ConnectionIssue }
+  | { status: 'ready'; workspace: WorkspaceSnapshot; issue?: ConnectionIssue; incomingVerification?: IncomingVerificationSummary[] }
   | { status: 'error'; error: string; canRetry: boolean; issue?: ConnectionIssue }
   | { status: 'reauthentication-required'; recovery: SessionRecovery; error?: string };
 
@@ -258,6 +262,7 @@ export class MatrixController {
   private readonly mediaRequests = new Map<string, Promise<string | undefined>>();
   private readonly mediaObjectUrls = new Set<string>();
   private readonly pendingDeviceAuth = new Map<string, string>();
+  private readonly incomingVerificationRequests = new Map<string, { request: VerificationRequest; onChange: () => void }>();
   private readonly stickerUploads = new Map<string, Promise<{
     url?: string;
     file?: Record<string, unknown>;
@@ -635,6 +640,19 @@ export class MatrixController {
     }
   }
 
+  public async discoverLoginMethods(credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>): Promise<LoginMethods> {
+    const target = await resolveHomeserver({
+      homeserverInput: credentials.homeserver,
+      userId: credentials.userId,
+      configuredServerName: this.config.defaultHomeserver.serverName,
+      configuredBaseUrl: this.config.defaultHomeserver.baseUrl,
+    });
+    const sdk = await loadMatrixSdk();
+    const client = sdk.createClient({ baseUrl: target.baseUrl });
+    const response = await client.loginFlows();
+    return loginMethodsFromFlows(response.flows, target.baseUrl);
+  }
+
   public async startSso(credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>): Promise<void> {
     const revision = ++this.lifecycleRevision;
     this.setSnapshot({ status: 'authenticating', message: 'Checking SSO providers…', recovery: this.recoveryInfo() });
@@ -953,13 +971,14 @@ export class MatrixController {
     const session = this.activeSession;
     if (!client || !session) throw new Error('Matrix is not connected.');
     const crypto = client.getCrypto();
-    const [deviceResponse, versions, crossSigningReady, secretStorageReady, backupInfo] =
+    const [deviceResponse, versions, crossSigningReady, secretStorageReady, backupInfo, defaultSecretKeyId] =
       await Promise.all([
         client.getDevices(),
         client.getVersions(),
         crypto?.isCrossSigningReady() ?? Promise.resolve(false),
         crypto?.isSecretStorageReady() ?? Promise.resolve(false),
         crypto?.getKeyBackupInfo() ?? Promise.resolve(null),
+        client.secretStorage.getDefaultKeyId(),
       ]);
     const devices = await Promise.all(
       deviceResponse.devices.map(async (device) => {
@@ -1012,6 +1031,7 @@ export class MatrixController {
         encryptionReady: Boolean(crypto),
         crossSigningReady,
         secretStorageReady,
+        secretStorageConfigured: Boolean(defaultSecretKeyId),
         keyBackupEnabled: Boolean(backupInfo),
         keyBackupVersion: backupInfo?.version,
       },
@@ -1023,12 +1043,132 @@ export class MatrixController {
     };
   }
 
+  private readonly handleIncomingVerification = (request: VerificationRequest): void => {
+    if (request.initiatedByMe || !request.pending) return;
+    const id = request.transactionId ?? `${request.otherUserId}\0${request.otherDeviceId ?? ''}`;
+    const prior = this.incomingVerificationRequests.get(id);
+    if (prior?.request === request) return;
+    if (prior) prior.request.off(VerificationRequestEvent.Change, prior.onChange);
+    const onChange = () => {
+      if (!request.pending || request.phase === VerificationPhase.Done || request.phase === VerificationPhase.Cancelled) {
+        request.off(VerificationRequestEvent.Change, onChange);
+        this.incomingVerificationRequests.delete(id);
+      }
+      this.scheduleWorkspacePublish();
+    };
+    this.incomingVerificationRequests.set(id, { request, onChange });
+    request.on(VerificationRequestEvent.Change, onChange);
+    this.scheduleWorkspacePublish();
+  };
+
+  private incomingVerificationSummaries(): IncomingVerificationSummary[] {
+    return [...this.incomingVerificationRequests].filter(([, { request }]) => request.pending).map(([id, { request }]) => ({
+      id, userId: request.otherUserId, deviceId: request.otherDeviceId,
+      selfVerification: request.isSelfVerification, timeoutMs: request.timeout ?? undefined,
+      sasAvailable: request.phase === VerificationPhase.Requested || request.phase === VerificationPhase.Ready && request.otherPartySupportsMethod('m.sas.v1') || request.phase === VerificationPhase.Started && request.chosenMethod === 'm.sas.v1',
+      qrShowAvailable: (request.phase === VerificationPhase.Requested || request.phase === VerificationPhase.Ready) && request.otherPartySupportsMethod('m.qr_code.scan.v1'),
+      qrScanAvailable: (request.phase === VerificationPhase.Requested || request.phase === VerificationPhase.Ready) && request.otherPartySupportsMethod('m.qr_code.show.v1'),
+      qrConfirmAvailable: Boolean(request.verifier?.getReciprocateQrCodeCallbacks()),
+    }));
+  }
+
+  public async declineIncomingVerification(id: string): Promise<void> {
+    const request = this.incomingVerificationRequests.get(id)?.request;
+    if (!request || !request.pending) throw new Error('This verification request is no longer available.');
+    if (request.declining) return;
+    await request.cancel();
+  }
+
+  public async acceptIncomingVerification(id: string, signal?: AbortSignal): Promise<DeviceVerificationChallenge> {
+    const request = this.incomingVerificationRequests.get(id)?.request;
+    if (!request || !request.pending || request.initiatedByMe) throw new Error('This verification request is no longer available.');
+    signal?.throwIfAborted();
+    if (request.phase === VerificationPhase.Requested && !request.accepting) await request.accept();
+    if (request.phase === VerificationPhase.Started && request.chosenMethod !== 'm.sas.v1') throw new Error('This request is already using QR verification.');
+    return this.waitForSas(request, signal);
+  }
+
+  private incomingRequest(id: string): VerificationRequest {
+    const request = this.incomingVerificationRequests.get(id)?.request;
+    if (!request || !request.pending || request.initiatedByMe) throw new Error('This verification request is no longer available.');
+    return request;
+  }
+
+  private async readyIncomingRequest(id: string, signal?: AbortSignal): Promise<VerificationRequest> {
+    const request = this.incomingRequest(id);
+    signal?.throwIfAborted();
+    if (request.phase === VerificationPhase.Requested && !request.accepting) await request.accept();
+    if (request.phase < VerificationPhase.Ready) {
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
+          clearTimeout(timer); request.off(VerificationRequestEvent.Change, changed); signal?.removeEventListener('abort', aborted);
+          if (error) reject(error); else resolve();
+        };
+        const changed = () => {
+          if (request.phase === VerificationPhase.Cancelled) finish(new Error('Verification was cancelled.'));
+          else if (request.phase >= VerificationPhase.Ready) finish();
+        };
+        const aborted = () => finish(new DOMException('Verification cancelled.', 'AbortError'));
+        const timer = window.setTimeout(() => finish(new Error('Verification request timed out.')), Math.min(120000, request.timeout ?? 120000));
+        request.on(VerificationRequestEvent.Change, changed);
+        signal?.addEventListener('abort', aborted, { once: true });
+        changed();
+      });
+    }
+    signal?.throwIfAborted();
+    return request;
+  }
+
+  public async showIncomingVerificationQr(id: string, signal?: AbortSignal): Promise<Uint8ClampedArray> {
+    const request = await this.readyIncomingRequest(id, signal);
+    if (!request.otherPartySupportsMethod('m.qr_code.scan.v1')) throw new Error('The other device cannot scan a verification QR code. Use emoji instead.');
+    const bytes = await request.generateQRCode();
+    if (!bytes?.length) throw new Error('A verification QR code could not be generated. Use emoji instead.');
+    return bytes;
+  }
+
+  public async scanIncomingVerificationQr(id: string, payload: Uint8ClampedArray, signal?: AbortSignal): Promise<void> {
+    const request = await this.readyIncomingRequest(id, signal);
+    if (!request.otherPartySupportsMethod('m.qr_code.show.v1')) throw new Error('The other device cannot show a verification QR code. Use emoji instead.');
+    if (!payload.length || payload.length > 512) throw new Error('This QR code is not a valid Matrix verification code.');
+    const verifier = await request.scanQRCode(payload);
+    signal?.throwIfAborted();
+    const cancel = () => { void request.cancel().catch(() => undefined); };
+    signal?.addEventListener('abort', cancel, { once: true });
+    try { await this.waitForQrCompletion(request, verifier.verify()); }
+    finally { signal?.removeEventListener('abort', cancel); }
+  }
+
+  public async confirmIncomingVerificationQr(id: string): Promise<void> {
+    const verifier = this.incomingRequest(id).verifier;
+    const callbacks = verifier?.getReciprocateQrCodeCallbacks();
+    if (!verifier || !callbacks) throw new Error('The other device has not scanned this code yet.');
+    callbacks.confirm();
+    await this.waitForQrCompletion(this.incomingRequest(id), verifier.verify());
+  }
+
+  private async waitForQrCompletion(request: VerificationRequest, completion: Promise<void>): Promise<void> {
+    let timeout: number | undefined;
+    try {
+      await Promise.race([completion, new Promise<never>((_, reject) => {
+        timeout = window.setTimeout(() => reject(new Error('QR verification timed out. Ask for a new request.')), Math.min(120000, request.timeout ?? 120000));
+      })]);
+    } catch (error) {
+      await request.cancel().catch(() => undefined);
+      throw error;
+    } finally { window.clearTimeout(timeout); }
+  }
+
   public async verifyDevice(deviceId: string, signal?: AbortSignal): Promise<DeviceVerificationChallenge> {
     const client = this.client;
     const crypto = client?.getCrypto();
     if (!client || !crypto) throw new Error('Encryption is not available.');
     signal?.throwIfAborted();
     const request = await crypto.requestDeviceVerification(client.getSafeUserId(), deviceId);
+    return this.waitForSas(request, signal);
+  }
+
+  private async waitForSas(request: VerificationRequest, signal?: AbortSignal): Promise<DeviceVerificationChallenge> {
     const cancelled = () => new Error('Verification was cancelled.');
     const cancelRequest = () => { void request.cancel().catch(() => undefined); };
     signal?.addEventListener('abort', cancelRequest, { once: true });
@@ -1056,6 +1196,7 @@ export class MatrixController {
         });
       }
       signal?.throwIfAborted();
+      if (request.phase === VerificationPhase.Started && request.chosenMethod !== 'm.sas.v1') throw new Error('This request is using another verification method.');
       const verifier = request.verifier ?? await request.startVerification('m.sas.v1');
       signal?.throwIfAborted();
       let rejectSas: (reason?: unknown) => void = () => undefined;
@@ -1072,6 +1213,8 @@ export class MatrixController {
         const timeout = window.setTimeout(() => finish(new Error('Verification timed out.')), 120000);
         verifier.once(VerifierEvent.ShowSas, showSas);
         signal?.addEventListener('abort', abort, { once: true });
+        const existingSas = verifier.getShowSasCallbacks();
+        if (existingSas) showSas(existingSas);
         if (signal?.aborted) abort();
       });
       const completion = verifier.verify();
@@ -1200,21 +1343,31 @@ export class MatrixController {
   }
 
   public async restoreRecovery(recoveryKey: string): Promise<number> {
-    const crypto = this.client?.getCrypto();
-    if (!crypto) throw new Error('Encryption is not ready.');
+    const client = this.client;
+    const crypto = client?.getCrypto();
+    if (!client || !crypto) throw new Error('Encryption is not ready.');
     const { decodeRecoveryKey } = await import(
       'matrix-js-sdk/lib/crypto-api/recovery-key.js'
     );
-    this.inMemoryRecoveryKey = decodeRecoveryKey(recoveryKey.trim());
+    const decoded = decodeRecoveryKey(recoveryKey.trim());
+    const defaultKey = await client.secretStorage.getKey();
+    if (!defaultKey) throw new Error('This account has no existing recovery storage. Set up new recovery instead.');
+    if (!(await client.secretStorage.checkKey(decoded, defaultKey[1] as SecretStorageKeyDescriptionAesV1))) {
+      throw new Error('This recovery key does not match the account’s existing storage.');
+    }
+    const backup = await crypto.getKeyBackupInfo();
+    if (!backup) throw new Error('This account has no encrypted room-key backup to restore.');
+    const crossSigning = await crypto.getCrossSigningStatus();
+    if (this.client !== client) throw new Error('The Matrix session changed.');
+    this.inMemoryRecoveryKey = decoded;
     try {
-      await crypto.bootstrapCrossSigning({});
+      if (crossSigning.privateKeysInSecretStorage) await crypto.bootstrapCrossSigning({});
       await crypto.loadSessionBackupPrivateKeyFromSecretStorage();
       await crypto.checkKeyBackupAndEnable();
       const restored = await crypto.restoreKeyBackup();
       return restored.imported;
-    } catch (error) {
+    } finally {
       this.inMemoryRecoveryKey = undefined;
-      throw error;
     }
   }
 
@@ -1223,34 +1376,58 @@ export class MatrixController {
     const session = this.activeSession;
     const crypto = client?.getCrypto();
     if (!client || !session || !crypto) throw new Error('Encryption is not ready.');
-    if (!passphrase.trim() || !accountPassword) throw new Error('Both passwords are required.');
-
-    if (!(await crypto.isCrossSigningReady())) {
-      await crypto.bootstrapCrossSigning({
-        authUploadDeviceSigningKeys: async (makeRequest) => {
-          try {
-            return await makeRequest(null);
-          } catch (error) {
-            const authSession = (error as { data?: { session?: string } }).data?.session;
-            return makeRequest({
-              type: 'm.login.password',
-              identifier: { type: 'm.id.user', user: session.userId },
-              password: accountPassword,
-              session: authSession,
-            });
-          }
-        },
-      });
+    if (passphrase.trim().length < 12) throw new Error('Use at least 12 characters for a recovery passphrase.');
+    if (await client.secretStorage.getDefaultKeyId() || await crypto.getKeyBackupInfo()) {
+      throw new Error('Recovery or key backup already exists. Restore the existing key or use the separately confirmed reset flow.');
     }
 
-    const recoveryKey = await crypto.createRecoveryKeyFromPassphrase(passphrase);
-    await crypto.bootstrapSecretStorage({
-      createSecretStorageKey: async () => recoveryKey,
-      setupNewSecretStorage: true,
-      setupNewKeyBackup: true,
-    });
-    if (!recoveryKey.encodedPrivateKey) throw new Error('Recovery key was not generated.');
-    return recoveryKey.encodedPrivateKey;
+    const signing = await crypto.getCrossSigningStatus();
+    if (signing.publicKeysOnDevice && !signing.privateKeysCachedLocally.masterKey) {
+      throw new Error('This account already has an encryption identity that this device cannot restore. Use a trusted device or the separately confirmed reset flow.');
+    }
+
+    try {
+      if (!(await crypto.isCrossSigningReady())) {
+        await crypto.bootstrapCrossSigning({ authUploadDeviceSigningKeys: this.recoveryUia(session.userId, accountPassword) });
+      }
+      const recoveryKey = await crypto.createRecoveryKeyFromPassphrase(passphrase);
+      await crypto.bootstrapSecretStorage({
+        createSecretStorageKey: async () => recoveryKey,
+        setupNewSecretStorage: true,
+        setupNewKeyBackup: true,
+      });
+      if (!recoveryKey.encodedPrivateKey) throw new Error('Recovery key was not generated.');
+      return recoveryKey.encodedPrivateKey;
+    } finally { this.inMemoryRecoveryKey = undefined; }
+  }
+
+  private recoveryUia(userId: string, accountPassword: string): UIAuthCallback<void> {
+    return async (makeRequest) => {
+      try { return await makeRequest(null); }
+      catch (error) {
+        const candidate = error as { errcode?: string; httpStatus?: number; data?: { session?: string; flows?: Array<{ stages?: string[] }> } };
+        if (candidate.httpStatus !== 401 && candidate.errcode !== 'M_UNAUTHORIZED') throw error;
+        if (!accountPassword || candidate.data?.flows && !candidate.data.flows.some((flow) => flow.stages?.includes('m.login.password'))) {
+          throw new Error('This homeserver requires interactive authentication that Aimtrix cannot complete here. Use a trusted client to set up recovery, then return with its recovery key.', { cause: error });
+        }
+        return makeRequest({ type: 'm.login.password', identifier: { type: 'm.id.user', user: userId }, password: accountPassword, session: candidate.data?.session });
+      }
+    };
+  }
+
+  public async resetRecovery(passphrase: string, accountPassword: string, confirmed: boolean): Promise<string> {
+    if (!confirmed) throw new Error('Confirm recovery reset first.');
+    const session = this.activeSession;
+    const crypto = this.client?.getCrypto();
+    if (!session || !crypto) throw new Error('Encryption is not ready.');
+    if (passphrase.trim().length < 12) throw new Error('Use at least 12 characters for a recovery passphrase.');
+    try {
+      await crypto.resetEncryption(this.recoveryUia(session.userId, accountPassword));
+      const recoveryKey = await crypto.createRecoveryKeyFromPassphrase(passphrase);
+      await crypto.bootstrapSecretStorage({ createSecretStorageKey: async () => recoveryKey, setupNewSecretStorage: true, setupNewKeyBackup: false });
+      if (!recoveryKey.encodedPrivateKey) throw new Error('Recovery key was not generated.');
+      return recoveryKey.encodedPrivateKey;
+    } finally { this.inMemoryRecoveryKey = undefined; }
   }
 
   public async updateProfile(update: {
@@ -3141,6 +3318,8 @@ export class MatrixController {
         cryptoDatabasePrefix: names.crypto,
       });
       if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
+      client.on(CryptoEvent.VerificationRequestReceived, this.handleIncomingVerification);
+      for (const request of client.getCrypto?.()?.getVerificationRequestsToDeviceInProgress(session.userId) ?? []) this.handleIncomingVerification(request);
       await client.startClient({
         initialSyncLimit: 30,
         lazyLoadMembers: true,
@@ -3199,6 +3378,8 @@ export class MatrixController {
     this.callSummary = undefined;
     const client = this.client;
     this.detachClientListeners();
+    for (const { request, onChange } of this.incomingVerificationRequests.values()) request.off(VerificationRequestEvent.Change, onChange);
+    this.incomingVerificationRequests.clear();
     client?.stopClient();
     this.client = undefined;
     this.activeSession = undefined;
@@ -3748,6 +3929,7 @@ export class MatrixController {
     if (this.publishFrame !== undefined) cancelAnimationFrame(this.publishFrame);
     this.publishFrame = undefined;
     if (!this.client || !this.sdk) return;
+    this.client.removeListener(CryptoEvent.VerificationRequestReceived, this.handleIncomingVerification);
     this.client.removeListener(this.sdk.ClientEvent.AccountData, this.handleAccountData);
     this.client.removeListener(this.sdk.RoomEvent.Timeline, this.handleTimeline);
     this.client.removeListener(this.sdk.RoomEvent.TimelineReset, this.handleTimelineReset);
@@ -3781,6 +3963,7 @@ export class MatrixController {
         this.setSnapshot({
           status: 'ready',
           issue: this.currentIssue,
+          incomingVerification: this.incomingVerificationSummaries(),
           workspace: { ...workspace, call: this.callSummary, activity: this.activity.snapshot(), threadsByRoot: Object.fromEntries(Object.entries(workspace.threadsByRoot).map(([id, thread]) => [id, { ...thread, followed: thread.roomId ? this.activity.followState(thread.roomId, id) : undefined }])) },
         });
       } catch {

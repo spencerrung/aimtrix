@@ -12,6 +12,7 @@ export interface MatrixSecuritySummary {
   encryptionReady: boolean;
   crossSigningReady: boolean;
   secretStorageReady: boolean;
+  secretStorageConfigured?: boolean;
   keyBackupEnabled: boolean;
   keyBackupVersion?: string;
 }
@@ -36,6 +37,18 @@ export interface DeviceVerificationChallenge {
   emoji: Array<[symbol: string, name: string]>;
   confirm: () => Promise<void>;
   cancel: () => void;
+}
+
+export interface IncomingVerificationSummary {
+  id: string;
+  userId: string;
+  deviceId?: string;
+  selfVerification: boolean;
+  timeoutMs?: number;
+  sasAvailable: boolean;
+  qrShowAvailable: boolean;
+  qrScanAvailable: boolean;
+  qrConfirmAvailable: boolean;
 }
 
 export type DeviceRemovalResult = 'removed' | 'password-required';

@@ -37,6 +37,7 @@ export interface MatrixSettingsActions {
   setIgnoredUsers: (userIds: string[]) => Promise<void>;
   uploadAvatar: (file: File) => Promise<void>;
   setupRecovery: (passphrase: string, accountPassword: string) => Promise<string>;
+  resetRecovery?: (passphrase: string, accountPassword: string) => Promise<string>;
   restoreRecovery: (recoveryKey: string) => Promise<number>;
   changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) => Promise<void>;
   deactivateAccount: (password: string, erase: boolean) => Promise<void>;
@@ -71,6 +72,7 @@ export function MatrixSettingsPanel({
   useDialogBusy(busy && !verificationWaiting);
   useEffect(() => () => verificationAbort.current?.abort(), []);
   const [confirmDeactivation, setConfirmDeactivation] = useState(false);
+  const [confirmRecoveryReset, setConfirmRecoveryReset] = useState(false);
   const [confirmRemoval, setConfirmRemoval] = useState<string>();
   const [confirmingVerification, setConfirmingVerification] = useState(false);
   const [snapshot, setSnapshot] = useState<MatrixSettingsSnapshot>();
@@ -302,6 +304,7 @@ export function MatrixSettingsPanel({
     try {
       const key = await actions.setupRecovery(recoveryPassphrase, recoveryPassword);
       setRecoveryKey(key);
+      setRecoveryPassphrase('');
       setRecoveryPassword('');
       setNotice('Encryption recovery and key backup are ready. Store this key safely.');
       await refresh();
@@ -309,6 +312,39 @@ export function MatrixSettingsPanel({
       setError('Recovery setup failed. Confirm your account password and try again.');
     }
   });
+
+  const resetRecovery = () => run(async () => {
+    if (!actions?.resetRecovery) return;
+    setError(undefined);
+    try {
+      const key = await actions.resetRecovery(recoveryPassphrase, recoveryPassword);
+      setRecoveryKey(key);
+      setRecoveryPassphrase('');
+      setRecoveryPassword('');
+      setNotice('Recovery was reset. Older backup versions may no longer be available. Save the new key now.');
+      await refresh();
+    } catch {
+      setError('Recovery reset did not finish. Refresh account health before retrying; the previous backup may already have changed.');
+      await refresh();
+    }
+  });
+
+  const copyRecoveryKey = async () => {
+    if (!recoveryKey) return;
+    try { await navigator.clipboard.writeText(recoveryKey); setNotice('Recovery key copied. Confirm that you saved it somewhere private.'); }
+    catch { setError('Clipboard access failed. Select the displayed key or download it, then save it somewhere private.'); }
+  };
+
+  const downloadRecoveryKey = () => {
+    if (!recoveryKey) return;
+    try {
+      const url = URL.createObjectURL(new Blob([`Aimtrix Matrix recovery key\n${recoveryKey}\n`], { type: 'text/plain' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = 'aimtrix-recovery-key.txt'; link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setNotice('Recovery key download started. Confirm that the file was saved privately.');
+    } catch { setError('Recovery key download failed. Copy or select the displayed key instead.'); }
+  };
 
   if (!actions) {
     return <p className="settings-demo-note">Matrix account settings require a real signed-in session.</p>;
@@ -371,23 +407,31 @@ export function MatrixSettingsPanel({
             </div>
             <div className="recovery-setup">
               <strong>Restore existing recovery</strong>
-              <p>Use the recovery key from an existing verified Matrix client. It is held only in memory for this session.</p>
-              <input type="password" value={existingRecoveryKey} placeholder="Recovery key" onChange={(event) => setExistingRecoveryKey(event.target.value)} />
-              <button className="aqua-button" type="button" onClick={() => void restoreRecovery()} disabled={!existingRecoveryKey.trim()}>Restore encrypted room keys</button>
+              <p>Already have a recovery key from this account? Restore it here before creating new recovery. Aimtrix clears the entered key after the operation.</p>
+              <label>Existing recovery key<input type="password" value={existingRecoveryKey} autoComplete="off" onChange={(event) => setExistingRecoveryKey(event.target.value)} /></label>
+              <button className="aqua-button" type="button" onClick={() => void restoreRecovery()} disabled={!existingRecoveryKey.trim()}>Restore existing room keys</button>
             </div>
-            {!snapshot.security.secretStorageReady ? (
+            {!snapshot.security.secretStorageConfigured && !snapshot.security.keyBackupEnabled ? (
               <div className="recovery-setup">
-                <p>Creating new recovery storage can replace incomplete recovery metadata. Use this only if no other verified client can restore the account.</p>
-                <input type="password" value={recoveryPassphrase} placeholder="New recovery passphrase" onChange={(event) => setRecoveryPassphrase(event.target.value)} />
-                <input type="password" value={recoveryPassword} aria-label="Current Matrix password" placeholder="Current Matrix password" onChange={(event) => setRecoveryPassword(event.target.value)} />
-                <button className="aqua-button" type="button" onClick={() => void setupRecovery()} disabled={!recoveryPassphrase || !recoveryPassword}>Set up recovery</button>
+                <strong>Set up new recovery</strong>
+                <p>Choose this only for an account without existing recovery. Save the generated key before closing this page. Some servers ask for your account password to authorize setup; SSO-only authorization is not supported here when they do.</p>
+                <label>New recovery passphrase<input type="password" autoComplete="new-password" minLength={12} value={recoveryPassphrase} onChange={(event) => setRecoveryPassphrase(event.target.value)} /></label>
+                <label>Matrix password, if this account has one<input type="password" autoComplete="current-password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></label>
+                <button className="aqua-button" type="button" onClick={() => void setupRecovery()} disabled={recoveryPassphrase.trim().length < 12}>Set up new recovery</button>
               </div>
-            ) : null}
+            ) : <div className="recovery-setup">
+              <strong>Lost recovery key?</strong>
+              <p>Try your existing key or a trusted device first. Reset deletes existing backup versions and changes your encryption identity; older messages may become unreadable.</p>
+              {actions.resetRecovery ? <><label>New recovery passphrase<input type="password" minLength={12} value={recoveryPassphrase} onChange={(event) => setRecoveryPassphrase(event.target.value)} /></label><label>Matrix password, if available<input type="password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></label><button className="aqua-button is-danger" type="button" disabled={recoveryPassphrase.trim().length < 12} onClick={() => setConfirmRecoveryReset(true)}>Reset recovery and backup</button></> : <p>Use another trusted Matrix client to reset recovery, then return here to restore its new key.</p>}
+            </div>}
             {recoveryKey ? (
               <div className="recovery-key-output">
                 <strong>Save this recovery key now</strong>
+                <p>This is the only time Aimtrix displays this key. Keep it somewhere private and confirm you can find it before dismissing it.</p>
                 <code>{recoveryKey}</code>
-                <button className="aqua-button" type="button" onClick={() => void navigator.clipboard.writeText(recoveryKey)}>Copy recovery key</button>
+                <button className="aqua-button" type="button" onClick={() => void copyRecoveryKey()}>Copy recovery key</button>
+                <button className="aqua-button" type="button" onClick={downloadRecoveryKey}>Download recovery key</button>
+                <button className="aqua-button" type="button" onClick={() => { setRecoveryKey(undefined); setNotice('Recovery key dismissed from this page.'); }}>I saved the recovery key</button>
               </div>
             ) : null}
           </section>
@@ -501,6 +545,7 @@ export function MatrixSettingsPanel({
               </Dialog>
             ) : null}
       {confirmRemoval ? <ConfirmDialog title="Sign out this device?" description="This ends the selected Matrix session. Make sure its encryption keys are backed up before continuing." actionLabel="Sign out device" onClose={() => setConfirmRemoval(undefined)} onConfirm={() => removeDevice(confirmRemoval)} /> : null}
+      {confirmRecoveryReset ? <ConfirmDialog title="Reset encryption recovery?" description="This deletes existing key backups and replaces the account’s encryption identity. Older encrypted messages may become unreadable. Try restoring the existing key or using another trusted device first." actionLabel="Reset recovery and backup" onClose={() => setConfirmRecoveryReset(false)} onConfirm={resetRecovery} /> : null}
       {confirmDeactivation ? <ConfirmDialog title="Permanently deactivate this account?" description="This cannot be undone. Aimtrix cannot reactivate the account or restore erased server data." actionLabel="Deactivate account" onClose={() => setConfirmDeactivation(false)} onConfirm={() => actions.deactivateAccount(deactivationPassword, eraseAccountData)} /> : null}
     </div>
   );

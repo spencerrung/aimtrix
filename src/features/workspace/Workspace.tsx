@@ -96,6 +96,9 @@ import { mergeStickerPacks } from '../media/stickerPacks';
 import { LazyProfileDialog as ProfileDialog } from '../profile/LazyProfileDialog';
 import { BrandMark } from '../../components/BrandMark';
 import { RoomDialog, type PublicRoomChoice } from '../rooms/RoomDialog';
+import { FirstUseGuide } from './FirstUseGuide';
+import { IncomingVerification, type IncomingVerificationActions } from './IncomingVerification';
+import type { IncomingVerificationSummary } from '../../matrix/settingsTypes';
 import type { MatrixSettingsActions } from '../settings/MatrixSettingsPanel';
 import {
   SettingsDialog,
@@ -154,6 +157,8 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onUploadProfileBanner?: (file: File) => Promise<string>;
   onUpdateProfile?: (update: ProfileUpdate) => Promise<void>;
   matrixSettingsActions?: MatrixSettingsActions;
+  incomingVerification?: IncomingVerificationSummary[];
+  incomingVerificationActions?: IncomingVerificationActions;
   install?: InstallAndUpdate;
   pushRoute?: PushRoute;
   onSendMessage?: (roomId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
@@ -2891,6 +2896,8 @@ export function Workspace({
   onUploadProfileBanner,
   onUpdateProfile,
   matrixSettingsActions,
+  incomingVerification,
+  incomingVerificationActions,
   install,
   pushRoute,
   onSendMessage,
@@ -2987,7 +2994,7 @@ export function Workspace({
   const navigationIntent = useRef(0);
   useEffect(() => () => { navigationIntent.current += 1; }, []);
   const { route: shellRoute, entryId: shellEntry, reading: shellReading, remember: rememberReading, threadReading: shellThreadReading, rememberThread: rememberThreadReading, navigate: navigateShell, back: shellBack, forward: shellForward, canGoBack, canGoForward } = useShellNavigation({
-    surface: 'list', roomId: selectedRoomId, spaceId: activeSpace,
+    surface: workspace.mode === 'matrix' && !workspace.rooms.some((room) => room.membership === 'join') ? 'activity' : 'list', roomId: selectedRoomId, spaceId: activeSpace,
     panel: preferences.detailsOpenByDefault ? 'details' : null,
   });
   const [shellWidth, setShellWidth] = useState(window.innerWidth);
@@ -3042,6 +3049,7 @@ export function Workspace({
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
+  const [roomDialogMode, setRoomDialogMode] = useState<'join' | 'direct' | 'create'>('join');
   const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
   const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
   const [appliedShellRoute, setAppliedShellRoute] = useState(shellRoute);
@@ -3958,6 +3966,8 @@ export function Workspace({
           {unreadTotal ? <span className="titlebar-unread">{unreadTotal} unread</span> : null}
         </header>
 
+        {incomingVerification?.length && incomingVerificationActions ? <IncomingVerification requests={incomingVerification} actions={incomingVerificationActions} /> : null}
+
         {(connectionNotice || structuredDraftStore || draftsState.list.length > 0) ? <div className="workspace-notices">{connectionNotice}
         {(structuredDraftStore || draftsState.list.length > 0) ? <div className="session-connection-banner" role="status">
           <button className="aqua-button" type="button" onClick={() => setDraftListOpen(true)}>Drafts ({draftsState.list.length})</button>
@@ -3992,13 +4002,13 @@ export function Workspace({
               setProfileOpen(false);
               setSettingsOpen(true);
             }}
-            onAddRoom={() => setRoomDialogOpen(true)}
+            onAddRoom={() => { setRoomDialogMode('join'); setRoomDialogOpen(true); }}
             onAcceptInvite={onJoinRoom}
             onRejectInvite={onRejectInvite}
             onReorganize={onReorganizeSpaceChildren}
           />}
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(buddyWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', buddyWidth - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', buddyWidth + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
-          {showingHome ? <Suspense fallback={<main style={{ gridColumn: '5 / span 3' }} role="status">Loading Home…</main>}><HomeActivity workspace={workspace} activity={workspace.activity} actions={activityActions} position={homePosition} onPosition={updateHomePosition} onOpen={openMatrixTarget} onBack={shellBack} onBrowse={() => navigateShell({ ...shellRoute, surface: 'list', panel: null })} onSettings={() => setSettingsOpen(true)} onDrafts={() => setDraftListOpen(true)} draftCount={draftsState.list.length} onMarkRead={onMarkRoomRead ? (roomId) => onMarkRoomRead(roomId, { explicit: true }) : undefined} /></Suspense> : <Conversation
+          {showingHome ? <Suspense fallback={<main style={{ gridColumn: '5 / span 3' }} role="status">Loading Home…</main>}><HomeActivity workspace={workspace} activity={workspace.activity} actions={activityActions} position={homePosition} onPosition={updateHomePosition} onOpen={openMatrixTarget} onBack={shellBack} onBrowse={() => navigateShell({ ...shellRoute, surface: 'list', panel: null })} onSettings={() => setSettingsOpen(true)} onDrafts={() => setDraftListOpen(true)} draftCount={draftsState.list.length} onMarkRead={onMarkRoomRead ? (roomId) => onMarkRoomRead(roomId, { explicit: true }) : undefined} firstUse={workspace.mode === 'matrix' && !workspace.rooms.some((room) => room.membership === 'join') ? <FirstUseGuide loadHealth={matrixSettingsActions?.load} onStartChat={() => { setRoomDialogMode('direct'); setRoomDialogOpen(true); }} onCreateRoom={() => { setRoomDialogMode('create'); setRoomDialogOpen(true); }} onRecovery={() => setSettingsOpen(true)} /> : undefined} /></Suspense> : <Conversation
             threadAttentionActions={threadAttentionActions}
             searchRooms={workspace.rooms}
             searchLoadedMessages={Object.values(workspace.messagesByRoom).flat()}
@@ -4164,6 +4174,7 @@ export function Workspace({
 
         {roomDialogOpen ? (
           <RoomDialog
+            initialMode={roomDialogMode}
             onJoin={onJoinRoom}
             onSearch={onSearchPublicRooms}
             onCreateDirect={onCreateDirectRoom}
@@ -4193,7 +4204,7 @@ export function Workspace({
         {deleteTarget ? <ConfirmDialog title="Delete this message?" description="This removes the message for everyone in the room. This cannot be undone." actionLabel="Delete message" onClose={() => setDeleteTarget(undefined)} onConfirm={async () => { if (workspace.mode === 'demo') setDemoMessageOverrides((current) => ({ ...current, [deleteTarget.id]: null })); else { if (!onRedactMessage) throw new Error('Deletion is unavailable.'); await onRedactMessage(deleteTarget.roomId, deleteTarget.id); } setNotice('Message deleted.'); }} /> : null}
         {settingsOpen ? (
           <SettingsDialog
-            initialSection={showingHome ? 'matrix' : 'profile'}
+            initialSection={workspace.mode === 'matrix' && !workspace.rooms.some((room) => room.membership === 'join') || showingHome ? 'matrix' : 'profile'}
             user={workspace.user}
             theme={theme}
             preferences={preferences}

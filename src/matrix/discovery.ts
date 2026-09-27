@@ -4,6 +4,22 @@ export interface HomeserverTarget {
   discovered: boolean;
 }
 
+export interface LoginMethods {
+  password: boolean;
+  sso: boolean;
+  cas: boolean;
+  homeserver: string;
+}
+
+export function loginMethodsFromFlows(flows: Array<{ type: string }>, homeserver: string): LoginMethods {
+  return {
+    password: flows.some((flow) => flow.type === 'm.login.password'),
+    sso: flows.some((flow) => flow.type === 'm.login.sso'),
+    cas: flows.some((flow) => flow.type === 'm.login.cas'),
+    homeserver,
+  };
+}
+
 interface DiscoverOptions {
   homeserverInput: string;
   userId: string;

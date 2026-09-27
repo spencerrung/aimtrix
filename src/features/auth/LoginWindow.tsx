@@ -1,7 +1,8 @@
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { KeyRound, LockKeyhole, MessageCircleMore, Server, UserRound } from 'lucide-react';
 import type { RuntimeConfig } from '../../config/runtimeConfig';
 import type { LoginCredentials, MatrixControllerSnapshot } from '../../matrix/MatrixController';
+import type { LoginMethods } from '../../matrix/discovery';
 import { ForgetSessionButton } from './SessionRecovery';
 import { BrandMark } from '../../components/BrandMark';
 
@@ -11,17 +12,36 @@ interface LoginWindowProps {
   warnings: string[];
   onLogin: (credentials: LoginCredentials) => Promise<void>;
   onSso: (credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>) => Promise<void>;
+  onDiscover: (credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>) => Promise<LoginMethods>;
   onDemo: () => void;
   onForget?: () => Promise<void>;
 }
 
-export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo, onForget }: LoginWindowProps) {
+export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDiscover, onDemo, onForget }: LoginWindowProps) {
   const recovery = 'recovery' in snapshot ? snapshot.recovery : undefined;
   const [userId, setUserId] = useState(recovery?.userId ?? '');
   const [password, setPassword] = useState('');
   const [homeserver, setHomeserver] = useState(recovery?.homeserver ?? config.defaultHomeserver.serverName);
   const busy = snapshot.status === 'authenticating' || snapshot.status === 'connecting';
   const error = 'error' in snapshot ? snapshot.error : undefined;
+  const query = `${userId}\0${homeserver}`;
+  const [discovery, setDiscovery] = useState<{ query: string; methods?: LoginMethods; error?: boolean }>();
+  const methods = discovery?.query === query ? discovery.methods : undefined;
+  const methodsError = discovery?.query === query && Boolean(discovery.error);
+  const methodsLoading = discovery?.query !== query;
+  const discover = useRef(onDiscover);
+  useEffect(() => { discover.current = onDiscover; }, [onDiscover]);
+  useEffect(() => {
+    let current = true;
+    const timer = window.setTimeout(() => {
+      void Promise.resolve().then(() => discover.current({ userId, homeserver })).then((available) => {
+        if (current) setDiscovery(available ? { query, methods: available } : { query, error: true });
+      }).catch(() => { if (current) setDiscovery({ query, error: true }); });
+    }, 350);
+    return () => { current = false; window.clearTimeout(timer); };
+  }, [userId, homeserver, query]);
+  const passwordAvailable = methods?.password ?? methodsError;
+  const ssoAvailable = methods ? methods.sso || methods.cas : methodsError;
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -51,6 +71,9 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
         {error ? <div className="form-error" role="alert">{error}</div> : null}
 
         {recovery ? <p className="session-recovery__note">Sign in to the same account to reconnect. Your encryption keys are retained on this device.</p> : null}
+        {methodsLoading ? <p role="status">Checking sign-in options for this homeserver…</p> : null}
+        {methodsError ? <p role="alert">Sign-in options could not be checked. Password sign-in may still work; SSO will be checked before redirecting.</p> : null}
+        {methods && !passwordAvailable && !ssoAvailable ? <p role="alert">This homeserver does not advertise password or standard Matrix SSO sign-in. Try another supported client or ask your server operator.</p> : null}
 
         <form className="login-form" onSubmit={submit}>
           <label>
@@ -69,7 +92,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
               />
             </span>
           </label>
-          <label>
+          {passwordAvailable ? <label>
             <span>Password</span>
             <span className="field-shell">
               <LockKeyhole size={16} aria-hidden="true" />
@@ -82,7 +105,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
                 required
               />
             </span>
-          </label>
+          </label> : null}
           {config.allowCustomHomeservers ? (
             <label>
               <span>Homeserver</span>
@@ -101,20 +124,20 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDemo
             </label>
           ) : null}
 
-          <button className="aqua-button aqua-button--primary sign-on-button" disabled={busy}>
+          {passwordAvailable ? <button className="aqua-button aqua-button--primary sign-on-button" disabled={busy}>
             {busy ? <span className="spinner" aria-hidden="true" /> : <MessageCircleMore size={17} />}
             {busy && 'message' in snapshot ? snapshot.message : 'Sign On'}
-          </button>
-          <div className="sso-divider"><span>or</span></div>
+          </button> : null}
+          {passwordAvailable && ssoAvailable ? <div className="sso-divider"><span>or</span></div> : null}
           {recovery ? <p className="session-recovery__note">SSO leaves this page. Saved drafts return for the same account; changes kept only in this tab may be lost. Files need to be reattached.</p> : null}
-          <button
+          {ssoAvailable ? <button
             className="aqua-button sso-button"
             type="button"
             disabled={busy || !homeserver.trim()}
             onClick={() => void onSso({ userId, homeserver })}
           >
-            <KeyRound size={16} /> Sign in with homeserver SSO
-          </button>
+            <KeyRound size={16} /> Sign in with homeserver {methods?.cas && !methods.sso ? 'CAS' : 'SSO'}
+          </button> : null}
         </form>
 
         {recovery && onForget ? <div className="demo-entry"><ForgetSessionButton onForget={onForget} disabled={busy} /></div> : null}

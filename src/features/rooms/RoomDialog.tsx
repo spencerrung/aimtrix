@@ -11,6 +11,7 @@ export interface PublicRoomChoice {
 }
 
 interface RoomDialogProps {
+  initialMode?: 'join' | 'direct' | 'create';
   onJoin?: (roomIdOrAlias: string) => Promise<void>;
   onSearch?: (query: string) => Promise<PublicRoomChoice[]>;
   onCreateDirect?: (userId: string) => Promise<string>;
@@ -25,9 +26,9 @@ interface RoomDialogProps {
   onComplete?: (message: string) => void;
 }
 
-export function RoomDialog({ onJoin, onSearch, onCreateDirect, onCreate, onClose, onComplete }: RoomDialogProps) {
+export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDirect, onCreate, onClose, onComplete }: RoomDialogProps) {
   const pending = useRef(false);
-  const [mode, setMode] = useState<'join' | 'direct' | 'create'>('join');
+  const [mode, setMode] = useState<'join' | 'direct' | 'create'>(initialMode);
   const [address, setAddress] = useState('');
   const [name, setName] = useState('');
   const [topic, setTopic] = useState('');
