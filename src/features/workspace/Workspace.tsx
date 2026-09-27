@@ -11,7 +11,7 @@ import { parseMatrixLink, type MatrixNavigationTarget } from '../../matrix/matri
 import type { VolatileDrafts } from './volatileDrafts';
 import type { MessageDeliveryActions } from './MessageDeliveryStatus';
 import { TimelineMessage } from './TimelineMessage';
-import { HistorySearchPanel } from './HistorySearchPanel';
+import { HistorySearchPanel, type PrivateSearchActions } from './HistorySearchPanel';
 import { SavedMessagesDialog } from './SavedMessagesDialog';
 import type { HistorySearchFilters, HistorySearchPage } from '../../matrix/historySearch';
 import { changeSavedReference, type SavedReference } from '../../matrix/savedReferences';
@@ -212,6 +212,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onJoinRoom?: (roomIdOrAlias: string) => Promise<void>;
   onSearchPublicRooms?: (query: string) => Promise<PublicRoomChoice[]>;
   onSearchHistory?: (filters: HistorySearchFilters, nextBatch?: string, signal?: AbortSignal) => Promise<HistorySearchPage>;
+  privateSearch?: PrivateSearchActions;
   onLoadSavedReferences?: () => SavedReference[];
   onToggleSavedReference?: (roomId: string, eventId: string, save: boolean) => Promise<SavedReference[]>;
   onCreateDirectRoom?: (userId: string) => Promise<string>;
@@ -1316,7 +1317,7 @@ type ComposerSubmitResult = 'sent' | 'edited' | 'retained' | false;
 
 function Conversation({
   threadAttentionActions,
-  searchRooms, searchLoadedMessages, onSearchHistory, onOpenSearchResult,
+  searchRooms, searchLoadedMessages, onSearchHistory, privateSearch, onOpenSearchResult,
   savedReferences, onToggleSave,
   contextHost, contextPanel, conversationVisible, contextWidth, contextMaximum, onContextResize, onSearch, onCloseContext, onRevealConversation,
   room,
@@ -1387,6 +1388,7 @@ function Conversation({
   searchRooms: RoomSummary[];
   searchLoadedMessages: MessageSummary[];
   onSearchHistory?: (filters: HistorySearchFilters, nextBatch?: string, signal?: AbortSignal) => Promise<HistorySearchPage>;
+  privateSearch?: PrivateSearchActions;
   onOpenSearchResult: (roomId: string, eventId: string) => Promise<void>;
   savedReferences: SavedReference[];
   onToggleSave: (message: MessageSummary) => Promise<void>;
@@ -2329,7 +2331,7 @@ function Conversation({
         <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Thread</strong><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></header>
         <p className="search-scope" role="status">This thread is no longer in the loaded conversation. Return to the conversation to find its available context. Your draft is kept for this session.</p>
       </aside>, contextHost) : null}
-      {contextHost ? createPortal(<HistorySearchPanel key={room?.id} open={searchOpen} rooms={searchRooms} loadedMessages={searchLoadedMessages} initialRoomId={room?.id} onSearch={onSearchHistory} onOpen={(roomId, eventId) => roomId === room?.id ? openContext(eventId) : onOpenSearchResult(roomId, eventId)} onClose={onCloseContext} />, contextHost) : null}
+      {contextHost ? createPortal(<HistorySearchPanel key={room?.id} open={searchOpen} rooms={searchRooms} loadedMessages={searchLoadedMessages} initialRoomId={room?.id} onSearch={onSearchHistory} privateSearch={privateSearch} onOpen={(roomId, eventId) => roomId === room?.id ? openContext(eventId) : onOpenSearchResult(roomId, eventId)} onClose={onCloseContext} />, contextHost) : null}
       {activeThread && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
 
       <div className="typing-strip" aria-live="polite">
@@ -2923,6 +2925,7 @@ export function Workspace({
   onJoinRoom,
   onSearchPublicRooms,
   onSearchHistory,
+  privateSearch,
   onLoadSavedReferences,
   onToggleSavedReference,
   onCreateDirectRoom,
@@ -4000,6 +4003,7 @@ export function Workspace({
             searchRooms={workspace.rooms}
             searchLoadedMessages={Object.values(workspace.messagesByRoom).flat()}
             onSearchHistory={onSearchHistory}
+            privateSearch={privateSearch}
             onOpenSearchResult={(roomId, eventId) => openMatrixTarget({ roomId, eventId })}
             savedReferences={savedReferences}
             onToggleSave={handleToggleSave}

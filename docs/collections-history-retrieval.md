@@ -1,6 +1,6 @@
 # Collections and history retrieval
 
-This implementation adds a personal saved-message list, room collections, and a filtered search surface. [#156](https://github.com/spencerrung/aimtrix/issues/156) and [#157](https://github.com/spencerrung/aimtrix/issues/157) remain open until their live Matrix acceptance is recorded.
+[PR #196](https://github.com/spencerrung/aimtrix/pull/196) adds a personal saved-message list, room collections, and a filtered search surface. [#156](https://github.com/spencerrung/aimtrix/issues/156) and [#157](https://github.com/spencerrung/aimtrix/issues/157) remain open until their live Matrix acceptance is recorded.
 
 ## Personal saves and shared pins
 

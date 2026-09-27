@@ -328,7 +328,7 @@ describe('MatrixController session lifecycle', () => {
         expect(deleteDatabase).toHaveBeenCalledWith(name);
       }
     }
-    expect(deleteDatabase).toHaveBeenCalledTimes(6);
+    expect(deleteDatabase).toHaveBeenCalledTimes(7);
     expect(credentials.clear).toHaveBeenCalledOnce();
     expect(controller.getSnapshot()).toEqual({ status: 'signed-out' });
   });
@@ -350,6 +350,20 @@ describe('MatrixController session lifecycle', () => {
     expect(credentials.clear).not.toHaveBeenCalled();
     expect(deleteDatabase).not.toHaveBeenCalled();
     expect(await credentials.load()).toMatchObject({ accessToken: 'fresh-synthetic-token', deviceId: 'NEXT' });
+  });
+
+  it('clears credentials even if another tab blocks deletion of the optional private search index', async () => {
+    const { controller, credentials } = controllerFixture({ ...session, accessToken: '', recovery: 'hard' });
+    const deleteDatabase = vi.fn((name: string) => {
+      const request = { onsuccess: undefined as (() => void) | undefined, onblocked: undefined as (() => void) | undefined };
+      queueMicrotask(() => { if (name.startsWith('aimtrix.private-search.')) request.onblocked?.(); else request.onsuccess?.(); });
+      return request;
+    });
+    vi.stubGlobal('indexedDB', { deleteDatabase });
+    await controller.initialize();
+    await controller.forgetSession();
+    expect(credentials.clear).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'signed-out', error: expect.stringContaining('Private search data') });
   });
 
   it('removes the usable token before sign-out waits and clears recovery metadata only after database deletion', async () => {
@@ -376,6 +390,8 @@ describe('MatrixController session lifecycle', () => {
     await vi.waitFor(() => expect(deleteDatabase).toHaveBeenCalledTimes(3));
     expect(credentials.clear).not.toHaveBeenCalled();
     deletionRequests.forEach((request) => request.onsuccess?.());
+    await vi.waitFor(() => expect(deleteDatabase).toHaveBeenCalledTimes(4));
+    deletionRequests[3].onsuccess?.();
     await signingOut;
     expect(credentials.clear).toHaveBeenCalledOnce();
     expect(await credentials.load()).toBeUndefined();

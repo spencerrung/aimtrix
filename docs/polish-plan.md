@@ -12,7 +12,7 @@ Step 04 deliverable: [accessible interaction foundations](accessible-interaction
 
 Steps 12–14 delivery: [shared room/thread messaging](room-thread-messaging.md) and [private local drafts](draft-storage.md), covering safe rich content/actions, durable composition and staged encrypted files in one coherent batch. Validation evidence is recorded with the delivery MR.
 
-Steps 16–17 are implemented for review: [collections and history retrieval](collections-history-retrieval.md) records the metadata and search contracts, browser evidence, and remaining live Matrix acceptance. The issues stay open until that evidence is complete.
+Steps 16–17 merged in [PR #196](https://github.com/spencerrung/aimtrix/pull/196): [collections and history retrieval](collections-history-retrieval.md) records the metadata and search contracts, browser evidence, and remaining live Matrix acceptance. The issues stay open until that evidence is complete. Step 18's [private search contract](private-encrypted-search.md) is a separate implementation and review gate.
 
 Step 10 deliverable: [quick navigation](quick-navigation.md), covering keyboard/touch switching, standard favorites, unread filters, Matrix links, and Back/Forward reading positions. Native device and broader directory/search boundaries remain explicit.
 
@@ -131,14 +131,14 @@ Step 09 implementation and protocol semantics are documented in [read state and 
 
 September 14 working agreement: prefer one MR for related issues that share a user journey, implementation seams and validation. Issue numbers remain stable acceptance units; they do not require separate branches or MRs. Resolve dependencies inside a batch in implementation order, and preserve every included issue's scope.
 
-The first combined delivery, [MR #193](https://github.com/spencerrung/aimtrix/pull/193), covers **#152, #153 and #154**: room/thread rich content and actions, durable drafts, shared composition, and staged encrypted attachments. The attention delivery, [MR #195](https://github.com/spencerrung/aimtrix/pull/195), covers **#155 and #159**. The next batch combines **#156 and #157** for collections and history retrieval.
+The first combined delivery, [MR #193](https://github.com/spencerrung/aimtrix/pull/193), covers **#152, #153 and #154**: room/thread rich content and actions, durable drafts, shared composition, and staged encrypted attachments. The attention delivery, [MR #195](https://github.com/spencerrung/aimtrix/pull/195), covers **#155 and #159**. [PR #196](https://github.com/spencerrung/aimtrix/pull/196) combines **#156 and #157** for collections and history retrieval. **#158** follows separately because its local plaintext threat model and deletion lifecycle need focused review.
 
 | Delivery order | MR outcome | Issues | Reason for grouping |
 | --- | --- | --- | --- |
 | MR #193 | Complete room/thread messaging | #152, #153, #154 | Shared content/actions, draft ownership, composer parity, attachment metadata, and send/retry behavior. |
 | MR #195 | Attention and catch-up | #155, #159 | Home activity and notification controls share unread/mute/thread semantics and exact event routing. |
-| Next | Collections and history retrieval | #156, #157 | Saves, pins/media/links and filtered search share results, coverage, pagination, access-loss handling and context return. |
-| Then | Private encrypted search | #158 | Integrates the preceding search surface, with a separately reviewable index, storage, backfill and deletion lifecycle. |
+| MR #196 | Collections and history retrieval | #156, #157 | Saves, pins/media/links and filtered search share results, coverage, pagination, access-loss handling and context return. |
+| Next | Private encrypted search | #158 | Integrates the preceding search surface, with a separately reviewable index, storage, backfill and deletion lifecycle. |
 | Then | First-use encryption confidence | #160, #161 | Onboarding, setup/restore and incoming verification share account health, crypto callbacks and guided recovery. |
 
 These are five combined deliveries for ten issues. Later groupings are working boundaries to revisit after each delivery. Moving #159 alongside #155 satisfies its existing prerequisites and does not renumber the queue. Cross-browser/accessibility and profiling work under #162/#163 can still proceed independently; feature-specific checks do not close their broader acceptance gates.

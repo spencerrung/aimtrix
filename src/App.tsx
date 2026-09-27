@@ -354,6 +354,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onJoinRoom={(roomIdOrAlias) => controller.joinRoom(roomIdOrAlias)}
         onSearchPublicRooms={(query) => controller.searchPublicRooms(query)}
         onSearchHistory={(filters, nextBatch, signal) => controller.searchHistory(filters, nextBatch, signal)}
+        privateSearch={{ status: () => controller.privateSearchStatus(), unlock: (passphrase) => controller.unlockPrivateSearch(passphrase), index: (roomId, onProgress, signal) => controller.indexEncryptedHistory(roomId, onProgress, signal), clear: () => controller.clearPrivateSearch() }}
         onLoadSavedReferences={() => controller.getSavedReferences()}
         onToggleSavedReference={(roomId, eventId, save) => controller.toggleSavedReference(roomId, eventId, save)}
         onCreateDirectRoom={(userId) => controller.createDirectRoom(userId)}

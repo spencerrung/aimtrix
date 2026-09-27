@@ -1223,13 +1223,19 @@ button.message-reply-context:hover { background: var(--surface-soft); }
   [hidden] { display: none !important; }
   .context-panel { grid-column: 9; grid-row: 1; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
   .details-surface { height: 100%; display: grid; grid-template-rows: auto minmax(0,1fr); }
-  .search-panel { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto auto minmax(0,1fr); background: var(--surface-raised); }
+  .search-panel { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--surface-raised); }
   .history-search-form { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; max-height: min(42vh, 340px); overflow: auto; padding: 12px; border-bottom: 1px solid var(--border); }
   .history-search-form label { display: grid; gap: 4px; min-width: 0; color: var(--text-soft); font-size: .7rem; }
   .history-search-form label:first-child, .history-search-form label:nth-child(2), .history-search-dates, .history-search-form > button { grid-column: 1 / -1; }
   .history-search-form input, .history-search-form select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 8px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); font: inherit; }
   .history-search-dates { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
-  .search-results { overflow: auto; padding: 12px; }
+  .search-results { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px; }
+  .private-search-controls { flex: 0 1 auto; max-height: 38vh; overflow: auto; padding: 7px 12px; border-bottom: 1px solid var(--border); color: var(--text-soft); font-size: .75rem; }
+  .private-search-controls summary { cursor: pointer; color: var(--text); font-weight: 700; }
+  .private-search-controls form { display: grid; gap: 8px; }
+  .private-search-controls label { display: grid; gap: 4px; }
+  .private-search-controls input { width: 100%; min-height: 34px; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); color: var(--text); }
+  .private-search-controls button { margin: 4px 8px 4px 0; }
   .search-results button { display: grid; width: 100%; gap: 6px; margin-bottom: 8px; padding: 12px; text-align: left; color: var(--text); background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; }
   .search-results span { overflow-wrap: anywhere; white-space: pre-wrap; }
   .search-scope { padding: 0 12px; color: var(--text-faint); font-size: .75rem; }
