@@ -1223,11 +1223,31 @@ button.message-reply-context:hover { background: var(--surface-soft); }
   [hidden] { display: none !important; }
   .context-panel { grid-column: 9; grid-row: 1; min-width: 0; min-height: 0; border-left: 1px solid var(--border); }
   .details-surface { height: 100%; display: grid; grid-template-rows: auto minmax(0,1fr); }
-  .search-panel { height: 100%; display: grid; grid-template-rows: auto auto auto minmax(0,1fr); background: var(--surface-raised); }
+  .search-panel { height: 100%; min-height: 0; display: grid; grid-template-rows: auto auto auto minmax(0,1fr); background: var(--surface-raised); }
+  .history-search-form { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; max-height: min(42vh, 340px); overflow: auto; padding: 12px; border-bottom: 1px solid var(--border); }
+  .history-search-form label { display: grid; gap: 4px; min-width: 0; color: var(--text-soft); font-size: .7rem; }
+  .history-search-form label:first-child, .history-search-form label:nth-child(2), .history-search-dates, .history-search-form > button { grid-column: 1 / -1; }
+  .history-search-form input, .history-search-form select { width: 100%; min-width: 0; min-height: 34px; padding: 5px 8px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); font: inherit; }
+  .history-search-dates { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 8px; }
   .search-results { overflow: auto; padding: 12px; }
   .search-results button { display: grid; width: 100%; gap: 6px; margin-bottom: 8px; padding: 12px; text-align: left; color: var(--text); background: var(--surface-soft); border: 1px solid var(--border); border-radius: 8px; }
   .search-results span { overflow-wrap: anywhere; white-space: pre-wrap; }
   .search-scope { padding: 0 12px; color: var(--text-faint); font-size: .75rem; }
+  .saved-messages-dialog { width: min(540px, calc(100vw - 32px)); max-height: 85dvh; overflow: auto; padding: 18px; color: var(--text); border: 1px solid var(--border); border-radius: 14px; background: var(--surface-raised); }
+  .saved-messages-dialog header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .saved-messages-dialog h2 { margin: 0; font-size: 1.15rem; }
+  .saved-messages-dialog p { color: var(--text-soft); font-size: .78rem; line-height: 1.45; }
+  .saved-messages-dialog ul { display: grid; gap: 8px; max-height: min(55vh, 520px); overflow: auto; margin: 0; padding: 0; list-style: none; }
+  .saved-messages-dialog li { display: flex; align-items: stretch; gap: 8px; }
+  .saved-messages-dialog li > button:first-child { display: grid; flex: 1; gap: 4px; min-width: 0; text-align: left; }
+  .saved-messages-dialog li span { color: var(--text-soft); font-size: .7rem; }
+  .collection-tabs { display: flex; flex-wrap: wrap; gap: 5px; padding: 8px 12px; }
+  .collection-tabs button[aria-pressed="true"] { color: var(--blue-deep); border-color: var(--blue); background: var(--surface-soft); }
+  .drawer-collection-item { display: flex; width: 100%; min-width: 0; align-items: center; gap: 8px; margin: 5px 0; padding: 8px; color: var(--text); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); text-align: left; }
+  .drawer-collection-item > img { width: 50px; height: 50px; object-fit: cover; border-radius: 5px; }
+  .drawer-collection-item > button { display: grid; flex: 1; min-width: 0; gap: 3px; padding: 0; color: inherit; border: 0; background: transparent; text-align: left; font: inherit; cursor: pointer; }
+  .drawer-collection-item strong { overflow-wrap: anywhere; font-size: .7rem; }
+  .drawer-collection-item small { color: var(--text-soft); }
   .composer__more, .composer__attachment-more { display: grid; }
   .member-actions { position: relative; }
   .member-actions__trigger { display: grid; place-items: center; width: 32px; height: 32px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }

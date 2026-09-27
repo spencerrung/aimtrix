@@ -44,6 +44,8 @@ import { AttachmentSender, type AttachmentSendOptions } from './AttachmentSender
 import { isMatrixNavigationTarget, type MatrixNavigationTarget } from './matrixLinks';
 import { RoomHistory } from './RoomHistory';
 import { ThreadHistory } from './ThreadHistory';
+import { searchUnencryptedHistory, type HistorySearchFilters, type HistorySearchPage } from './historySearch';
+import { SAVED_REFERENCES_EVENT, changeSavedReference, parseSavedReferences, type SavedReference } from './savedReferences';
 import { historyRelation, isVisibleTimelineEvent } from './historyEvents';
 import {
   matrixFormattedMessage,
@@ -166,6 +168,9 @@ export class MatrixController {
     message: 'Looking for your saved session…',
   };
   private readonly subscribers = new Set<Subscriber>();
+  private savedReferencesCache?: SavedReference[];
+  private savedReferencesRevision = 0;
+  private savedReferenceWork: Promise<unknown> = Promise.resolve();
   private client?: MatrixClient;
   private sdk?: MatrixSdk;
   private activeSession?: StoredMatrixSession;
@@ -1876,6 +1881,57 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
+  public async searchHistory(filters: HistorySearchFilters, nextBatch?: string, signal?: AbortSignal): Promise<HistorySearchPage> {
+    const client = this.client;
+    if (!client || this.snapshot.status !== 'ready') throw new Error('Sign in again to search history.');
+    const rooms = client.getRooms().filter((room) => room.getMyMembership() === 'join' && !client.isRoomEncrypted(room.roomId));
+    const roomIds = rooms.map((room) => room.roomId);
+    if (filters.roomId && !client.getRoom(filters.roomId)) throw new Error('This conversation is no longer available.');
+    try {
+      const page = await searchUnencryptedHistory(client, filters, roomIds, nextBatch, signal);
+      if (this.client !== client) throw new Error('The session changed. Search again.');
+      return page;
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      const status = error && typeof error === 'object' && 'httpStatus' in error ? Number(error.httpStatus) : undefined;
+      if (status === 429) throw new Error('The homeserver is limiting searches. Wait a moment, then retry.', { cause: error });
+      if (status === 404 || status === 400) throw new Error('This homeserver does not support the requested history search. Loaded messages remain available.', { cause: error });
+      if (status === 403) throw new Error('The homeserver denied history search for this account or conversation.', { cause: error });
+      throw new Error('History search failed. Check your connection and retry.', { cause: error });
+    }
+  }
+
+  public getSavedReferences(): SavedReference[] {
+    if (this.savedReferencesCache) return [...this.savedReferencesCache];
+    const event = (this.client as unknown as { getAccountData: (type: string) => MatrixEvent | undefined } | undefined)
+      ?.getAccountData(SAVED_REFERENCES_EVENT);
+    return parseSavedReferences(event?.getContent());
+  }
+
+  public toggleSavedReference(roomId: string, eventId: string, save: boolean): Promise<SavedReference[]> {
+    const work = this.savedReferenceWork.then(async () => {
+      const client = this.client;
+      if (!client || this.snapshot.status !== 'ready') throw new Error('Sign in to manage saved messages.');
+      if (save) {
+        const room = this.actionRoom(client, roomId);
+        await this.actionEvent(client, room, eventId);
+      }
+      const next = changeSavedReference(this.getSavedReferences(), roomId, eventId, save);
+      const revision = this.savedReferencesRevision;
+      try {
+        await (client as unknown as { setAccountData: (type: string, content: { items: SavedReference[] }) => Promise<unknown> })
+          .setAccountData(SAVED_REFERENCES_EVENT, { items: next });
+      } catch { throw new Error('Saved messages could not be updated. Retry when the homeserver is available.'); }
+      if (this.client !== client) throw new Error('The session changed. Open your saved messages again.');
+      // A sync echo may contain a concurrent update from another device. The SDK
+      // resolves setAccountData on any echo of this type, not necessarily ours.
+      if (this.savedReferencesRevision === revision) this.savedReferencesCache = next;
+      return this.getSavedReferences();
+    });
+    this.savedReferenceWork = work.catch(() => undefined);
+    return work;
+  }
+
   public async searchPublicRooms(query: string): Promise<Array<{
     roomId: string;
     name: string;
@@ -2978,6 +3034,8 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    this.savedReferencesCache = undefined;
+    this.savedReferenceWork = Promise.resolve();
     void Promise.resolve(this.platform.notifications.clearContext?.(this.notificationOwner)).catch(() => undefined);
     this.notificationOwner = crypto.randomUUID();
     this.localNotificationPolicy = normalizeNotificationPolicy(undefined);
@@ -3377,7 +3435,11 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   };
 
-  private readonly handleAccountData = (): void => {
+  private readonly handleAccountData = (event: MatrixEvent): void => {
+    if (event.getType() === SAVED_REFERENCES_EVENT) {
+      this.savedReferencesCache = parseSavedReferences(event.getContent());
+      this.savedReferencesRevision += 1;
+    }
     this.scheduleWorkspacePublish();
   };
 

@@ -14,6 +14,9 @@ export class MatrixController {
   }
   loadPersonalization = () => undefined;
   loadProfilePersonalization = () => undefined;
+  getSavedReferences = () => [];
+  toggleSavedReference = async () => [];
+  searchHistory = async () => ({ hits: [], searchedRoomIds: [] });
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => this.listeners.delete(listener); };
   getSnapshot = () => this.snapshot;
   getDraftScope = () => 'workspace' in this.snapshot || 'recovery' in this.snapshot ? { userId: recovery.userId, homeserver: recovery.homeserver } : undefined;

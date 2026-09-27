@@ -353,6 +353,9 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onMarkThreadRead={(roomId, rootId, options) => controller.markThreadRead(roomId, rootId, { ...options, publicReceipt: preferences.sendReadReceipts })}
         onJoinRoom={(roomIdOrAlias) => controller.joinRoom(roomIdOrAlias)}
         onSearchPublicRooms={(query) => controller.searchPublicRooms(query)}
+        onSearchHistory={(filters, nextBatch, signal) => controller.searchHistory(filters, nextBatch, signal)}
+        onLoadSavedReferences={() => controller.getSavedReferences()}
+        onToggleSavedReference={(roomId, eventId, save) => controller.toggleSavedReference(roomId, eventId, save)}
         onCreateDirectRoom={(userId) => controller.createDirectRoom(userId)}
         onCreateRoom={(options) => controller.createRoom(options)}
         onRejectInvite={(roomId) => controller.rejectInvite(roomId)}

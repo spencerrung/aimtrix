@@ -1006,6 +1006,7 @@ export function buildWorkspaceSnapshot(
       encrypted: room.hasEncryptionStateEvent(),
       topic: roomTopic(room),
       canManage: ownPowerLevel >= 50,
+      pinnedEventIds: [...pinnedIds],
       ownPowerLevel,
       typingUsers: room
         .getJoinedMembers()
