@@ -251,6 +251,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
 }
 
 const roomGroups: RoomSummary['group'][] = ['Invites', 'Favorites', 'Direct Messages', 'Rooms'];
+const ROOM_LIST_PAGE_SIZE = 100;
 const themes: Array<{ id: ThemeName; label: string }> = [
   { id: 'aqua', label: 'Aqua' },
   { id: 'graphite', label: 'Graphite' },
@@ -587,7 +588,7 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
   const reminderOnly = room.markedUnread && !(room.muted ? room.highlightCount : room.unreadCount);
   if (room.membership === 'invite') {
     return (
-      <div className="buddy-row buddy-row--invite buddy-row--nested" style={style}>
+      <div className="buddy-row buddy-row--invite buddy-row--nested" style={style} data-room-id={room.id}>
         <Avatar name={room.name} src={room.avatarUrl} color={colorForId(room.id)} size="small" />
         <span className="buddy-row__copy">
           <strong>{room.name}</strong>
@@ -604,6 +605,7 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
     return (
       <div
         className="buddy-row buddy-row--nested buddy-row--arranging"
+        data-room-id={room.id}
         style={style}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => { event.preventDefault(); arrangement.onDropBefore(); }}
@@ -623,6 +625,7 @@ const BuddyRoomRow = memo(function BuddyRoomRow({
   return (
     <button
       className={`buddy-row buddy-row--nested${selected ? ' buddy-row--selected' : ''}`}
+      data-room-id={room.id}
       style={style}
       type="button"
       onClick={() => onSelect(room.id)}
@@ -666,6 +669,7 @@ function SpacePreviewRow({
     return (
       <div
         className="buddy-row buddy-row--nested buddy-row--arranging space-preview-row"
+        data-room-id={room.id}
         style={style}
         onDragOver={(event) => event.preventDefault()}
         onDrop={(event) => { event.preventDefault(); arrangement.onDropBefore(); }}
@@ -679,6 +683,7 @@ function SpacePreviewRow({
   return (
     <button
       className="buddy-row buddy-row--nested space-preview-row"
+      data-room-id={room.id}
       style={style}
       type="button"
       onClick={onJoin}
@@ -698,21 +703,23 @@ function spaceContainsQuery(
   spaceId: string,
   workspace: WorkspaceSnapshot,
   query: string,
-  getChildIds: (space: SpaceSummary) => string[] = (space) => space.childIds,
+  getChildIds: (space: SpaceSummary) => string[],
+  roomById: ReadonlyMap<string, RoomSummary>,
+  spaceById: ReadonlyMap<string, SpaceSummary>,
   ancestry: ReadonlySet<string> = new Set(),
 ): boolean {
   if (!query) return true;
   if (ancestry.has(spaceId)) return false;
-  const space = workspace.spaces.find((candidate) => candidate.id === spaceId);
+  const space = spaceById.get(spaceId);
   if (!space) return false;
   if (space.name.toLowerCase().includes(query)) return true;
   const nextAncestry = new Set(ancestry).add(spaceId);
   return getChildIds(space).some((childId) => {
-    const childSpace = workspace.spaces.find((candidate) => candidate.id === childId);
+    const childSpace = spaceById.get(childId);
     if (childSpace) {
-      return spaceContainsQuery(childId, workspace, query, getChildIds, nextAncestry);
+      return spaceContainsQuery(childId, workspace, query, getChildIds, roomById, spaceById, nextAncestry);
     }
-    const room = workspace.rooms.find((candidate) => candidate.id === childId);
+    const room = roomById.get(childId);
     const preview = workspace.spaceRoomPreviews[childId];
     return (room?.name || preview?.name || '').toLowerCase().includes(query);
   });
@@ -729,14 +736,15 @@ function organizedSpaceRoomIds(
   space: SpaceSummary,
   workspace: WorkspaceSnapshot,
   getChildIds: (space: SpaceSummary) => string[],
+  spaceById: ReadonlyMap<string, SpaceSummary>,
   ancestry: ReadonlySet<string> = new Set(),
 ): string[] {
   if (ancestry.has(space.id)) return [];
   const nextAncestry = new Set(ancestry).add(space.id);
   return [...new Set(getChildIds(space).flatMap((childId) => {
-    const childSpace = workspace.spaces.find((candidate) => candidate.id === childId);
+    const childSpace = spaceById.get(childId);
     return childSpace
-      ? organizedSpaceRoomIds(childSpace, workspace, getChildIds, nextAncestry)
+      ? organizedSpaceRoomIds(childSpace, workspace, getChildIds, spaceById, nextAncestry)
       : [childId];
   }))];
 }
@@ -753,6 +761,11 @@ function SpaceBranch({
   arrangement,
   getChildIds,
   arrangementFor,
+  roomById,
+  spaceById,
+  pageCountFor,
+  onLoadMore,
+  hasOrderOverrides,
   onDropInto,
   onToggle,
   onSelectRoom,
@@ -771,6 +784,11 @@ function SpaceBranch({
   arrangement?: SpaceChildArrangement;
   getChildIds: (space: SpaceSummary) => string[];
   arrangementFor: (parent: SpaceSummary, childId: string, index: number, count: number) => SpaceChildArrangement | undefined;
+  roomById: ReadonlyMap<string, RoomSummary>;
+  spaceById: ReadonlyMap<string, SpaceSummary>;
+  pageCountFor: (key: string) => number;
+  onLoadMore: (key: string, firstNewId?: string) => void;
+  hasOrderOverrides: boolean;
   onDropInto: (spaceId: string) => void;
   onToggle: (spaceId: string) => void;
   onSelectRoom: (roomId: string) => void;
@@ -778,23 +796,35 @@ function SpaceBranch({
   onRejectInvite?: (roomId: string) => void;
   ancestry?: ReadonlySet<string>;
 }) {
-  if (ancestry.has(space.id) || !spaceContainsQuery(space.id, workspace, query, getChildIds)) return null;
+  if (ancestry.has(space.id) || !spaceContainsQuery(space.id, workspace, query, getChildIds, roomById, spaceById)) return null;
   const nextAncestry = new Set(ancestry).add(space.id);
   const isCollapsed = query ? false : collapsed[`space:${space.id}`] ?? false;
   const childIds = getChildIds(space);
-  const organizedRoomCount = organizedSpaceRoomIds(space, workspace, getChildIds).length;
+  const organizedRoomCount = hasOrderOverrides
+    ? organizedSpaceRoomIds(space, workspace, getChildIds, spaceById).length
+    : space.roomIds.length;
   const visibleChildIds = childIds.filter((childId) => {
     if (!query) return true;
-    const room = workspace.rooms.find((candidate) => candidate.id === childId);
+    const room = roomById.get(childId);
     const preview = workspace.spaceRoomPreviews[childId];
-    const childSpace = workspace.spaces.find((candidate) => candidate.id === childId);
+    const childSpace = spaceById.get(childId);
     return room?.name.toLowerCase().includes(query) ||
       preview?.name.toLowerCase().includes(query) ||
-      Boolean(childSpace && spaceContainsQuery(childSpace.id, workspace, query, getChildIds));
+      Boolean(childSpace && spaceContainsQuery(childSpace.id, workspace, query, getChildIds, roomById, spaceById));
   });
+  const pageKey = `space:${space.id}`;
+  const pageCount = pageCountFor(pageKey);
+  const shownChildIds = visibleChildIds.slice(0, pageCount);
+  const selectedOutsidePage = visibleChildIds.find((childId, index) => index >= pageCount && (
+    childId === selectedRoomId || Boolean(selectedRoomId && spaceById.get(childId)?.roomIds.includes(selectedRoomId))
+  ));
+  if (selectedOutsidePage) shownChildIds.unshift(selectedOutsidePage);
+  const remaining = visibleChildIds.length - shownChildIds.length;
+  const nextChildIds = visibleChildIds.slice(pageCount, pageCount + ROOM_LIST_PAGE_SIZE).filter((childId) => childId !== selectedOutsidePage);
+  const childIndexById = new Map(childIds.map((childId, index) => [childId, index]));
 
   return (
-    <section className={`space-branch${arrangement ? ' space-branch--arranging' : ''}`} style={{ '--space-depth': depth } as CSSProperties}>
+    <section className={`space-branch${arrangement ? ' space-branch--arranging' : ''}`} style={{ '--space-depth': depth } as CSSProperties} data-space-id={space.id}>
       <div
         className="space-branch__heading"
         onDragOver={arrangement ? (event) => event.preventDefault() : undefined}
@@ -818,10 +848,10 @@ function SpaceBranch({
       </div>
       {!isCollapsed ? (
         <div className="space-branch__children">
-          {visibleChildIds.map((childId) => {
-            const index = childIds.indexOf(childId);
+          {shownChildIds.map((childId) => {
+            const index = childIndexById.get(childId) ?? 0;
             const childArrangement = arrangementFor(space, childId, index, childIds.length);
-            const childSpace = workspace.spaces.find((candidate) => candidate.id === childId);
+            const childSpace = spaceById.get(childId);
             if (childSpace) {
               return (
                 <SpaceBranch
@@ -837,6 +867,11 @@ function SpaceBranch({
                   arrangement={childArrangement}
                   getChildIds={getChildIds}
                   arrangementFor={arrangementFor}
+                  roomById={roomById}
+                  spaceById={spaceById}
+                  pageCountFor={pageCountFor}
+                  onLoadMore={onLoadMore}
+                  hasOrderOverrides={hasOrderOverrides}
                   onDropInto={onDropInto}
                   onToggle={onToggle}
                   onSelectRoom={onSelectRoom}
@@ -846,7 +881,7 @@ function SpaceBranch({
                 />
               );
             }
-            const room = workspace.rooms.find((candidate) => candidate.id === childId);
+            const room = roomById.get(childId);
             const preview = workspace.spaceRoomPreviews[childId];
             return room ? (
               <BuddyRoomRow
@@ -870,6 +905,11 @@ function SpaceBranch({
               />
             ) : null;
           })}
+          {remaining > 0 ? (
+            <button className="buddy-group__more aqua-button" type="button" onClick={() => onLoadMore(pageKey, nextChildIds[0])}>
+              Show {nextChildIds.length} more items in {space.name} ({remaining} remaining)
+            </button>
+          ) : null}
           {arranging && space.canManage ? (
             <div
               className="space-branch__dropzone"
@@ -931,8 +971,33 @@ function BuddyPanel({
   const [arranging, setArranging] = useState(false);
   const [draggedChild, setDraggedChild] = useState<{ childId: string; parentId: string }>();
   const [childOrderOverrides, setChildOrderOverrides] = useState<Record<string, string[]>>({});
+  const hasOrderOverrides = Object.keys(childOrderOverrides).length > 0;
+  const [roomPageState, setRoomPageState] = useState<{ key: string; counts: Record<string, number> }>({ key: '', counts: {} });
+  const buddyGroupsRef = useRef<HTMLDivElement>(null);
+  const pendingPageFocusId = useRef<string | undefined>(undefined);
   const organizationQueue = useRef<Promise<void>>(Promise.resolve());
   const normalizedQuery = query.trim().toLowerCase();
+  const pageScopeKey = `${scopeSpace?.id ?? 'home'}:${filter}:${normalizedQuery}`;
+  const roomById = useMemo(() => new Map(workspace.rooms.map((room) => [room.id, room])), [workspace.rooms]);
+  const spaceById = useMemo(() => new Map(workspace.spaces.map((space) => [space.id, space])), [workspace.spaces]);
+  const pageCountFor = (key: string) => roomPageState.key === pageScopeKey
+    ? roomPageState.counts[key] ?? ROOM_LIST_PAGE_SIZE
+    : ROOM_LIST_PAGE_SIZE;
+  const loadMore = (key: string, firstNewId?: string) => {
+    pendingPageFocusId.current = firstNewId;
+    setRoomPageState((current) => ({
+      key: pageScopeKey,
+      counts: { ...(current.key === pageScopeKey ? current.counts : {}), [key]: pageCountFor(key) + ROOM_LIST_PAGE_SIZE },
+    }));
+  };
+  useLayoutEffect(() => {
+    const id = pendingPageFocusId.current;
+    if (!id) return;
+    pendingPageFocusId.current = undefined;
+    const item = [...(buddyGroupsRef.current?.querySelectorAll<HTMLElement>('[data-room-id], [data-space-id]') ?? [])]
+      .find((element) => element.dataset.roomId === id || element.dataset.spaceId === id);
+    (item?.matches('button') ? item : item?.querySelector('button'))?.focus();
+  }, [roomPageState]);
   const showSpaceTree = scopeSpace?.kind === 'matrix' && filter === 'all';
   const canArrange = Boolean(
     showSpaceTree &&
@@ -945,7 +1010,7 @@ function BuddyPanel({
     return override;
   };
   const organizedScopeRoomCount = scopeSpace
-    ? organizedSpaceRoomIds(scopeSpace, workspace, getChildIds).length
+    ? hasOrderOverrides ? organizedSpaceRoomIds(scopeSpace, workspace, getChildIds, spaceById).length : scopeSpace.roomIds.length
     : 0;
   const descendantSpaceIds = (spaceId: string, seen = new Set<string>()): Set<string> => {
     if (seen.has(spaceId)) return seen;
@@ -1076,6 +1141,26 @@ function BuddyPanel({
       getChildIds(target).length,
     );
   };
+  const rootChildIds = scopeSpace ? getChildIds(scopeSpace) : [];
+  const visibleRootChildIds = rootChildIds.filter((childId) => {
+    if (!normalizedQuery) return true;
+    const childSpace = spaceById.get(childId);
+    const room = roomById.get(childId);
+    const preview = workspace.spaceRoomPreviews[childId];
+    return room?.name.toLowerCase().includes(normalizedQuery) || preview?.name.toLowerCase().includes(normalizedQuery) ||
+      Boolean(childSpace && spaceContainsQuery(childSpace.id, workspace, normalizedQuery, getChildIds, roomById, spaceById));
+  });
+  const rootPageKey = `space:${scopeSpace?.id ?? ''}`;
+  const rootPageCount = pageCountFor(rootPageKey);
+  const shownRootChildIds = visibleRootChildIds.slice(0, rootPageCount);
+  const selectedRootOutsidePage = visibleRootChildIds.find((childId, index) => index >= rootPageCount && (
+    childId === selectedRoomId || Boolean(selectedRoomId && spaceById.get(childId)?.roomIds.includes(selectedRoomId))
+  ));
+  if (selectedRootOutsidePage) shownRootChildIds.unshift(selectedRootOutsidePage);
+  const remainingRootItems = visibleRootChildIds.length - shownRootChildIds.length;
+  const nextRootChildIds = visibleRootChildIds.slice(rootPageCount, rootPageCount + ROOM_LIST_PAGE_SIZE)
+    .filter((childId) => childId !== selectedRootOutsidePage);
+  const rootChildIndexById = new Map(rootChildIds.map((childId, index) => [childId, index]));
   const joinFromSpace = async (roomId: string) => {
     if (!onAcceptInvite || joiningRoomIds.has(roomId)) return;
     setJoiningRoomIds((current) => new Set(current).add(roomId));
@@ -1129,7 +1214,7 @@ function BuddyPanel({
       </label>
 
       <label className="buddy-search"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)} style={{ width: '100%', minHeight: 44, color: 'var(--text)', background: 'var(--surface-raised)', border: 0 }}><option value="all">All conversations</option><option value="unread">Unread conversations</option><option value="favorites">Favorite conversations</option></select></label>
-      <div className={`buddy-groups${showSpaceTree ? ' buddy-groups--space-tree' : ''}`}>
+      <div ref={buddyGroupsRef} className={`buddy-groups${showSpaceTree ? ' buddy-groups--space-tree' : ''}`}>
         {showSpaceTree && scopeSpace ? (
           <>
             <div className="space-tree__summary">
@@ -1137,9 +1222,9 @@ function BuddyPanel({
               <b>{organizedScopeRoomCount} {organizedScopeRoomCount === 1 ? 'room' : 'rooms'}</b>
             </div>
             {spaceNotice ? <p className="space-tree__notice" role="alert">{spaceNotice}</p> : null}
-            {getChildIds(scopeSpace).map((childId, index, childIds) => {
-              const childArrangement = arrangementFor(scopeSpace, childId, index, childIds.length);
-              const childSpace = workspace.spaces.find((candidate) => candidate.id === childId);
+            {shownRootChildIds.map((childId) => {
+              const childArrangement = arrangementFor(scopeSpace, childId, rootChildIndexById.get(childId) ?? 0, rootChildIds.length);
+              const childSpace = spaceById.get(childId);
               if (childSpace) {
                 return (
                   <SpaceBranch
@@ -1155,6 +1240,11 @@ function BuddyPanel({
                     arrangement={childArrangement}
                     getChildIds={getChildIds}
                     arrangementFor={arrangementFor}
+                    roomById={roomById}
+                    spaceById={spaceById}
+                    pageCountFor={pageCountFor}
+                    onLoadMore={loadMore}
+                    hasOrderOverrides={hasOrderOverrides}
                     onDropInto={dropIntoSpace}
                     onToggle={(spaceId) => setCollapsed((current) => ({
                       ...current,
@@ -1166,7 +1256,7 @@ function BuddyPanel({
                   />
                 );
               }
-              const room = workspace.rooms.find((candidate) => candidate.id === childId);
+              const room = roomById.get(childId);
               const preview = workspace.spaceRoomPreviews[childId];
               const name = room?.name || preview?.name || '';
               if (normalizedQuery && !name.toLowerCase().includes(normalizedQuery)) return null;
@@ -1191,6 +1281,11 @@ function BuddyPanel({
                 />
               ) : null;
             })}
+            {remainingRootItems > 0 ? (
+              <button className="buddy-group__more aqua-button" type="button" onClick={() => loadMore(rootPageKey, nextRootChildIds[0])}>
+                Show {nextRootChildIds.length} more items in {scopeSpace.name} ({remainingRootItems} remaining)
+              </button>
+            ) : null}
             {arranging ? (
               <div
                 className="space-branch__dropzone space-tree__root-dropzone"
@@ -1198,7 +1293,7 @@ function BuddyPanel({
                 onDrop={(event) => { event.preventDefault(); dropIntoSpace(scopeSpace.id); }}
               >Drop here to move into {scopeSpace.name}</div>
             ) : null}
-            {normalizedQuery && !spaceContainsQuery(scopeSpace.id, workspace, normalizedQuery, getChildIds) ? (
+            {normalizedQuery && !spaceContainsQuery(scopeSpace.id, workspace, normalizedQuery, getChildIds, roomById, spaceById) ? (
               <p className="space-tree__empty">No rooms or subspaces match that search.</p>
             ) : null}
           </>
@@ -1209,6 +1304,15 @@ function BuddyPanel({
             );
             if (rooms.length === 0) return null;
             const isCollapsed = collapsed[group] ?? false;
+            const pageCount = roomPageState.key === pageScopeKey
+              ? roomPageState.counts[group] ?? ROOM_LIST_PAGE_SIZE
+              : ROOM_LIST_PAGE_SIZE;
+            const shownRooms = rooms.slice(0, pageCount);
+            const selectedOutsidePage = rooms.find((room, index) => room.id === selectedRoomId && index >= pageCount);
+            if (selectedOutsidePage) shownRooms.unshift(selectedOutsidePage);
+            const remaining = rooms.length - shownRooms.length;
+            const nextPageCount = rooms.slice(pageCount, pageCount + ROOM_LIST_PAGE_SIZE)
+              .filter((room) => room.id !== selectedOutsidePage?.id).length;
             return (
               <section className="buddy-group" key={group}>
                 <button
@@ -1223,7 +1327,7 @@ function BuddyPanel({
                 </button>
                 {!isCollapsed ? (
                   <div className="buddy-group__rooms">
-                    {rooms.map((room) => (
+                    {shownRooms.map((room) => (
                       <BuddyRoomRow
                         key={room.id}
                         room={room}
@@ -1233,6 +1337,20 @@ function BuddyPanel({
                         onRejectInvite={onRejectInvite}
                       />
                     ))}
+                    {remaining > 0 ? (
+                      <button
+                        className="buddy-group__more aqua-button"
+                        type="button"
+                        onClick={() => {
+                          pendingPageFocusId.current = rooms.slice(pageCount, pageCount + ROOM_LIST_PAGE_SIZE)
+                            .find((room) => room.id !== selectedOutsidePage?.id)?.id;
+                          setRoomPageState((current) => ({
+                            key: pageScopeKey,
+                            counts: { ...(current.key === pageScopeKey ? current.counts : {}), [group]: pageCount + ROOM_LIST_PAGE_SIZE },
+                          }));
+                        }}
+                      >Show {nextPageCount} more {group.toLowerCase()} ({remaining} remaining)</button>
+                    ) : null}
                   </div>
                 ) : null}
               </section>
@@ -3413,7 +3531,7 @@ export function Workspace({
         const stage = appStage.current;
         const destination = target.kind === 'space'
           ? stage?.querySelector<HTMLElement>('.buddy-row--selected') ?? stage?.querySelector<HTMLElement>('.buddy-search input')
-          : [...(stage?.querySelectorAll<HTMLElement>('[data-room-id]') ?? [])].find((element) => element.dataset.roomId === target.id)?.querySelector<HTMLElement>('[data-room-heading]');
+          : [...(stage?.querySelectorAll<HTMLElement>('[data-room-id] [data-room-heading]') ?? [])].find((element) => element.closest<HTMLElement>('[data-room-id]')?.dataset.roomId === target.id);
         if (destination && !destination.closest('[hidden], [inert]')) destination.focus({ preventScroll: true });
       });
     }));

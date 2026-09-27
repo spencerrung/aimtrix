@@ -8,6 +8,8 @@ The [first-use encryption confidence pass](docs/first-use-encryption.md) impleme
 
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
 
+The [large-account performance profile](docs/large-account-performance.md) records a synthetic 10k-room baseline, bounded buddy-list and Matrix-space paging, optional index/attachment operation costs, and working interaction/memory budgets for #163. Live long-running sync remains open.
+
 The [visual reference handoff](docs/design/interaction-rules.md) records the step 02 design decisions and browser evidence. These are implementation inputs for the linked roadmap slices; the reference does not mark their production behavior complete.
 
 ## 0.1 release gate
