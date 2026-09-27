@@ -3,9 +3,12 @@ export interface SpaceHierarchyRoomData {
   name: string;
   avatarUrl?: string;
   topic?: string;
+  joinRule?: string;
+  worldReadable?: boolean;
   roomType?: string;
   membership?: string;
   childIds: string[];
+  suggestedChildIds?: string[];
 }
 
 export interface SpaceRelationSeed {

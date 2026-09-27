@@ -902,6 +902,10 @@ export function buildWorkspaceSnapshot(
     const favorite = Object.hasOwn(room.tags ?? {}, 'm.favourite');
     const canonicalAlias = room.currentState.getStateEvents('m.room.canonical_alias', '')
       ?.getContent<{ alias?: unknown }>().alias;
+    const accessValue = (type: string, field: string, fallback: string): string => {
+      const value = room.currentState.getStateEvents(type, '')?.getContent<Record<string, unknown>>()[field];
+      return typeof value === 'string' ? value : fallback;
+    };
     const latest = history?.state.mode && history.state.mode !== 'live'
       ? messagesForRoom(room, userId, pinnedIds, localEvents).at(-1)
       : messages.at(-1);
@@ -980,6 +984,17 @@ export function buildWorkspaceSnapshot(
       avatarUrl: mediaSource(room.getMxcAvatarUrl()) ?? memberAvatar(directMember),
       favorite,
       canonicalAlias: typeof canonicalAlias === 'string' && isMatrixNavigationTarget({ roomAlias: canonicalAlias }) ? canonicalAlias : undefined,
+      access: {
+        joinRule: accessValue('m.room.join_rules', 'join_rule', 'invite'),
+        historyVisibility: accessValue('m.room.history_visibility', 'history_visibility', 'shared'),
+        guestAccess: accessValue('m.room.guest_access', 'guest_access', 'forbidden'),
+        canChangeJoinRule: room.currentState.maySendStateEvent('m.room.join_rules', userId),
+        canChangeHistoryVisibility: room.currentState.maySendStateEvent('m.room.history_visibility', userId),
+        canChangeGuestAccess: room.currentState.maySendStateEvent('m.room.guest_access', userId),
+        canChangeCanonicalAlias: room.currentState.maySendStateEvent('m.room.canonical_alias', userId),
+        canChangeServerAcl: room.currentState.maySendStateEvent('m.room.server_acl', userId),
+        canUpgrade: room.currentState.maySendStateEvent('m.room.tombstone', userId),
+      },
       directUserId: isDirect ? directIds.get(room.roomId) ?? directMember?.userId : undefined,
       kind: isDirect ? 'direct' : 'room',
       group:
@@ -1073,6 +1088,10 @@ export function buildWorkspaceSnapshot(
       roomIds: [],
     };
     const name = joinedSpace?.name || hierarchySpace?.name || 'Space';
+    const childEvents = joinedSpace?.currentState.getStateEvents('m.space.child') as MatrixEvent[] | undefined;
+    const parentEvents = joinedSpace?.currentState.getStateEvents('m.space.parent') as MatrixEvent[] | undefined;
+    const childIdSet = new Set(relation.childIds);
+    const parentIdSet = new Set(relation.parentSpaceIds);
     const ownPowerLevel = joinedSpace?.getMember(userId)?.powerLevel ?? 0;
     const powerLevelContent = joinedSpace?.currentState
       .getStateEvents(matrixEventType.powerLevels, '')
@@ -1110,6 +1129,7 @@ export function buildWorkspaceSnapshot(
     return {
       id: spaceId,
       name,
+      topic: joinedSpace ? roomTopic(joinedSpace) : hierarchySpace?.topic,
       avatarUrl: mediaSource(joinedSpace?.getMxcAvatarUrl() ?? hierarchySpace?.avatarUrl),
       initials: initialsFor(name),
       color: colorForId(spaceId),
@@ -1118,6 +1138,7 @@ export function buildWorkspaceSnapshot(
         ? mapSpaceMembership(joinedSpace.getMyMembership())
         : mapSpaceMembership(hierarchySpace?.membership),
       canManage: joinedSpace?.currentState.maySendStateEvent(matrixEventType.spaceChild, userId) ?? false,
+      canManageParents: joinedSpace?.currentState.maySendStateEvent(matrixEventType.spaceParent, userId) ?? false,
       ownPowerLevel,
       background,
       backgroundPolicy: joinedSpace ? {
@@ -1127,6 +1148,11 @@ export function buildWorkspaceSnapshot(
         canManage: canManageBackgroundPolicy,
       } : undefined,
       childIds: relation.childIds,
+      suggestedChildIds: joinedSpace
+        ? childEvents?.filter((event) => event.getContent<{ suggested?: unknown; via?: unknown }>().suggested === true && childIdSet.has(event.getStateKey() ?? ''))
+          .flatMap((event) => event.getStateKey() ? [event.getStateKey()!] : []) ?? []
+        : hierarchySpace?.suggestedChildIds ?? [],
+      canonicalParentId: parentEvents?.find((event) => event.getContent<{ canonical?: unknown }>().canonical === true && parentIdSet.has(event.getStateKey() ?? ''))?.getStateKey() ?? undefined,
       directRoomIds: relation.directRoomIds,
       childSpaceIds: relation.childSpaceIds,
       parentSpaceIds: relation.parentSpaceIds,
@@ -1194,6 +1220,8 @@ export function buildWorkspaceSnapshot(
           name: roomById.get(room.id)?.name || room.name || 'Matrix room',
           avatarUrl: mediaSource(room.avatarUrl),
           topic: room.topic,
+          joinRule: room.joinRule,
+          worldReadable: room.worldReadable,
           membership: roomById.has(room.id)
             ? roomById.get(room.id)?.membership === 'invite'
               ? 'invite'

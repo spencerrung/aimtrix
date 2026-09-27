@@ -513,6 +513,11 @@
   .space-preview-row { color: var(--text); }
   .space-preview-row__join { padding: 3px 7px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); font-size: 0.57rem; font-weight: 800; }
   .space-preview-row:disabled { opacity: 0.7; }
+  .space-tree__purpose { margin: 4px 10px 8px; color: var(--text-soft); font-size: 0.65rem; line-height: 1.4; overflow-wrap: anywhere; }
+  .space-tree__recommendations { display: grid; gap: 5px; margin: 0 9px 10px; padding: 8px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); }
+  .space-tree__recommendations strong { font-size: 0.66rem; }
+  .space-tree__recommendations button { padding: 6px 8px; color: var(--blue-deep); border: 1px solid var(--border-soft); border-radius: 5px; background: var(--surface-raised); font-size: 0.63rem; text-align: left; }
+  .space-tree__recommendations button:disabled { color: var(--text-faint); opacity: 0.7; }
   .invite-actions { display: grid; gap: 3px; }
   .invite-actions button { padding: 2px 6px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 8px; background: var(--surface-raised); font-size: 0.58rem; font-weight: 700; }
   .invite-actions button:last-child { color: #a5414a; }
@@ -980,6 +985,21 @@
   .room-directory-results > button { display: flex; align-items: center; justify-content: space-between; gap: 9px; padding: 8px; color: var(--text); border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-soft); text-align: left; }
   .room-directory-results small { color: var(--text-faint); font-size: 0.6rem; }
   .room-directory-results em { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; color: var(--text-faint); font-size: 0.6rem; font-style: normal; }
+  .room-administration { display: grid; gap: 10px; min-width: 0; padding-top: 12px; border-top: 1px solid var(--border); }
+  .room-administration h3, .room-administration h4 { margin: 0; }
+  .room-administration > label, .room-administration__aliases form > label, .room-administration__acl > label:not(.room-dialog-check) { display: grid; gap: 5px; font-size: 0.68rem; font-weight: 700; }
+  .room-administration select, .room-administration input, .room-administration textarea, .space-administration input[type="search"] { width: 100%; min-width: 0; padding: 7px 9px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
+  .room-administration__aliases, .room-administration__acl, .room-administration__upgrade { display: grid; gap: 8px; padding-top: 10px; border-top: 1px solid var(--border-soft); }
+  .room-administration__aliases ul, .space-administration__children { display: grid; gap: 6px; max-height: 190px; margin: 0; padding: 0; overflow: auto; list-style: none; }
+  .room-administration__aliases li, .space-administration__children li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; min-width: 0; }
+  .room-administration__aliases li code, .space-administration__children li span { flex: 1 1 130px; overflow-wrap: anywhere; }
+  .room-administration__aliases form { display: grid; gap: 8px; }
+  .room-administration .aqua-button, .space-administration .aqua-button { width: fit-content; }
+  .space-administration { display: grid; gap: 10px; width: min(560px, 100%); max-height: calc(100dvh - 40px); overflow-y: auto; padding-bottom: 16px; }
+  .space-administration > :not(header) { margin-left: 16px; margin-right: 16px; }
+  .space-administration > label { display: grid; gap: 5px; font-size: 0.68rem; font-weight: 700; }
+  .space-administration__choices { display: flex; flex-wrap: wrap; gap: 6px; max-height: 130px; overflow: auto; }
+  .space-administration form { padding: 0; }
 
   .settings-backdrop { position: fixed; z-index: 50; inset: 0; display: grid; place-items: center; padding: 22px; background: rgba(23, 37, 48, 0.46); backdrop-filter: blur(3px); }
   .settings-window { display: grid; width: min(850px, 100%); height: min(680px, calc(100dvh - 44px)); grid-template-rows: 38px minmax(0,1fr); overflow: hidden; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--surface); box-shadow: 0 25px 80px rgba(10,25,36,0.48); }

@@ -155,8 +155,8 @@ These retain compatibility depth and validation obligations alongside additive f
 - [ ] Complete sanitized incoming `formatted_body` HTML, spoilers and extensible event rendering; add interoperable polls and locations. — [#152](https://github.com/spencerrung/aimtrix/issues/152), [#166](https://github.com/spencerrung/aimtrix/issues/166), [#167](https://github.com/spencerrung/aimtrix/issues/167).
 - [x] Explicit per-event delivery, original-transaction retry/cancel and room/thread text draft protection. — [#145](https://github.com/spencerrung/aimtrix/issues/145); [behavior and evidence](docs/message-delivery.md).
 - [ ] Complete deeper per-event decryption diagnostics beyond delivery state and read-position avatars. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
-- [ ] Add aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
-- [ ] Add suggested-child controls, canonical-parent selection, and explicit removal from every space. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
+- [ ] Validate the implemented aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing with live accounts at several power levels. The UI and mocked paths are documented in [community onboarding](docs/community-onboarding.md). — [#165](https://github.com/spencerrung/aimtrix/issues/165).
+- [ ] Validate implemented suggested-child controls, canonical-parent selection, and explicit space removal against a live homeserver, including partial-write recovery. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
 - [x] Room all/mentions/nothing, keyword/thread rules, account DND, local quiet time and safe delivery troubleshooting. — [#159](https://github.com/spencerrung/aimtrix/issues/159); [behavior and boundaries](docs/attention-and-catch-up.md). Actual closed-app provider acceptance remains [#176](https://github.com/spencerrung/aimtrix/issues/176).
 
 ### Encryption and identity depth

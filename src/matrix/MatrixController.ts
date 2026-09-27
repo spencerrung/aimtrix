@@ -8,6 +8,7 @@ import type {
   SyncState,
 } from 'matrix-js-sdk';
 import type { IEvent } from 'matrix-js-sdk/lib/models/event.js';
+import type { StateEvents } from 'matrix-js-sdk/lib/@types/event.js';
 import type { RoomMessageEventContent, StickerEventContent } from 'matrix-js-sdk/lib/@types/events.js';
 import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
@@ -46,6 +47,7 @@ import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
 import { AttachmentSender, type AttachmentSendOptions } from './AttachmentSender';
 import { isMatrixNavigationTarget, type MatrixNavigationTarget } from './matrixLinks';
+import { aclAllowsServer, normalizeServerList, roomAccessEvents, validLocalAlias, type RoomAccessSetting, type RoomAdministrationState } from './roomAdministration';
 import { RoomHistory } from './RoomHistory';
 import { ThreadHistory } from './ThreadHistory';
 import { searchUnencryptedHistory, type HistorySearchFilters, type HistorySearchPage } from './historySearch';
@@ -1463,7 +1465,7 @@ export class MatrixController {
         const response = await client.getRoomHierarchy(spaceId, 100, 20, false, fromToken);
         if (this.client !== client) return;
         for (const room of response.rooms) {
-          const children = room.children_state
+          const childEvents = room.children_state
             .filter((event) => {
               const via = event.content?.via;
               return (
@@ -1488,16 +1490,19 @@ export class MatrixController {
               if (leftOrder) return -1;
               if (rightOrder) return 1;
               return left.origin_server_ts - right.origin_server_ts;
-            })
-            .flatMap((event) => event.state_key ? [event.state_key] : []);
+            });
+          const children = childEvents.flatMap((event) => event.state_key ? [event.state_key] : []);
           hierarchyRooms.set(room.room_id, {
             id: room.room_id,
             name: room.name || room.canonical_alias || room.room_id,
             avatarUrl: room.avatar_url,
             topic: room.topic,
+            joinRule: room.join_rule,
+            worldReadable: room.world_readable,
             roomType: room.room_type,
             membership: client.getRoom(room.room_id)?.getMyMembership() ?? 'leave',
             childIds: children,
+            suggestedChildIds: childEvents.flatMap((event) => event.content.suggested === true && event.state_key ? [event.state_key] : []),
           });
         }
         const nextToken = response.next_batch;
@@ -1663,6 +1668,130 @@ export class MatrixController {
           // The parent-side relation still makes the moved subspace navigable.
         }
       }
+    }
+    this.spaceHierarchies.clear();
+    this.scheduleWorkspacePublish();
+  }
+
+  public async addSpaceChild(spaceId: string, childId: string, suggested: boolean): Promise<void> {
+    const client = this.client;
+    const space = client?.getRoom(spaceId);
+    const child = client?.getRoom(childId);
+    if (!client || !space || space.getType() !== 'm.space' || !child || child.getMyMembership() !== 'join') {
+      throw new Error('Choose a joined room or subspace.');
+    }
+    if (spaceId === childId) throw new Error('A space cannot contain itself.');
+    if (!space.currentState.maySendStateEvent('m.space.child', client.getSafeUserId())) throw new Error('Your role cannot add children to this space.');
+    if (child.getType() === 'm.space' && !child.currentState.maySendStateEvent('m.space.parent', client.getSafeUserId())) {
+      throw new Error('You also need permission to add the subspace’s parent link.');
+    }
+    if (child.getType() === 'm.space') {
+      const snapshot = buildWorkspaceSnapshot(client, this.connection, [...this.spaceHierarchies.values()].flat(), this.readRootSpaceOrder());
+      const byId = new Map(snapshot.spaces.map((entry) => [entry.id, entry]));
+      const hasDescendant = (id: string, target: string, seen = new Set<string>()): boolean => {
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return byId.get(id)?.childSpaceIds.some((descendant) => descendant === target || hasDescendant(descendant, target, seen)) ?? false;
+      };
+      if (hasDescendant(childId, spaceId)) throw new Error('A space cannot contain one of its ancestors.');
+    }
+    const previous = space.currentState.getStateEvents('m.space.child', childId)?.getContent<Record<string, unknown>>() ?? {};
+    await client.sendStateEvent(spaceId, 'm.space.child' as keyof StateEvents, {
+      ...previous,
+      via: this.spaceViaServers(childId),
+      suggested,
+    }, childId);
+    if (child.getType() === 'm.space') {
+      const existing = child.currentState.getStateEvents('m.space.parent', spaceId)?.getContent<Record<string, unknown>>() ?? {};
+      try {
+        await client.sendStateEvent(childId, 'm.space.parent' as keyof StateEvents, {
+          ...existing,
+          via: this.spaceViaServers(spaceId),
+        }, spaceId);
+      } catch {
+        try { await client.sendStateEvent(spaceId, 'm.space.child' as keyof StateEvents, previous, childId); }
+        catch { this.spaceHierarchies.clear(); this.scheduleWorkspacePublish(); throw new Error('The subspace parent link failed and the new child link could not be rolled back. Refresh both spaces before retrying.'); }
+        this.spaceHierarchies.clear(); this.scheduleWorkspacePublish();
+        throw new Error('The subspace parent link failed. The child link was rolled back.');
+      }
+    }
+    this.spaceHierarchies.clear();
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setSpaceChildSuggested(spaceId: string, childId: string, suggested: boolean): Promise<void> {
+    const client = this.client;
+    const space = client?.getRoom(spaceId);
+    if (!client || !space || space.getType() !== 'm.space') throw new Error('The Matrix space is unavailable.');
+    if (!space.currentState.maySendStateEvent('m.space.child', client.getSafeUserId())) throw new Error('Your role cannot change space recommendations.');
+    const existing = space.currentState.getStateEvents('m.space.child', childId)?.getContent<Record<string, unknown>>();
+    if (!existing || !Array.isArray(existing.via) || existing.via.length === 0) throw new Error('That room is not a child of this space.');
+    await client.sendStateEvent(spaceId, 'm.space.child' as keyof StateEvents, { ...existing, suggested }, childId);
+    this.spaceHierarchies.clear();
+    this.scheduleWorkspacePublish();
+  }
+
+  public async removeSpaceChild(spaceId: string, childId: string): Promise<void> {
+    const client = this.client;
+    const space = client?.getRoom(spaceId);
+    if (!client || !space || space.getType() !== 'm.space') throw new Error('The Matrix space is unavailable.');
+    if (!space.currentState.maySendStateEvent('m.space.child', client.getSafeUserId())) throw new Error('Your role cannot remove children from this space.');
+    const child = client.getRoom(childId);
+    const parentEvent = child?.getType() === 'm.space'
+      ? child.currentState.getStateEvents('m.space.parent', spaceId)
+      : undefined;
+    if (parentEvent && !child?.currentState.maySendStateEvent('m.space.parent', client.getSafeUserId())) {
+      throw new Error('You also need permission to remove the subspace’s parent link.');
+    }
+    const previous = space.currentState.getStateEvents('m.space.child', childId)?.getContent<Record<string, unknown>>() ?? {};
+    await client.sendStateEvent(spaceId, 'm.space.child' as keyof StateEvents, {}, childId);
+    if (parentEvent) {
+      try { await client.sendStateEvent(childId, 'm.space.parent' as keyof StateEvents, {}, spaceId); }
+      catch {
+        try { await client.sendStateEvent(spaceId, 'm.space.child' as keyof StateEvents, previous, childId); }
+        catch { this.spaceHierarchies.clear(); this.scheduleWorkspacePublish(); throw new Error('The subspace parent link could not be removed and the child link could not be restored. Refresh both spaces before retrying.'); }
+        this.spaceHierarchies.clear(); this.scheduleWorkspacePublish();
+        throw new Error('The subspace parent link could not be removed. The child link was restored.');
+      }
+    }
+    this.spaceHierarchies.clear();
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setCanonicalSpaceParent(childSpaceId: string, parentSpaceId: string): Promise<void> {
+    const client = this.client;
+    const child = client?.getRoom(childSpaceId);
+    const parent = client?.getRoom(parentSpaceId);
+    if (!client || !child || child.getType() !== 'm.space' || !parent || parent.getType() !== 'm.space') {
+      throw new Error('Both Matrix spaces must be joined.');
+    }
+    if (!child.currentState.maySendStateEvent('m.space.parent', client.getSafeUserId())) throw new Error('Your role cannot choose the canonical parent.');
+    const relation = parent.currentState.getStateEvents('m.space.child', childSpaceId)?.getContent<{ via?: unknown }>();
+    if (!Array.isArray(relation?.via) || relation.via.length === 0) throw new Error('The selected parent does not list this subspace.');
+    const parents = (child.currentState.getStateEvents('m.space.parent') ?? []) as MatrixEvent[];
+    const oldCanonical = parents.flatMap((event) => {
+      const stateKey = event.getStateKey();
+      return stateKey && stateKey !== parentSpaceId && event.getContent<{ canonical?: boolean }>().canonical === true
+        ? [{ stateKey, content: event.getContent<Record<string, unknown>>() }] : [];
+    });
+    const existing = child.currentState.getStateEvents('m.space.parent', parentSpaceId)?.getContent<Record<string, unknown>>() ?? {};
+    await client.sendStateEvent(childSpaceId, 'm.space.parent' as keyof StateEvents, {
+      ...existing,
+      via: this.spaceViaServers(parentSpaceId),
+      canonical: true,
+    }, parentSpaceId);
+    try {
+      for (const { stateKey, content } of oldCanonical) {
+        await client.sendStateEvent(childSpaceId, 'm.space.parent' as keyof StateEvents, { ...content, canonical: false }, stateKey);
+      }
+    } catch {
+      const restored = await Promise.allSettled([
+        client.sendStateEvent(childSpaceId, 'm.space.parent' as keyof StateEvents, existing, parentSpaceId),
+        ...oldCanonical.map(({ stateKey, content }) => client.sendStateEvent(childSpaceId, 'm.space.parent' as keyof StateEvents, content, stateKey)),
+      ]);
+      this.spaceHierarchies.clear(); this.scheduleWorkspacePublish();
+      if (restored.some((result) => result.status === 'rejected')) throw new Error('Canonical parent update partly succeeded and rollback failed. Refresh the subspace before retrying.');
+      throw new Error('Canonical parent update failed. The previous parent state was restored.');
     }
     this.spaceHierarchies.clear();
     this.scheduleWorkspacePublish();
@@ -1949,6 +2078,155 @@ export class MatrixController {
     if (update.name !== undefined) await this.client.setRoomName(roomId, update.name.trim());
     if (update.topic !== undefined) await this.client.setRoomTopic(roomId, update.topic.trim());
     this.scheduleWorkspacePublish();
+  }
+
+  public async getRoomAdministration(roomId: string): Promise<RoomAdministrationState> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room || room.getMyMembership() !== 'join') throw new Error('This room is not available for administration.');
+    const [aliasesResult, directoryResult, capabilitiesResult] = await Promise.allSettled([
+      client.getLocalAliases(roomId),
+      client.getRoomDirectoryVisibility(roomId),
+      client.getCapabilities(),
+    ]);
+    const aliases = aliasesResult.status === 'fulfilled' ? aliasesResult.value : undefined;
+    const directory = directoryResult.status === 'fulfilled' ? directoryResult.value : undefined;
+    const capabilities = capabilitiesResult.status === 'fulfilled' ? capabilitiesResult.value : undefined;
+    const localAcl = room.currentState.getStateEvents('m.room.server_acl', '')?.getContent<{
+      allow?: unknown; deny?: unknown; allow_ip_literals?: unknown;
+    }>() ?? {};
+    const acl = await client.getStateEvent(roomId, 'm.room.server_acl', '').catch(() => localAcl);
+    const roomVersion = room.currentState.getStateEvents('m.room.create', '')?.getContent<{ room_version?: unknown }>().room_version;
+    const versionCapabilities = capabilities?.['m.room_versions'];
+    const defaultVersion = versionCapabilities?.default;
+    const currentStateValue = (type: string, field: string, fallback: string): string => {
+      const value = room.currentState.getStateEvents(type, '')?.getContent<Record<string, unknown>>()[field];
+      return typeof value === 'string' ? value : fallback;
+    };
+    const [joinRule, historyVisibility, guestAccess, canonicalAlias] = await Promise.all([
+      client.getStateEvent(roomId, 'm.room.join_rules', '').then((value) => value.join_rule).catch(() => currentStateValue('m.room.join_rules', 'join_rule', 'invite')),
+      client.getStateEvent(roomId, 'm.room.history_visibility', '').then((value) => value.history_visibility).catch(() => currentStateValue('m.room.history_visibility', 'history_visibility', 'shared')),
+      client.getStateEvent(roomId, 'm.room.guest_access', '').then((value) => value.guest_access).catch(() => currentStateValue('m.room.guest_access', 'guest_access', 'forbidden')),
+      client.getStateEvent(roomId, 'm.room.canonical_alias', '').then((value) => value.alias).catch(() => currentStateValue('m.room.canonical_alias', 'alias', '')),
+    ]);
+    return {
+      localServerName: this.activeSession?.serverName ?? '',
+      access: {
+        joinRule: typeof joinRule === 'string' ? joinRule : 'invite',
+        historyVisibility: typeof historyVisibility === 'string' ? historyVisibility : 'shared',
+        guestAccess: typeof guestAccess === 'string' ? guestAccess : 'forbidden',
+      },
+      canonicalAlias: typeof canonicalAlias === 'string' ? canonicalAlias : undefined,
+      localAliases: aliases?.aliases.filter((alias): alias is string => typeof alias === 'string') ?? [],
+      aliasesAvailable: Boolean(aliases),
+      directoryVisibility: directory?.visibility === 'public' ? 'public' : 'private',
+      directoryAvailable: Boolean(directory),
+      serverAcl: {
+        allow: Array.isArray(acl.allow) ? acl.allow.filter((value): value is string => typeof value === 'string') : ['*'],
+        deny: Array.isArray(acl.deny) ? acl.deny.filter((value): value is string => typeof value === 'string') : [],
+        allowIpLiterals: acl.allow_ip_literals !== false,
+      },
+      roomVersion: typeof roomVersion === 'string' ? roomVersion : 'unknown',
+      upgradeVersion: typeof defaultVersion === 'string' && defaultVersion !== roomVersion && versionCapabilities?.available?.[defaultVersion] === 'stable' ? defaultVersion : undefined,
+    };
+  }
+
+  public async setRoomAccess(roomId: string, setting: RoomAccessSetting, value: string): Promise<void> {
+    const client = this.client;
+    const descriptor = roomAccessEvents[setting];
+    const room = client?.getRoom(roomId);
+    if (!client || !room || room.getMyMembership() !== 'join') throw new Error('The room is not available.');
+    if (!descriptor.values.includes(value)) throw new Error('That access setting is not supported.');
+    if (!room.currentState.maySendStateEvent(descriptor.type, client.getSafeUserId())) throw new Error('Your room role cannot change this setting.');
+    await client.sendStateEvent(roomId, descriptor.type as keyof StateEvents, { [descriptor.field]: value }, '');
+    const refreshed = await client.getStateEvent(roomId, descriptor.type, '');
+    if (refreshed[descriptor.field] !== value) throw new Error('The homeserver did not retain the requested setting.');
+    this.scheduleWorkspacePublish();
+  }
+
+  public async createRoomAlias(roomId: string, alias: string): Promise<void> {
+    const client = this.client;
+    const serverName = this.activeSession?.serverName;
+    if (!client || !client.getRoom(roomId) || !serverName) throw new Error('The room or local server is not available.');
+    const normalized = alias.trim();
+    if (!validLocalAlias(normalized, serverName)) throw new Error(`Use a local alias ending in :${serverName}.`);
+    await client.createAlias(normalized, roomId);
+    const resolved = await client.getRoomIdForAlias(normalized);
+    if (resolved.room_id !== roomId) throw new Error('The new alias did not resolve to this room.');
+    this.scheduleWorkspacePublish();
+  }
+
+  public async deleteRoomAlias(roomId: string, alias: string): Promise<void> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room) throw new Error('The room is not available.');
+    if (room.currentState.getStateEvents('m.room.canonical_alias', '')?.getContent<{ alias?: string }>().alias === alias) {
+      throw new Error('Choose another canonical alias before deleting this one.');
+    }
+    if (!(await client.getLocalAliases(roomId)).aliases.includes(alias)) throw new Error('This alias is not local to this room.');
+    await client.deleteAlias(alias);
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setRoomCanonicalAlias(roomId: string, alias: string): Promise<void> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room) throw new Error('The room is not available.');
+    if (!room.currentState.maySendStateEvent('m.room.canonical_alias', client.getSafeUserId())) throw new Error('Your room role cannot change the canonical alias.');
+    if (alias) {
+      const resolved = await client.getRoomIdForAlias(alias);
+      if (resolved.room_id !== roomId) throw new Error('That alias does not resolve to this room.');
+    }
+    const existing = room.currentState.getStateEvents('m.room.canonical_alias', '')?.getContent<{ alt_aliases?: string[] }>();
+    await client.sendStateEvent(roomId, 'm.room.canonical_alias' as keyof StateEvents, {
+      alias,
+      alt_aliases: Array.isArray(existing?.alt_aliases) ? existing.alt_aliases.filter((candidate) => candidate !== alias) : [],
+    }, '');
+    const refreshed = await client.getStateEvent(roomId, 'm.room.canonical_alias', '');
+    if (refreshed.alias !== alias) throw new Error('The homeserver did not retain the canonical alias.');
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setRoomDirectoryVisibility(roomId: string, visibility: 'public' | 'private'): Promise<void> {
+    const client = this.client;
+    if (!client?.getRoom(roomId)) throw new Error('The room is not available.');
+    if (!this.sdk) throw new Error('Matrix is not connected.');
+    await client.setRoomDirectoryVisibility(roomId, visibility === 'public' ? this.sdk.Visibility.Public : this.sdk.Visibility.Private);
+    if ((await client.getRoomDirectoryVisibility(roomId)).visibility !== visibility) throw new Error('The directory did not retain that visibility.');
+    this.scheduleWorkspacePublish();
+  }
+
+  public async setRoomServerAcl(roomId: string, allowText: string, denyText: string, allowIpLiterals: boolean): Promise<void> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    const serverName = this.activeSession?.serverName;
+    if (!client || !room || !serverName) throw new Error('The room or local server is not available.');
+    if (!room.currentState.maySendStateEvent('m.room.server_acl', client.getSafeUserId())) throw new Error('Your room role cannot change the server ACL.');
+    const allow = normalizeServerList(allowText);
+    const deny = normalizeServerList(denyText);
+    if (!allow.length || !aclAllowsServer(serverName, allow, deny)) throw new Error('The server ACL must continue to allow your homeserver.');
+    if ([...allow, ...deny].some((value) => value.length > 255 || /[\s/]/.test(value))) throw new Error('Use valid server patterns separated by commas or lines.');
+    await client.sendStateEvent(roomId, 'm.room.server_acl' as keyof StateEvents, { allow, deny, allow_ip_literals: allowIpLiterals }, '');
+    const refreshed = await client.getStateEvent(roomId, 'm.room.server_acl', '');
+    if (JSON.stringify(refreshed.allow) !== JSON.stringify(allow) || JSON.stringify(refreshed.deny) !== JSON.stringify(deny)) {
+      throw new Error('The homeserver did not retain the server ACL.');
+    }
+    this.scheduleWorkspacePublish();
+  }
+
+  public async upgradeRoom(roomId: string): Promise<string> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room) throw new Error('The room is not available.');
+    if (!room.currentState.maySendStateEvent('m.room.tombstone', client.getSafeUserId())) throw new Error('Your room role cannot upgrade this room.');
+    const current = room.currentState.getStateEvents('m.room.create', '')?.getContent<{ room_version?: string }>().room_version;
+    const versionCapabilities = (await client.getCapabilities())['m.room_versions'];
+    const next = versionCapabilities?.default;
+    if (typeof next !== 'string' || next === current || versionCapabilities?.available?.[next] !== 'stable') throw new Error('No supported default room upgrade is available.');
+    const result = await client.upgradeRoom(roomId, next);
+    if (!result.replacement_room) throw new Error('The homeserver did not return a replacement room.');
+    this.scheduleWorkspacePublish();
+    return result.replacement_room;
   }
 
   public async updateRoomAvatar(roomId: string, file: File): Promise<void> {
@@ -2257,6 +2535,7 @@ export class MatrixController {
     topic?: string;
     alias?: string;
     memberCount: number;
+    joinRule?: string;
   }>> {
     if (!this.client) throw new Error('Matrix is not connected.');
     const response = await this.client.publicRooms({
@@ -2269,6 +2548,7 @@ export class MatrixController {
       topic: room.topic || undefined,
       alias: room.canonical_alias || undefined,
       memberCount: room.num_joined_members,
+      joinRule: room.join_rule,
     }));
   }
 
@@ -2282,6 +2562,13 @@ export class MatrixController {
     const client = this.client;
     if (!client) throw new Error('Matrix is not connected.');
     await client.joinRoom(roomIdOrAlias.trim());
+    this.scheduleWorkspacePublish();
+  }
+
+  public async requestRoomJoin(roomIdOrAlias: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    await client.knockRoom(roomIdOrAlias.trim());
     this.scheduleWorkspacePublish();
   }
 

@@ -23,3 +23,19 @@ it('announces an empty public directory search', async () => {
   fireEvent.click(screen.getByText('Search public rooms'));
   await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('No public rooms found'));
 });
+
+it.each(['knock', 'knock_restricted'])('requests entry to a %s directory room instead of attempting a join', async (joinRule) => {
+  const join = vi.fn();
+  const knock = vi.fn().mockResolvedValue(undefined);
+  const complete = vi.fn();
+  render(<RoomDialog onJoin={join} onKnock={knock} onSearch={vi.fn().mockResolvedValue([
+    { roomId: '!knock:example.test', name: 'Welcome', memberCount: 3, joinRule },
+  ])} onComplete={complete} onClose={vi.fn()} />);
+  fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Welcome' } });
+  fireEvent.click(screen.getByText('Search public rooms'));
+  fireEvent.click(await screen.findByRole('button', { name: /Welcome/ }));
+  fireEvent.click(screen.getByRole('button', { name: 'Request to join' }));
+  await waitFor(() => expect(knock).toHaveBeenCalledWith('!knock:example.test'));
+  expect(join).not.toHaveBeenCalled();
+  expect(complete).toHaveBeenCalledWith(expect.stringContaining('Join request sent'));
+});

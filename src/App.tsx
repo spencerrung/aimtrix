@@ -340,6 +340,13 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onHistoryDetached={(roomId, detached) => controller.setHistoryDetached(roomId, detached)}
         onSpaceSelected={(spaceId) => controller.loadSpaceHierarchy(spaceId)}
         onReorganizeSpaceChildren={(update) => controller.reorganizeSpaceChildren(update)}
+        spaceAdministration={{
+          addChild: (spaceId, childId, suggested) => controller.addSpaceChild(spaceId, childId, suggested),
+          setSuggested: (spaceId, childId, suggested) => controller.setSpaceChildSuggested(spaceId, childId, suggested),
+          removeChild: (spaceId, childId) => controller.removeSpaceChild(spaceId, childId),
+          setCanonicalParent: (childSpaceId, parentSpaceId) => controller.setCanonicalSpaceParent(childSpaceId, parentSpaceId),
+        }}
+        onKnockRoom={(roomIdOrAlias) => controller.requestRoomJoin(roomIdOrAlias)}
         onReorderRootSpaces={(spaceIds) => controller.reorderRootSpaces(spaceIds)}
         onSendReply={(roomId, body, target, mentions, inlineEmojis) => controller.sendReply(roomId, body, target, mentions, inlineEmojis)}
         onEditMessage={(roomId, eventId, body, mentions, inlineEmojis) => controller.editMessage(roomId, eventId, body, mentions, inlineEmojis)}
@@ -373,6 +380,16 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onCallVideo={(muted) => controller.setCallVideoMuted(muted)}
         onScreenshare={(enabled) => controller.setScreensharing(enabled)}
         onUpdateRoom={(roomId, update) => controller.updateRoomDetails(roomId, update)}
+        roomAdministration={{
+          load: (roomId) => controller.getRoomAdministration(roomId),
+          setAccess: (roomId, setting, value) => controller.setRoomAccess(roomId, setting, value),
+          createAlias: (roomId, alias) => controller.createRoomAlias(roomId, alias),
+          deleteAlias: (roomId, alias) => controller.deleteRoomAlias(roomId, alias),
+          setCanonicalAlias: (roomId, alias) => controller.setRoomCanonicalAlias(roomId, alias),
+          setDirectoryVisibility: (roomId, visibility) => controller.setRoomDirectoryVisibility(roomId, visibility),
+          setServerAcl: (roomId, allow, deny, allowIpLiterals) => controller.setRoomServerAcl(roomId, allow, deny, allowIpLiterals),
+          upgrade: (roomId) => controller.upgradeRoom(roomId),
+        }}
         onUpdateRoomAvatar={(roomId, file) => controller.updateRoomAvatar(roomId, file)}
         onUploadRoomBackground={(file) => controller.uploadRoomBackground(file)}
         onSetRoomBackground={(roomId, background, personal) => controller.setRoomBackground(roomId, background, personal)}
