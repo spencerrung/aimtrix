@@ -193,10 +193,10 @@ describe('Workspace demo', () => {
     assertSinglePanel();
     expect(screen.queryByRole('complementary', { name: 'Buddy and room drawer' })).not.toBeInTheDocument();
     setComposerText(screen.getByLabelText('Message thread'), 'Synthetic thread draft');
-    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search message history' }));
     assertSinglePanel();
     expect(screen.queryByRole('complementary', { name: 'Thread' })).not.toBeInTheDocument();
-    fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), { target: { value: 'Encryption' } });
+    fireEvent.change(screen.getByPlaceholderText('Find a message'), { target: { value: 'Encryption' } });
     expect(screen.getByRole('region', { name: 'Messages' })).toHaveTextContent('carefully polishes');
     fireEvent.click(screen.getByRole('button', { name: 'Toggle room details' }));
     assertSinglePanel();
@@ -204,8 +204,8 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     expect(screen.getByLabelText('Message thread')).toHaveTextContent('Synthetic thread draft');
     expect(composer).toHaveTextContent('Synthetic room draft');
-    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
-    expect(screen.getByPlaceholderText('Search loaded messages')).toHaveValue('Encryption');
+    fireEvent.click(screen.getByRole('button', { name: 'Search message history' }));
+    expect(screen.getByPlaceholderText('Find a message')).toHaveValue('Encryption');
     fireEvent.click(screen.getByRole('button', { name: 'Close message search' }));
     await waitFor(() => expect(container.querySelector('.context-panel')).not.toBeVisible());
     expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
@@ -896,14 +896,14 @@ describe('Workspace demo', () => {
 
   it('clears loaded-message search before positioning a newly selected room', () => {
     renderWorkspace();
-    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
-    fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), {
+    fireEvent.click(screen.getByRole('button', { name: 'Search message history' }));
+    fireEvent.change(screen.getByPlaceholderText('Find a message'), {
       target: { value: 'not in Mara' },
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
 
-    expect(screen.getByPlaceholderText('Search loaded messages')).not.toBeVisible();
+    expect(screen.getByPlaceholderText('Find a message')).not.toBeVisible();
     expect(screen.getByRole('separator', { name: '2 unread messages below' })).toBeInTheDocument();
   });
 
@@ -1733,9 +1733,9 @@ describe('Workspace history navigation', () => {
     const onOpenEventContext = vi.fn().mockReturnValue(pending.promise);
     const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead, onOpenEventContext });
     await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
-    const search = screen.getByRole('complementary', { name: 'Search loaded messages' });
-    fireEvent.change(within(search).getByPlaceholderText('Search loaded messages'), { target: { value: 'The goal' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search message history' }));
+    const search = screen.getByRole('complementary', { name: 'Message search' });
+    fireEvent.change(within(search).getByPlaceholderText('Find a message'), { target: { value: 'The goal' } });
     const updated = structuredClone(workspace);
     updated.messagesByRoom.welcome.push({ ...updated.messagesByRoom.welcome[0], id: 'synthetic-search-hidden-arrival', body: 'Synthetic unseen search arrival' });
     updated.historyByRoom!.welcome.revision++;
@@ -1896,9 +1896,9 @@ describe('Workspace history navigation', () => {
     const context = structuredClone(workspace);
     context.historyByRoom!.welcome = { ...context.historyByRoom!.welcome, mode: 'context', revision: 2, targetEventId: 'm2', targetStatus: 'found' };
     rerenderWorkspace(context);
-    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
-    expect(screen.getByRole('complementary', { name: 'Search loaded messages' })).toBeVisible();
-    fireEvent.keyDown(screen.getByPlaceholderText('Search loaded messages'), { key: 'Escape' });
+    fireEvent.click(screen.getByRole('button', { name: 'Search message history' }));
+    expect(screen.getByRole('complementary', { name: 'Message search' })).toBeVisible();
+    fireEvent.keyDown(screen.getByPlaceholderText('Find a message'), { key: 'Escape' });
     await waitFor(() => expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible());
     expect(onOpenEventContext).toHaveBeenCalledTimes(1);
   });
@@ -2032,8 +2032,8 @@ describe('Workspace history navigation', () => {
     const onMarkRoomRead = vi.fn().mockResolvedValue(undefined);
     const { rerenderWorkspace } = renderWorkspace({ workspace, onMarkRoomRead });
     await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledTimes(1));
-    fireEvent.click(screen.getByRole('button', { name: 'Search loaded messages' }));
-    fireEvent.change(screen.getByPlaceholderText('Search loaded messages'), { target: { value: 'Encryption' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search message history' }));
+    fireEvent.change(screen.getByPlaceholderText('Find a message'), { target: { value: 'Encryption' } });
     const updated = structuredClone(workspace);
     updated.messagesByRoom.welcome.push({ ...updated.messagesByRoom.welcome[0], id: 'later', body: 'Encryption update' });
     updated.historyByRoom!.welcome.revision += 1;

@@ -11,6 +11,10 @@ import { parseMatrixLink, type MatrixNavigationTarget } from '../../matrix/matri
 import type { VolatileDrafts } from './volatileDrafts';
 import type { MessageDeliveryActions } from './MessageDeliveryStatus';
 import { TimelineMessage } from './TimelineMessage';
+import { HistorySearchPanel } from './HistorySearchPanel';
+import { SavedMessagesDialog } from './SavedMessagesDialog';
+import type { HistorySearchFilters, HistorySearchPage } from '../../matrix/historySearch';
+import { changeSavedReference, type SavedReference } from '../../matrix/savedReferences';
 import { type LinkPreview } from './MessageContent';
 import { SharedComposer, type SharedComposerHandle } from './SharedComposer';
 import { AttachmentTray } from './AttachmentTray';
@@ -30,6 +34,7 @@ import {
   ArrowRight,
   Star,
   ArrowUp,
+  Bookmark,
   Check,
   ChevronDown,
   ChevronRight,
@@ -45,6 +50,7 @@ import {
   Paintbrush,
   PanelRight,
   Phone,
+  Pin,
   Plus,
   Search,
   Settings,
@@ -205,6 +211,9 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
   onJoinRoom?: (roomIdOrAlias: string) => Promise<void>;
   onSearchPublicRooms?: (query: string) => Promise<PublicRoomChoice[]>;
+  onSearchHistory?: (filters: HistorySearchFilters, nextBatch?: string, signal?: AbortSignal) => Promise<HistorySearchPage>;
+  onLoadSavedReferences?: () => SavedReference[];
+  onToggleSavedReference?: (roomId: string, eventId: string, save: boolean) => Promise<SavedReference[]>;
   onCreateDirectRoom?: (userId: string) => Promise<string>;
   onCreateRoom?: (options: {
     name: string;
@@ -1307,6 +1316,8 @@ type ComposerSubmitResult = 'sent' | 'edited' | 'retained' | false;
 
 function Conversation({
   threadAttentionActions,
+  searchRooms, searchLoadedMessages, onSearchHistory, onOpenSearchResult,
+  savedReferences, onToggleSave,
   contextHost, contextPanel, conversationVisible, contextWidth, contextMaximum, onContextResize, onSearch, onCloseContext, onRevealConversation,
   room,
   history,
@@ -1373,6 +1384,12 @@ function Conversation({
   onSendNudge,
 }: {
   threadAttentionActions?: ThreadAttentionActions;
+  searchRooms: RoomSummary[];
+  searchLoadedMessages: MessageSummary[];
+  onSearchHistory?: (filters: HistorySearchFilters, nextBatch?: string, signal?: AbortSignal) => Promise<HistorySearchPage>;
+  onOpenSearchResult: (roomId: string, eventId: string) => Promise<void>;
+  savedReferences: SavedReference[];
+  onToggleSave: (message: MessageSummary) => Promise<void>;
   contextHost: HTMLDivElement | null;
   contextPanel: 'thread' | 'details' | 'search' | null;
   conversationVisible: boolean;
@@ -1522,7 +1539,6 @@ function Conversation({
     });
   }, []);
   const searchOpen = contextPanel === 'search';
-  const [messageQuery, setMessageQuery] = useState('');
   useEffect(() => {
     if (!room?.id || window.matchMedia?.('(max-width: 767px)').matches) return;
     const frame = requestAnimationFrame(() => {
@@ -1557,11 +1573,6 @@ function Conversation({
     ? ({ '--room-backdrop-image': `url("${roomBackgroundSource}")` } as CSSProperties)
     : undefined;
   const visibleMessages = messages;
-  const searchResults = messageQuery.trim()
-    ? messages.filter((message) =>
-        `${message.senderName} ${message.body}`.toLowerCase().includes(messageQuery.trim().toLowerCase()),
-      )
-    : messages;
   const daySeparators = useMemo(() => new Map(
     deriveTimelineDaySeparators(messages).map((separator) => [
       messages[separator.beforeIndex]?.id,
@@ -1580,7 +1591,6 @@ function Conversation({
       roomId: room?.id,
       marker: resolveEntryUnreadMarker(room, messages),
     });
-    if (messageQuery) setMessageQuery('');
   } else if (
     entryUnreadState.marker &&
     (!entryUnreadState.marker.firstUnreadMessageId || !entryUnreadState.marker.resolvedFromReceipt)
@@ -2096,7 +2106,7 @@ function Conversation({
         <div className="conversation-header__actions">
           {onToggleFavorite ? <button className="icon-button" type="button" aria-label={room.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={Boolean(room.favorite)} aria-disabled={favoritePending || undefined} onClick={() => { if (!favoritePending) onToggleFavorite(); }}><Star size={17} fill={room.favorite ? 'currentColor' : 'none'} /></button> : null}
           {onMarkUnread || onMarkRead ? <button ref={readActionsTrigger} className="icon-button" type="button" aria-label="Read status" aria-haspopup="dialog" aria-expanded={readActionsRoom === room.id} onClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setReadPopoverTop(Math.max(12, Math.min(bounds.bottom + 8, window.innerHeight - 240))); setReadPopoverRight(Math.max(12, Math.min(window.innerWidth - bounds.right, window.innerWidth - 344))); setReadActionsRoom((current) => current === room.id ? undefined : room.id); }}><Check size={17} /></button> : null}
-          <IconButton label="Search loaded messages" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
+          <IconButton label="Search message history" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
           {room.encrypted ? <span className="encrypted-pill"><ShieldCheck size={13} /> Encrypted</span> : null}
           {callsEnabled && room.kind === 'direct' ? (
             <span className="header-call-actions">
@@ -2203,6 +2213,8 @@ function Conversation({
                   onRetryMessage={onRetryMessage}
                   onCancelMessage={onCancelMessage}
                   onPin={onTogglePin}
+                  onSave={onToggleSave}
+                  saved={savedReferences.some((item) => item.roomId === message.roomId && item.eventId === message.id)}
                   canPin={Boolean(room.canManage)}
                   onReact={onReact}
                   emojiCatalog={emojiCatalog}
@@ -2218,7 +2230,7 @@ function Conversation({
               </Fragment>
             ))
           ) : (
-            <div className="timeline-empty"><Sparkles size={20} /> {messageQuery ? 'No loaded messages match.' : 'No messages here yet.'}</div>
+            <div className="timeline-empty"><Sparkles size={20} /> No messages here yet.</div>
           )}
           {history && onLoadMore && (history.canLoadNewer || historicalWindow) ? <div className="history-edge">{history.canLoadNewer ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void requestHistory('forward')}>Load newer messages</button> : !historyLoading ? <p>End of available history. Jump to latest to follow new messages.</p> : null}</div> : null}
         </div>
@@ -2256,7 +2268,7 @@ function Conversation({
             <div className="thread-panel__root">
               {threadRoot && activeThread.rootStatus !== 'removed' ? <TimelineMessage message={threadRoot} hideThreadControls dataSaver={dataSaver} autoplayMedia={autoplayMedia}
                 onReply={(message) => onStartReply(message, activeThread.rootId)} onOpenThread={onOpenThread} onStartThread={onStartThread} onEdit={startThreadEdit} onDelete={onDeleteMessage}
-                onRetryMessage={onRetryMessage} onCancelMessage={onCancelMessage} onPin={onTogglePin} canPin={Boolean(room.canManage)} onReact={onReact}
+                onRetryMessage={onRetryMessage} onCancelMessage={onCancelMessage} onPin={onTogglePin} onSave={onToggleSave} saved={savedReferences.some((item) => item.roomId === threadRoot.roomId && item.eventId === threadRoot.id)} canPin={Boolean(room.canManage)} onReact={onReact}
                 emojiCatalog={emojiCatalog} recentEmojis={recentEmojis} onLoadEmojiCatalog={loadEmojiCatalog} onEmojiUsed={rememberEmoji}
                 onMediaLoad={restoreThread} onJumpToEvent={onThreadContext} onLoadLinkPreview={onLoadLinkPreview} /> : <p role="status">{activeThread.rootStatus === 'removed' ? 'The original message was removed. Replies are still available.' : activeThread.rootStatus === 'unavailable' ? 'The original message is unavailable. Check your access and connection.' : 'Loading the original message…'}</p>}
             </div>
@@ -2278,6 +2290,8 @@ function Conversation({
                   onRetryMessage={onRetryMessage}
                   onCancelMessage={onCancelMessage}
                 onPin={onTogglePin}
+                onSave={onToggleSave}
+                saved={savedReferences.some((item) => item.roomId === message.roomId && item.eventId === message.id)}
                 canPin={Boolean(room?.canManage)}
                 onReact={onReact}
                 emojiCatalog={emojiCatalog}
@@ -2315,12 +2329,7 @@ function Conversation({
         <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Thread</strong><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></header>
         <p className="search-scope" role="status">This thread is no longer in the loaded conversation. Return to the conversation to find its available context. Your draft is kept for this session.</p>
       </aside>, contextHost) : null}
-      {contextHost ? createPortal(<aside hidden={!searchOpen} inert={!searchOpen} className="search-panel" aria-label="Search loaded messages">
-        <header className="thread-panel__header"><strong tabIndex={-1} data-panel-heading>Search loaded messages</strong><button type="button" aria-label="Close message search" onClick={onCloseContext}><X size={16} /></button></header>
-        <label className="message-search"><Search size={15} /><span className="sr-only">Search loaded messages</span><input value={messageQuery} placeholder="Search loaded messages" onChange={(event) => setMessageQuery(event.target.value)} /></label>
-        <p className="search-scope">Search covers messages loaded in this conversation.</p>
-        <div className="search-results">{messageQuery.trim() ? <><p role="status">{searchResults.length} found</p>{searchResults.map((message) => <button key={message.id} type="button" onClick={() => void openContext(message.id)}><strong>{message.senderName}</strong><span>{message.body}</span></button>)}</> : <p>Enter a name or phrase to find a message.</p>}</div>
-      </aside>, contextHost) : null}
+      {contextHost ? createPortal(<HistorySearchPanel key={room?.id} open={searchOpen} rooms={searchRooms} loadedMessages={searchLoadedMessages} initialRoomId={room?.id} onSearch={onSearchHistory} onOpen={(roomId, eventId) => roomId === room?.id ? openContext(eventId) : onOpenSearchResult(roomId, eventId)} onClose={onCloseContext} />, contextHost) : null}
       {activeThread && threadCollapsed ? <button className="thread-panel__restore" type="button" aria-label="Expand thread" onClick={onToggleThreadCollapsed}><MessageCircle size={16} /> Thread</button> : null}
 
       <div className="typing-strip" aria-live="polite">
@@ -2345,9 +2354,10 @@ function Conversation({
   );
 }
 
-function MomentPreview({ message }: { message: MessageSummary }) {
+function MomentPreview({ message, dataSaver }: { message: MessageSummary; dataSaver: boolean }) {
+  const [allowed, setAllowed] = useState(false);
   const source = useMediaSource(
-    message.mediaUrl,
+    dataSaver && !allowed ? undefined : message.mediaUrl,
     220,
     message.encryptedFile,
     message.mimeType,
@@ -2355,6 +2365,7 @@ function MomentPreview({ message }: { message: MessageSummary }) {
   if (source && (message.mediaKind === 'image' || message.kind === 'sticker')) {
     return <img src={source} alt={message.body} loading="lazy" />;
   }
+  if (dataSaver && !allowed && message.mediaUrl) return <button type="button" className="aqua-button" onClick={() => setAllowed(true)}>Load preview</button>;
   return <Images size={22} />;
 }
 
@@ -2595,6 +2606,9 @@ function DetailsPanel({
   onRemoveMember,
   onSetMemberPower,
   onLeave,
+  onOpenEvent,
+  onLoadOlder,
+  canLoadOlder,
 }: {
   workspace: WorkspaceSnapshot;
   room?: RoomSummary;
@@ -2611,11 +2625,15 @@ function DetailsPanel({
   onRemoveMember?: (roomId: string, userId: string, action: 'kick' | 'ban' | 'unban') => Promise<void>;
   onSetMemberPower?: (roomId: string, userId: string, level: number) => Promise<void>;
   onLeave?: (roomId: string) => Promise<void>;
+  onOpenEvent?: (eventId: string) => Promise<void>;
+  onLoadOlder?: () => Promise<void>;
+  canLoadOlder?: boolean;
 }) {
   const [confirmation, setConfirmation] = useState<{ title: string; description: string; label: string; action: () => Promise<void> }>();
   const [actionBusy, setActionBusy] = useState(false);
   const actionRunning = useRef(false);
   const [tab, setTab] = useState<'people' | 'moments' | 'about' | 'backdrop' | 'settings'>('people');
+  const [collection, setCollection] = useState<'pins' | 'media' | 'links'>('media');
   const [copied, setCopied] = useState(false);
   const [invitee, setInvitee] = useState('');
   const [roomName, setRoomName] = useState(room?.name ?? '');
@@ -2623,10 +2641,9 @@ function DetailsPanel({
   const [actionStatus, setActionStatus] = useState<string>();
   const members = room ? workspace.membersByRoom[room.id] ?? [] : [];
   const messages = room ? workspace.messagesByRoom[room.id] ?? [] : [];
-  const mediaMessages = messages
-    .filter((message) => message.kind === 'media' || message.kind === 'sticker')
-    .slice(-6)
-    .reverse();
+  const mediaMessages = messages.filter((message) => message.kind === 'media' || message.kind === 'sticker').slice().reverse();
+  const linkMessages = messages.filter((message) => /https?:\/\/\S+/i.test(message.body) && !message.pending).slice().reverse();
+  const collectionMessages = collection === 'media' ? mediaMessages : linkMessages;
   const presenceOrder = { online: 0, away: 1, busy: 2, offline: 3 } as const;
   const sortedMembers = members
     .slice()
@@ -2712,7 +2729,7 @@ function DetailsPanel({
               aria-selected={tab === 'moments'} tabIndex={tab === 'moments' ? 0 : -1} id="drawer-tab-moments" aria-controls="drawer-active-panel"
               className={tab === 'moments' ? 'is-active' : ''}
               onClick={() => setTab('moments')}
-            ><Images size={14} /> Moments</button>
+            ><Images size={14} /> Collections</button>
             <button
               type="button"
               role="tab"
@@ -2773,19 +2790,20 @@ function DetailsPanel({
 
           {tab === 'moments' ? (
             <div role="tabpanel" id="drawer-active-panel" aria-labelledby="drawer-tab-moments" className="drawer-tab-panel drawer-moments">
-              <span className="eyebrow">Recent shared media</span>
-              {mediaMessages.length ? mediaMessages.map((message) => (
-                <div className="drawer-moment" key={message.transactionId ?? message.id}>
-                  <MomentPreview message={message} />
-                  <span><strong>{message.body}</strong><small>shared by {message.senderName}</small></span>
+              <div className="collection-tabs" role="group" aria-label="Room collections">
+                {(['pins', 'media', 'links'] as const).map((item) => <button type="button" key={item} className="aqua-button" aria-pressed={collection === item} onClick={() => setCollection(item)}>{item === 'pins' ? 'Pins' : item === 'media' ? 'Files & media' : 'Links'}</button>)}
+              </div>
+              <p className="search-scope">{collection === 'pins' ? 'Shared pins reflect current Matrix room state. Older pinned messages open in their original context.' : `Showing ${collection === 'media' ? 'files and media' : 'links'} in the loaded conversation window. Loading older history moves the conversation window and may replace these results; return to latest to see recent items again.`}</p>
+              {collection === 'pins' ? (room.pinnedEventIds?.length ? [...room.pinnedEventIds].reverse().map((eventId) => {
+                const message = messages.find((entry) => entry.id === eventId);
+                return <button type="button" className="drawer-collection-item" key={eventId} disabled={!onOpenEvent} onClick={() => void onOpenEvent?.(eventId)}><Pin size={16} /><span><strong>{message?.body ?? 'Pinned message outside loaded history'}</strong><small>{message ? `shared by ${message.senderName}` : 'Open original context'}</small></span></button>;
+              }) : <p className="drawer-empty">No shared pins in this room.</p>) : collectionMessages.length ? collectionMessages.map((message) => (
+                <div className="drawer-collection-item" key={message.transactionId ?? message.id}>
+                  {collection === 'media' ? <MomentPreview message={message} dataSaver={dataSaver} /> : <Search size={16} />}
+                  <button type="button" disabled={!onOpenEvent || !message.id.startsWith('$')} onClick={() => void onOpenEvent?.(message.id)}><strong>{message.body}</strong><small>shared by {message.senderName}</small></button>
                 </div>
-              )) : (
-                <div className="drawer-empty drawer-empty--illustrated">
-                  <span>◫</span>
-                  <strong>No moments yet</strong>
-                  <p>Pictures, stickers, and shared files will collect here.</p>
-                </div>
-              )}
+              )) : <p className="drawer-empty">No {collection === 'media' ? 'files or media' : 'links'} in loaded messages.</p>}
+              {collection !== 'pins' && canLoadOlder && onLoadOlder ? <button type="button" className="aqua-button" disabled={actionBusy} onClick={() => void runRoomAction('Load older history', onLoadOlder)}>Load older history</button> : null}
             </div>
           ) : null}
 
@@ -2904,6 +2922,9 @@ export function Workspace({
   onMarkRoomUnread,
   onJoinRoom,
   onSearchPublicRooms,
+  onSearchHistory,
+  onLoadSavedReferences,
+  onToggleSavedReference,
   onCreateDirectRoom,
   onCreateRoom,
   onRejectInvite,
@@ -2953,6 +2974,10 @@ export function Workspace({
   const updateHomePosition = useCallback((patch: Partial<HomePosition>) => setHomePosition((current) => ({ ...current, ...patch })), []);
   const [query, setQuery] = useState('');
   const [navigationDialog, setNavigationDialog] = useState<'switcher' | 'link' | 'help'>();
+  const [savedListOpen, setSavedListOpen] = useState(false);
+  const [demoSavedReferences, setDemoSavedReferences] = useState<SavedReference[]>([]);
+  const [, refreshSavedReferences] = useState(0);
+  const savedReferences = workspace.mode === 'matrix' ? onLoadSavedReferences?.() ?? [] : demoSavedReferences;
   const [conversationFilter, setConversationFilter] = useState<'all' | 'unread' | 'favorites'>('all');
   const [recents, setRecents] = useState<string[]>([]);
   const [favoritePending, setFavoritePending] = useState<Set<string>>(() => new Set());
@@ -3715,6 +3740,16 @@ export function Workspace({
     } else setDemoMessageOverrides((current) => ({ ...current, [message.id]: { ...current[message.id], pinned: !message.pinned } }));
   }, [workspace.mode, onTogglePinnedMessage]);
 
+  const changeSaved = async (roomId: string, eventId: string, save: boolean) => {
+    if (workspace.mode === 'matrix') {
+      if (!onToggleSavedReference) throw new Error('Saved messages are unavailable.');
+      await onToggleSavedReference(roomId, eventId, save);
+      refreshSavedReferences((revision) => revision + 1);
+    } else setDemoSavedReferences((current) => changeSavedReference(current, roomId, eventId, save));
+  };
+  const handleToggleSave = (message: MessageSummary) => changeSaved(message.roomId, message.id,
+    !savedReferences.some((item) => item.roomId === message.roomId && item.eventId === message.id));
+
   const handleDeleteMessage = useCallback((message: MessageSummary) => { setDeleteTarget(message); }, []);
 
   const handleReact = useCallback(async (message: MessageSummary, key: string, ownReactionEventId?: string) => {
@@ -3879,6 +3914,7 @@ export function Workspace({
           navigateShell({ spaceId: space?.id ?? activeSpace, roomId: context.roomId, surface: 'context', panel: 'thread', threadRootId: context.threadRootId });
         }
       }} /> : null}
+      {savedListOpen ? <SavedMessagesDialog items={savedReferences} rooms={workspace.rooms} onClose={() => setSavedListOpen(false)} onOpen={(roomId, eventId) => openMatrixTarget({ roomId, eventId })} onRemove={(roomId, eventId) => changeSaved(roomId, eventId, false)} /> : null}
       {navigationDialog === 'switcher' ? <QuickSwitcher workspace={{ ...workspace, rooms: workspace.rooms.map((room) => ({ ...room, ...roomOverrides[room.id] })) }} recents={recents} onSelect={chooseDestination} onClose={() => setNavigationDialog(undefined)}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, padding: 12 }}>
           <button className="aqua-button" style={{ minHeight: 44 }} type="button" disabled={!canGoBack} onClick={() => { setNavigationDialog(undefined); shellBack(); }}><ArrowLeft size={14} /> Back</button>
@@ -3893,6 +3929,7 @@ export function Workspace({
         <header className="app-titlebar">
           <button className="icon-button" type="button" aria-label="Home activity" title="Home activity" style={{ minWidth: 44, minHeight: 44 }} onClick={() => { setPanelCollapsed('conversation', false); navigateShell({ surface: 'activity', panel: null, spaceId: workspace.spaces.find((space) => space.kind === 'home')?.id, roomId: selectedRoomId }); }}><Sparkles size={18} /></button>
           <button className="icon-button" type="button" aria-label="Quick switcher" title="Quick switcher" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setNavigationDialog('switcher')}><Search size={18} /></button>
+          <button className="icon-button" type="button" aria-label="Saved messages" title="Saved messages" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setSavedListOpen(true)}><Bookmark size={18} /></button>
           <div className="app-titlebar__identity">
             <BrandMark compact />
             <strong>{config.brandName}</strong>
@@ -3960,6 +3997,12 @@ export function Workspace({
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(buddyWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', buddyWidth - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', buddyWidth + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           {showingHome ? <Suspense fallback={<main style={{ gridColumn: '5 / span 3' }} role="status">Loading Home…</main>}><HomeActivity workspace={workspace} activity={workspace.activity} actions={activityActions} position={homePosition} onPosition={updateHomePosition} onOpen={openMatrixTarget} onBack={shellBack} onBrowse={() => navigateShell({ ...shellRoute, surface: 'list', panel: null })} onSettings={() => setSettingsOpen(true)} onDrafts={() => setDraftListOpen(true)} draftCount={draftsState.list.length} onMarkRead={onMarkRoomRead ? (roomId) => onMarkRoomRead(roomId, { explicit: true }) : undefined} /></Suspense> : <Conversation
             threadAttentionActions={threadAttentionActions}
+            searchRooms={workspace.rooms}
+            searchLoadedMessages={Object.values(workspace.messagesByRoom).flat()}
+            onSearchHistory={onSearchHistory}
+            onOpenSearchResult={(roomId, eventId) => openMatrixTarget({ roomId, eventId })}
+            savedReferences={savedReferences}
+            onToggleSave={handleToggleSave}
             contextHost={contextHost}
             contextPanel={contextPanel}
             conversationVisible={conversationVisible && (!contextDocked || !collapsedPanels.conversation)}
@@ -4093,6 +4136,9 @@ export function Workspace({
               onRemoveMember={onRemoveRoomMember}
               onSetMemberPower={setMemberPower}
               onLeave={onLeaveRoom}
+              onOpenEvent={selectedRoomConfigured ? (eventId) => openMatrixTarget({ roomId: selectedRoomConfigured.id, eventId }) : undefined}
+              onLoadOlder={onLoadRoomHistory ? () => paginateCurrentRoom('backward') : undefined}
+              canLoadOlder={Boolean(selectedHistory?.canLoadOlder)}
             />
             </div>
           </div>

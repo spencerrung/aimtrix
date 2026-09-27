@@ -12,6 +12,8 @@ Step 04 deliverable: [accessible interaction foundations](accessible-interaction
 
 Steps 12–14 delivery: [shared room/thread messaging](room-thread-messaging.md) and [private local drafts](draft-storage.md), covering safe rich content/actions, durable composition and staged encrypted files in one coherent batch. Validation evidence is recorded with the delivery MR.
 
+Steps 16–17 are implemented for review: [collections and history retrieval](collections-history-retrieval.md) records the metadata and search contracts, browser evidence, and remaining live Matrix acceptance. The issues stay open until that evidence is complete.
+
 Step 10 deliverable: [quick navigation](quick-navigation.md), covering keyboard/touch switching, standard favorites, unread filters, Matrix links, and Back/Forward reading positions. Native device and broader directory/search boundaries remain explicit.
 
 ## Product goal

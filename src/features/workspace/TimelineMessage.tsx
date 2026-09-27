@@ -27,6 +27,8 @@ export const TimelineMessage = memo(function TimelineMessage({
   onRetryMessage,
   onCancelMessage,
   onPin,
+  onSave,
+  saved,
   canPin,
   onReact,
   emojiCatalog,
@@ -51,6 +53,8 @@ export const TimelineMessage = memo(function TimelineMessage({
   onRetryMessage?: MessageDeliveryActions['onRetryMessage'];
   onCancelMessage?: MessageDeliveryActions['onCancelMessage'];
   onPin: (message: MessageSummary) => void | Promise<void>;
+  onSave?: (message: MessageSummary) => void | Promise<void>;
+  saved?: boolean;
   canPin: boolean;
   onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void | Promise<void>;
   emojiCatalog: EmojiPackEntry[];
@@ -209,7 +213,7 @@ export const TimelineMessage = memo(function TimelineMessage({
         ) : null}
       </div>
       <MessageActions key={message.id} message={message} onReply={onReply} onOpenThread={onOpenThread} onStartThread={onStartThread}
-        onEdit={onEdit} onDelete={onDelete} onPin={onPin} canPin={canPin} onMarkUnread={onMarkUnread}
+        onEdit={onEdit} onDelete={onDelete} onPin={onPin} onSave={onSave} saved={saved} canPin={canPin} onMarkUnread={onMarkUnread}
         hideThreadControls={hideThreadControls} reactionTrigger={reactionTrigger} reactionPickerOpen={reactionPickerOpen}
         onOpenReaction={() => { setReactionPickerOpen((open) => !open); if (!reactionPickerOpen) onLoadEmojiCatalog(); }} />
         {reactionPickerOpen ? createPortal(<Popover surfaceRef={reactionPicker} trigger={reactionTrigger} onClose={() => setReactionPickerOpen(false)} className="reaction-picker emoji-tray" label="Choose a reaction" style={{ top: reactionPickerPosition.top, left: reactionPickerPosition.left }}>

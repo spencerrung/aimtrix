@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
-import { Copy, Link, MessageCircle, MoreHorizontal, Pencil, Pin, Reply, SmilePlus, Trash2, Mail } from 'lucide-react';
+import { Bookmark, Copy, Link, MessageCircle, MoreHorizontal, Pencil, Pin, Reply, SmilePlus, Trash2, Mail } from 'lucide-react';
 import { Popover } from '../../components/Popover';
 import type { MessageSummary } from '../../matrix/viewModels';
 import { copyMessageText } from './messageClipboard';
@@ -14,6 +14,8 @@ export interface MessageActionsProps {
   onEdit?: Action;
   onDelete?: Action;
   onPin?: Action;
+  onSave?: Action;
+  saved?: boolean;
   onMarkUnread?: Action;
   canPin?: boolean;
   hideThreadControls?: boolean;
@@ -23,7 +25,7 @@ export interface MessageActionsProps {
 }
 
 /** All mutation feedback stays alongside the message, including mobile threads. */
-export function MessageActions({ message, onReply, onOpenThread, onStartThread, onEdit, onDelete, onPin, onMarkUnread, canPin = false, hideThreadControls = false, onOpenReaction, reactionTrigger, reactionPickerOpen }: MessageActionsProps) {
+export function MessageActions({ message, onReply, onOpenThread, onStartThread, onEdit, onDelete, onPin, onSave, saved = false, onMarkUnread, canPin = false, hideThreadControls = false, onOpenReaction, reactionTrigger, reactionPickerOpen }: MessageActionsProps) {
   const [open, setOpen] = useState(false);
   const [position, setPosition] = useState({ top: 0, left: 0 });
   const [pending, setPending] = useState<string>();
@@ -85,6 +87,7 @@ export function MessageActions({ message, onReply, onOpenThread, onStartThread, 
     {open ? createPortal(<Popover menu trigger={trigger} surfaceRef={menu} label="Message actions" className="message-action-menu" style={position} onClose={() => setOpen(false)}>
       <button type="button" role="menuitem" onClick={() => run('Copy text', copy(message.body), 'Message text copied.')}><Copy size={15} /> Copy text</button>
       {message.roomId.startsWith('!') && message.id.startsWith('$') ? <button type="button" role="menuitem" onClick={() => run('Copy message link', copy(`https://matrix.to/#/${encodeURIComponent(message.roomId)}/${encodeURIComponent(message.id)}`), 'Message link copied.')}><Link size={15} /> Copy message link</button> : null}
+      {onSave && (!message.roomId.startsWith('!') || message.id.startsWith('$')) ? <button type="button" role="menuitem" onClick={() => run(saved ? 'Remove saved message' : 'Save message', () => onSave(message), saved ? 'Removed from saved messages.' : 'Message saved.')}><Bookmark size={15} /> {saved ? 'Remove saved message' : 'Save message'}</button> : null}
       {actions.map(({ label, icon: Icon, action }) => <button key={label} type="button" role="menuitem" onClick={() => run(label, action)}><Icon size={15} /> {label}</button>)}
       {canReact ? <button type="button" role="menuitem" onClick={() => { setOpen(false); requestAnimationFrame(() => onOpenReaction?.()); }}><SmilePlus size={15} /> Add reaction</button> : null}
       {onMarkUnread ? <button type="button" role="menuitem" onClick={() => run('Mark unread', () => onMarkUnread(message), 'Conversation marked unread.')}><Mail size={15} /> Mark unread</button> : null}

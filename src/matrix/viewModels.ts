@@ -72,6 +72,7 @@ export interface RoomSummary {
   encrypted: boolean;
   topic?: string;
   canManage?: boolean;
+  pinnedEventIds?: string[];
   ownPowerLevel?: number;
   typingUsers?: string[];
   muted?: boolean;

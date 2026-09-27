@@ -415,9 +415,9 @@ test('loaded message search opens results without filtering the conversation', a
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
-  await page.getByRole('button', { name: 'Search loaded messages' }).click();
-  await page.getByPlaceholder('Search loaded messages').fill('2006');
-  const results = page.getByRole('complementary', { name: 'Search loaded messages' });
+  await page.getByRole('button', { name: 'Search message history' }).click();
+  await page.getByPlaceholder('Find a message').fill('2006');
+  const results = page.getByRole('complementary', { name: 'Message search' });
   await expect(results.getByText('The goal: 2006 in spirit, 2026 where it matters.')).toBeVisible();
   await expect(results.getByText("Okay, this already feels like the chat app we should've had all along.")).toHaveCount(0);
   await results.getByRole('button', { name: /The goal: 2006/ }).click();
