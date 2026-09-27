@@ -63,6 +63,39 @@ jobs:
       - name: Push privacy proofs
         run: npm run proof:push && npm run proof:push-sw
 
+  browser-compat:
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [firefox, webkit]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build static client
+        run: npm run build
+      - name: Install browser
+        run: npx playwright install --with-deps ${{ matrix.browser }}
+      - name: Browser compatibility and accessibility
+        run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-compat-${{ matrix.browser }}-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   mobile-shell:
     runs-on: ubuntu-latest
     steps:

@@ -10,7 +10,7 @@ This is the repeatable acceptance plan for the hosted Aimtrix PWA and native cli
 
 | Owner | Responsibility | Required evidence |
 | --- | --- | --- |
-| CI | Run lint, unit tests, production build, Chromium desktop/mobile tests, accessibility checks, and push privacy proofs | GitHub Actions run URL and failing test artifact |
+| CI | Run lint, unit tests, production build, Chromium desktop/mobile tests, Firefox and WebKit compatibility projects, accessibility checks, and push privacy proofs | GitHub Actions run URL and failing test artifact |
 | Aimtrix maintainer | Triage client behavior, update the matrix, and rerun after relevant code or dependency changes | PR link, test output, screenshot/trace for visual failures |
 | Release operator | Run the live Matrix, homeserver, gateway, and provider checks with disposable accounts | Date, app/browser/OS versions, homeserver/gateway build, redacted logs |
 | Device tester | Run hardware-only install, safe-area, keyboard, media, restart, and notification checks | Device model, OS version, browser version, screen recording or checklist notes |
@@ -24,9 +24,9 @@ The minimum targets are intentionally conservative. “Supported” means the ho
 | Linux Chromium | Chromium 120+ | Browser install prompt; standalone launch; restart retains local session and preferences | Foreground notifications in CI; live Web Push only with configured gateway/VAPID deployment | Camera/mic permission, keyboard navigation, reduced motion, offline banner, restart persistence | CI desktop project + manual smoke |
 | Windows Chrome / Edge | Chrome or Edge 120+ | Install prompt and standalone window in each browser; verify taskbar launch | Foreground behavior in CI; run provider delivery manually | Camera/mic, focus-visible controls, keyboard shortcuts, offline/reconnect, restart | CI desktop project + Windows manual run |
 | macOS Chromium | Chrome 120+ | Install prompt and standalone window | Foreground behavior in CI; run provider delivery manually | Media permissions, keyboard, restart, safe-area regression check | CI desktop project + macOS manual run |
-| macOS Safari | Safari 17+ | Browser mode is supported; no Chromium install prompt; use Share → Add to Dock/Home Screen fallback where available | Browser-mode notifications are not treated as closed-app delivery; installed-web-app push must be tested separately | Media permission, keyboard, storage restart, backdrop/contrast, offline banner | Manual Safari checklist |
+| macOS Safari | Safari 17+ | Browser mode is supported; no Chromium install prompt; use Share → Add to Dock/Home Screen fallback where available | Browser-mode notifications are not treated as closed-app delivery; installed-web-app push must be tested separately | Media permission, keyboard, storage restart, backdrop/contrast, offline banner | CI WebKit desktop smoke plus manual Safari checklist |
 | Android Chrome | Chrome 120+ / current WebAPK | Install prompt; verify WebAPK or shortcut fallback; launch from icon after browser exit | Web Push requires permission, a configured gateway, and an installed supported target; no gateway means visible foreground-only state | Safe-area insets, virtual keyboard/composer reachability, media permission, restart/session persistence | CI mobile project + Android device checklist |
-| iOS / iPadOS Safari | iOS/iPadOS 17+ | Manual Share → Add to Home Screen; verify standalone launch and storage | Web Push is only a release claim for an installed Home Screen web app on supported OS versions, after provider proof; browser tabs are not closed-app delivery | Safe areas, keyboard/composer, camera/mic, restart/session persistence, reduced motion | Manual iOS/iPadOS checklist |
+| iOS / iPadOS Safari | iOS/iPadOS 17+ | Manual Share → Add to Home Screen; verify standalone launch and storage | Web Push is only a release claim for an installed Home Screen web app on supported OS versions, after provider proof; browser tabs are not closed-app delivery | Safe areas, keyboard/composer, camera/mic, restart/session persistence, reduced motion | CI WebKit phone emulation plus manual iOS/iPadOS checklist |
 
 ## Automated CI coverage
 
@@ -39,7 +39,7 @@ npm run proof:push-sw
 PLAYWRIGHT_PREVIEW=1 npm run test:e2e
 ```
 
-The Playwright production-preview run covers both desktop Chromium and Pixel 7 mobile emulation. The current suite covers navigation, responsive panels, messaging/local echo/editing, threads, emoji/stickers, search, profile/settings, media viewers, backdrops, focus behavior, keyboard-sized viewport resizing, narrow landscape resizing, and Axe WCAG A/AA checks. The PWA-specific suite additionally covers the browser install event fallback, explicit offline/reconnect messaging, and the update prompt's draft/encryption warning.
+The Playwright production-preview run covers both desktop Chromium and Pixel 7 mobile emulation. Separate Ubuntu CI jobs set `PLAYWRIGHT_BROWSER_SET=firefox` and `PLAYWRIGHT_BROWSER_SET=webkit` to run focused Firefox desktop and WebKit desktop/phone compatibility projects. The current Chromium suite covers navigation, responsive panels, messaging/local echo/editing, threads, emoji/stickers, search, profile/settings, media viewers, backdrops, focus behavior, keyboard-sized viewport resizing, narrow landscape resizing, and Axe WCAG A/AA checks. The compatibility suite covers sign-in, first use, modal keyboard/reduced-motion behavior, long thread layout, and touch reachability. See [dated browser evidence and manual screen-reader steps](browser-acceptance.md). The PWA-specific suite additionally covers the browser install event fallback, explicit offline/reconnect messaging, and the update prompt's draft/encryption warning.
 
 The two push proofs have deliberately different boundaries:
 

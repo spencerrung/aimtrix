@@ -351,7 +351,7 @@
   .sso-divider::before { position: absolute; right: 0; left: 0; height: 1px; content: ""; background: var(--border-soft); }
   .sso-divider span { position: relative; padding: 0 7px; background: var(--surface-soft); }
   .demo-entry { display: flex; justify-content: center; gap: 6px; padding: 15px 20px; color: var(--text-faint); font-size: 0.77rem; }
-  .login-window__footer { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 20px; color: var(--text-faint); border-top: 1px solid var(--border-soft); background: var(--surface-inset); font-size: 0.66rem; }
+  .login-window__footer { display: flex; align-items: center; justify-content: center; gap: 6px; padding: 10px 20px; color: var(--text-soft); border-top: 1px solid var(--border-soft); background: var(--surface-inset); font-size: 0.66rem; }
   .config-warning, .form-error { margin: 0 30px 12px; padding: 8px 10px; border: 1px solid #d39a39; border-radius: 5px; background: #fff4cd; color: #5f4514; font-size: 0.72rem; }
   .form-error { border-color: #cc7373; background: #fee5e5; color: #782a2a; }
   :root[data-theme="midnight"] .config-warning { background: #4b3e1f; color: #ffe6a3; }

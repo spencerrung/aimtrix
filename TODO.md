@@ -6,6 +6,8 @@ The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the order
 
 The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. Its live two-device and SSO interoperability acceptance remains open.
 
+The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
+
 The [visual reference handoff](docs/design/interaction-rules.md) records the step 02 design decisions and browser evidence. These are implementation inputs for the linked roadmap slices; the reference does not mark their production behavior complete.
 
 ## 0.1 release gate
