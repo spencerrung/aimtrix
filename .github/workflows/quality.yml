@@ -51,7 +51,7 @@ jobs:
 
       - name: Preserve browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-evidence-${{ github.run_id }}
           path: |
@@ -87,7 +87,7 @@ jobs:
         run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e
       - name: Preserve browser evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: browser-compat-${{ matrix.browser }}-${{ github.run_id }}
           path: |
