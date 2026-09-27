@@ -1,5 +1,18 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const browserSet = process.env.PLAYWRIGHT_BROWSER_SET;
+const projects = browserSet === 'firefox'
+  ? [{ name: 'firefox-desktop', use: { ...devices['Desktop Firefox'] }, testMatch: /(?:browser-compat|first-use)\.spec\.ts/ }]
+  : browserSet === 'webkit'
+    ? [
+      { name: 'webkit-desktop', use: { ...devices['Desktop Safari'] }, testMatch: /(?:browser-compat|first-use)\.spec\.ts/ },
+      { name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: /(?:browser-compat|first-use)\.spec\.ts/ },
+    ]
+    : [
+      { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
+      { name: 'mobile', use: { ...devices['Pixel 7'] } },
+    ];
+
 export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
@@ -15,10 +28,7 @@ export default defineConfig({
       ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE }
       : undefined,
   },
-  projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'] } },
-    { name: 'mobile', use: { ...devices['Pixel 7'] } },
-  ],
+  projects,
   webServer: {
     command: process.env.PLAYWRIGHT_PREVIEW
       ? 'npm run preview -- --host 127.0.0.1 --port 4173 --strictPort'
