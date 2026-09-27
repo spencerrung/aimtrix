@@ -8,11 +8,13 @@ export interface PublicRoomChoice {
   topic?: string;
   alias?: string;
   memberCount: number;
+  joinRule?: string;
 }
 
 interface RoomDialogProps {
   initialMode?: 'join' | 'direct' | 'create';
   onJoin?: (roomIdOrAlias: string) => Promise<void>;
+  onKnock?: (roomIdOrAlias: string) => Promise<void>;
   onSearch?: (query: string) => Promise<PublicRoomChoice[]>;
   onCreateDirect?: (userId: string) => Promise<string>;
   onCreate?: (options: {
@@ -26,7 +28,7 @@ interface RoomDialogProps {
   onComplete?: (message: string) => void;
 }
 
-export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDirect, onCreate, onClose, onComplete }: RoomDialogProps) {
+export function RoomDialog({ initialMode = 'join', onJoin, onKnock, onSearch, onCreateDirect, onCreate, onClose, onComplete }: RoomDialogProps) {
   const pending = useRef(false);
   const [mode, setMode] = useState<'join' | 'direct' | 'create'>(initialMode);
   const [address, setAddress] = useState('');
@@ -39,6 +41,8 @@ export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDir
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [directoryResults, setDirectoryResults] = useState<PublicRoomChoice[]>([]);
+  const [selectedRoom, setSelectedRoom] = useState<PublicRoomChoice>();
+  const requesting = mode === 'join' && (selectedRoom?.joinRule === 'knock' || selectedRoom?.joinRule === 'knock_restricted');
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -48,8 +52,9 @@ export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDir
     setError(undefined);
     try {
       if (mode === 'join') {
-        if (!address.trim() || !onJoin) return;
-        await onJoin(address.trim());
+        if (!address.trim() || !(requesting ? onKnock : onJoin)) return;
+        if (requesting) await onKnock?.(address.trim());
+        else await onJoin?.(address.trim());
       } else if (mode === 'direct') {
         if (!address.trim() || !onCreateDirect) return;
         await onCreateDirect(address.trim());
@@ -57,10 +62,10 @@ export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDir
         if (!name.trim() || !onCreate) return;
         await onCreate({ name, topic, public: isPublic, encrypted: space ? false : encrypted, space });
       }
-      onComplete?.(mode === 'join' ? 'Room joined.' : mode === 'direct' ? 'Direct chat ready.' : 'Room created.');
+      onComplete?.(mode === 'join' ? requesting ? 'Join request sent. A room moderator must accept it.' : 'Room joined.' : mode === 'direct' ? 'Direct chat ready.' : 'Room created.');
       onClose();
     } catch {
-      setError(mode === 'join' ? 'Aimtrix could not join that room.' : mode === 'direct' ? 'Aimtrix could not create that direct chat.' : 'Aimtrix could not create the room.');
+      setError(mode === 'join' ? requesting ? 'Aimtrix could not request to join that room.' : 'Aimtrix could not join that room.' : mode === 'direct' ? 'Aimtrix could not create that direct chat.' : 'Aimtrix could not create the room.');
     } finally {
       pending.current = false;
       setBusy(false);
@@ -88,16 +93,16 @@ export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDir
         <header><strong id="room-dialog-title">Add a conversation</strong><DialogClose aria-label="Close"><X size={16} /></DialogClose></header>
         <div className="room-dialog-tabs" aria-label="Conversation type">
           <button type="button" disabled={busy} aria-pressed={mode === 'join'} className={mode === 'join' ? 'is-active' : ''} onClick={() => setMode('join')}><Hash size={15} /> Join room</button>
-          <button type="button" disabled={busy} aria-pressed={mode === 'direct'} className={mode === 'direct' ? 'is-active' : ''} onClick={() => { setMode('direct'); setAddress(''); }}><MessageCircle size={15} /> Direct chat</button>
+          <button type="button" disabled={busy} aria-pressed={mode === 'direct'} className={mode === 'direct' ? 'is-active' : ''} onClick={() => { setMode('direct'); setAddress(''); setSelectedRoom(undefined); }}><MessageCircle size={15} /> Direct chat</button>
           <button type="button" disabled={busy} aria-pressed={mode === 'create'} className={mode === 'create' ? 'is-active' : ''} onClick={() => setMode('create')}><Plus size={15} /> Create room</button>
         </div>
         <form onSubmit={(event) => void submit(event)}>
           <fieldset className="interaction-fields" disabled={busy}>
           {mode === 'join' ? (
             <>
-              <label><span>Room address, ID, or directory search</span><input value={address} placeholder="#room:example.com or a public room name" onChange={(event) => { setAddress(event.target.value); setDirectoryResults([]); setSearched(false); }} data-initial-focus /></label>
+              <label><span>Room address, ID, or directory search</span><input value={address} placeholder="#room:example.com or a public room name" onChange={(event) => { setAddress(event.target.value); setSelectedRoom(undefined); setDirectoryResults([]); setSearched(false); }} data-initial-focus /></label>
               {onSearch ? <button className="aqua-button room-directory-search" type="button" disabled={busy || !address.trim()} onClick={() => void searchDirectory()}><Search size={14} /> Search public rooms</button> : null}
-              {directoryResults.length ? <div className="room-directory-results">{directoryResults.map((room) => <button type="button" key={room.roomId} onClick={() => setAddress(room.alias || room.roomId)}><span><strong>{room.name}</strong><small>{room.topic || room.alias || room.roomId}</small></span><em><Users size={12} /> {room.memberCount}</em></button>)}</div> : null}
+              {directoryResults.length ? <div className="room-directory-results">{directoryResults.map((room) => <button type="button" key={room.roomId} onClick={() => { setAddress(room.alias || room.roomId); setSelectedRoom(room); }}><span><strong>{room.name}</strong><small>{room.topic || room.alias || room.roomId}</small></span><em><Users size={12} /> {room.memberCount}{room.joinRule === 'knock' || room.joinRule === 'knock_restricted' ? ' · Request' : ''}</em></button>)}</div> : null}
             </>
           ) : mode === 'direct' ? (
             <label><span>Matrix ID</span><input value={address} placeholder="@buddy:example.com" onChange={(event) => setAddress(event.target.value)} data-initial-focus /></label>
@@ -112,9 +117,9 @@ export function RoomDialog({ initialMode = 'join', onJoin, onSearch, onCreateDir
           )}
           </fieldset>
           <p role="status">{busy ? 'Working…' : searched ? directoryResults.length ? `${directoryResults.length} public rooms found.` : 'No public rooms found. Try a different search.' : ''}</p>
-          {!(mode === 'join' ? onJoin : mode === 'direct' ? onCreateDirect : onCreate) ? <p className="settings-hint">Sign in to use this conversation action.</p> : null}
+          {!(mode === 'join' ? requesting ? onKnock : onJoin : mode === 'direct' ? onCreateDirect : onCreate) ? <p className="settings-hint">Sign in to use this conversation action.</p> : null}
           {error ? <p className="settings-error" role="alert">{error}</p> : null}
-          <button className="aqua-button aqua-button--primary" disabled={busy || !(mode === 'join' ? onJoin : mode === 'direct' ? onCreateDirect : onCreate) || (mode === 'join' || mode === 'direct' ? !address.trim() : !name.trim())}>{busy ? 'Working…' : mode === 'join' ? 'Join room' : mode === 'direct' ? 'Start direct chat' : 'Create room'}</button>
+          <button className="aqua-button aqua-button--primary" disabled={busy || !(mode === 'join' ? requesting ? onKnock : onJoin : mode === 'direct' ? onCreateDirect : onCreate) || (mode === 'join' || mode === 'direct' ? !address.trim() : !name.trim())}>{busy ? 'Working…' : mode === 'join' ? requesting ? 'Request to join' : 'Join room' : mode === 'direct' ? 'Start direct chat' : 'Create room'}</button>
         </form>
     </Dialog>
   );

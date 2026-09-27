@@ -96,6 +96,9 @@ import { mergeStickerPacks } from '../media/stickerPacks';
 import { LazyProfileDialog as ProfileDialog } from '../profile/LazyProfileDialog';
 import { BrandMark } from '../../components/BrandMark';
 import { RoomDialog, type PublicRoomChoice } from '../rooms/RoomDialog';
+import { RoomAdministration } from '../rooms/RoomAdministration';
+import type { RoomAdministrationActions } from '../../matrix/roomAdministration';
+import { SpaceAdministration, type SpaceAdministrationActions } from '../rooms/SpaceAdministration';
 import { FirstUseGuide } from './FirstUseGuide';
 import { IncomingVerification, type IncomingVerificationActions } from './IncomingVerification';
 import type { IncomingVerificationSummary } from '../../matrix/settingsTypes';
@@ -184,6 +187,8 @@ interface WorkspaceProps extends MessageDeliveryActions {
     targetChildIds: string[];
   }) => Promise<void>;
   onReorderRootSpaces?: (spaceIds: string[]) => Promise<void>;
+  spaceAdministration?: SpaceAdministrationActions;
+  onKnockRoom?: (roomIdOrAlias: string) => Promise<void>;
   onSendReply?: (
     roomId: string,
     body: string,
@@ -237,6 +242,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onCallVideo?: (muted: boolean) => Promise<void>;
   onScreenshare?: (enabled: boolean) => Promise<void>;
   onUpdateRoom?: (roomId: string, update: { name?: string; topic?: string }) => Promise<void>;
+  roomAdministration?: RoomAdministrationActions;
   onUpdateRoomAvatar?: (roomId: string, file: File) => Promise<void>;
   onUploadRoomBackground?: (file: File) => Promise<string>;
   onSetRoomBackground?: (roomId: string, background: RoomBackground, personal: boolean) => Promise<void>;
@@ -655,16 +661,19 @@ function SpacePreviewRow({
   room,
   depth,
   joining,
+  requested,
   onJoin,
   arrangement,
 }: {
   room: SpaceRoomPreview;
   depth: number;
   joining: boolean;
+  requested?: boolean;
   onJoin: () => void;
   arrangement?: SpaceChildArrangement;
 }) {
   const style = { '--space-depth': depth } as CSSProperties;
+  const knockable = room.joinRule === 'knock' || room.joinRule === 'knock_restricted';
   if (arrangement) {
     return (
       <div
@@ -687,14 +696,14 @@ function SpacePreviewRow({
       style={style}
       type="button"
       onClick={onJoin}
-      disabled={joining}
+      disabled={joining || requested || room.joinRule === 'invite' && room.membership !== 'invite'}
     >
       <Avatar name={room.name} src={room.avatarUrl} color={colorForId(room.id)} size="small" />
       <span className="buddy-row__copy">
         <strong>{room.name}</strong>
-        <span>{room.topic || 'Room preview — join to start chatting'}</span>
+        <span>{room.topic || (knockable ? 'Request access to join this room' : room.joinRule === 'invite' ? 'Invitation required to join' : 'Room preview — join to start chatting')}</span>
       </span>
-      <span className="space-preview-row__join">{joining ? 'Joining…' : 'Join'}</span>
+      <span className="space-preview-row__join">{joining ? knockable ? 'Requesting…' : 'Joining…' : requested ? 'Request sent' : room.membership === 'invite' ? 'Accept invite' : room.joinRule === 'invite' ? 'Invite needed' : knockable ? 'Request to join' : 'Join'}</span>
     </button>
   );
 }
@@ -757,6 +766,7 @@ function SpaceBranch({
   query,
   collapsed,
   joiningRoomIds,
+  requestedRoomIds,
   arranging,
   arrangement,
   getChildIds,
@@ -780,6 +790,7 @@ function SpaceBranch({
   query: string;
   collapsed: Record<string, boolean>;
   joiningRoomIds: ReadonlySet<string>;
+  requestedRoomIds: ReadonlySet<string>;
   arranging: boolean;
   arrangement?: SpaceChildArrangement;
   getChildIds: (space: SpaceSummary) => string[];
@@ -863,6 +874,7 @@ function SpaceBranch({
                   query={query}
                   collapsed={collapsed}
                   joiningRoomIds={joiningRoomIds}
+                  requestedRoomIds={requestedRoomIds}
                   arranging={arranging}
                   arrangement={childArrangement}
                   getChildIds={getChildIds}
@@ -900,6 +912,7 @@ function SpaceBranch({
                 room={preview}
                 depth={depth + 1}
                 joining={joiningRoomIds.has(childId)}
+                requested={requestedRoomIds.has(childId)}
                 onJoin={() => onJoin(childId)}
                 arrangement={childArrangement}
               />
@@ -937,6 +950,8 @@ function BuddyPanel({
   onAcceptInvite,
   onRejectInvite,
   onReorganize,
+  spaceAdministration,
+  onKnockRoom,
   scopeName,
   scopeSpace,
   filter,
@@ -964,10 +979,14 @@ function BuddyPanel({
     sourceChildIds: string[];
     targetChildIds: string[];
   }) => Promise<void>;
+  spaceAdministration?: SpaceAdministrationActions;
+  onKnockRoom?: (roomIdOrAlias: string) => Promise<void>;
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [joiningRoomIds, setJoiningRoomIds] = useState<Set<string>>(new Set());
   const [spaceNotice, setSpaceNotice] = useState<string>();
+  const [spaceAdministrationOpen, setSpaceAdministrationOpen] = useState(false);
+  const [requestedRoomIds, setRequestedRoomIds] = useState<Set<string>>(new Set());
   const [arranging, setArranging] = useState(false);
   const [draggedChild, setDraggedChild] = useState<{ childId: string; parentId: string }>();
   const [childOrderOverrides, setChildOrderOverrides] = useState<Record<string, string[]>>({});
@@ -1162,12 +1181,25 @@ function BuddyPanel({
     .filter((childId) => childId !== selectedRootOutsidePage);
   const rootChildIndexById = new Map(rootChildIds.map((childId, index) => [childId, index]));
   const joinFromSpace = async (roomId: string) => {
-    if (!onAcceptInvite || joiningRoomIds.has(roomId)) return;
+    if (joiningRoomIds.has(roomId)) return;
+    const preview = workspace.spaceRoomPreviews[roomId];
+    const requestOnly = (preview?.joinRule === 'knock' || preview?.joinRule === 'knock_restricted') && preview.membership !== 'invite';
+    if (requestOnly ? !onKnockRoom : !onAcceptInvite) return;
+    if (preview?.joinRule === 'invite' && preview.membership !== 'invite') {
+      setSpaceNotice('This room requires an invitation before you can join.');
+      return;
+    }
     setJoiningRoomIds((current) => new Set(current).add(roomId));
     setSpaceNotice(undefined);
     try {
-      await onAcceptInvite(roomId);
-      if (!workspace.spaces.some((space) => space.id === roomId)) onSelectRoom(roomId);
+      if (requestOnly) {
+        await onKnockRoom?.(roomId);
+        setRequestedRoomIds((current) => new Set(current).add(roomId));
+        setSpaceNotice('Join request sent. A room moderator must accept it before you can enter.');
+      } else {
+        await onAcceptInvite?.(roomId);
+        if (!workspace.spaces.some((space) => space.id === roomId)) onSelectRoom(roomId);
+      }
     } catch {
       setSpaceNotice('Aimtrix could not join that room or subspace.');
     } finally {
@@ -1198,6 +1230,7 @@ function BuddyPanel({
               }}
             ><GripVertical size={16} /></IconButton>
           ) : null}
+          {scopeSpace?.kind === 'matrix' && scopeSpace.membership === 'join' && spaceAdministration ? <IconButton label={`Manage ${scopeSpace.name} space`} onClick={() => setSpaceAdministrationOpen(true)}><Settings size={16} /></IconButton> : null}
           <IconButton label="Join or create room" onClick={onAddRoom}><Plus size={17} /></IconButton>
         </div>
       </div>
@@ -1221,6 +1254,17 @@ function BuddyPanel({
               <span><FolderOpen size={14} /> Space map</span>
               <b>{organizedScopeRoomCount} {organizedScopeRoomCount === 1 ? 'room' : 'rooms'}</b>
             </div>
+            {scopeSpace.topic ? <p className="space-tree__purpose">{scopeSpace.topic}</p> : null}
+            {scopeSpace.suggestedChildIds?.length ? <div className="space-tree__recommendations" aria-label="Recommended rooms">
+              <strong>Start here</strong>
+              {scopeSpace.suggestedChildIds.slice(0, 6).map((id) => {
+                const room = roomById.get(id);
+                const preview = workspace.spaceRoomPreviews[id];
+                const name = room?.name || preview?.name;
+                if (!name) return null;
+                return <button type="button" key={id} onClick={() => room ? onSelectRoom(id) : void joinFromSpace(id)} disabled={!room && (requestedRoomIds.has(id) || preview?.joinRule === 'invite' && preview.membership !== 'invite')}>{name}{preview && !room ? preview.membership === 'invite' ? ' · Accept invite' : preview.joinRule === 'knock' || preview.joinRule === 'knock_restricted' ? ' · Request to join' : preview.joinRule === 'invite' ? ' · Invite needed' : ' · Join' : ''}</button>;
+              })}
+            </div> : null}
             {spaceNotice ? <p className="space-tree__notice" role="alert">{spaceNotice}</p> : null}
             {shownRootChildIds.map((childId) => {
               const childArrangement = arrangementFor(scopeSpace, childId, rootChildIndexById.get(childId) ?? 0, rootChildIds.length);
@@ -1236,6 +1280,7 @@ function BuddyPanel({
                     query={normalizedQuery}
                     collapsed={collapsed}
                     joiningRoomIds={joiningRoomIds}
+                    requestedRoomIds={requestedRoomIds}
                     arranging={arranging}
                     arrangement={childArrangement}
                     getChildIds={getChildIds}
@@ -1276,6 +1321,7 @@ function BuddyPanel({
                   room={preview}
                   depth={0}
                   joining={joiningRoomIds.has(childId)}
+                  requested={requestedRoomIds.has(childId)}
                   onJoin={() => void joinFromSpace(childId)}
                   arrangement={childArrangement}
                 />
@@ -1385,6 +1431,7 @@ function BuddyPanel({
           <Settings size={17} />
         </button>
       </div>
+      {spaceAdministrationOpen && scopeSpace?.kind === 'matrix' && spaceAdministration ? <SpaceAdministration space={scopeSpace} workspace={workspace} actions={spaceAdministration} onClose={() => setSpaceAdministrationOpen(false)} /> : null}
     </aside></DraftRoomsContext.Provider>
   );
 }
@@ -2721,6 +2768,8 @@ function DetailsPanel({
   scopeSpace,
   dataSaver,
   onUpdateRoom,
+  roomAdministration,
+  onOpenReplacement,
   onUpdateAvatar,
   onUploadBackground,
   onSetBackground,
@@ -2740,6 +2789,8 @@ function DetailsPanel({
   scopeSpace?: SpaceSummary;
   dataSaver: boolean;
   onUpdateRoom?: (roomId: string, update: { name?: string; topic?: string }) => Promise<void>;
+  roomAdministration?: RoomAdministrationActions;
+  onOpenReplacement?: (roomId: string) => void;
   onUpdateAvatar?: (roomId: string, file: File) => Promise<void>;
   onUploadBackground?: (file: File) => Promise<string>;
   onSetBackground?: (roomId: string, background: RoomBackground, personal: boolean) => Promise<void>;
@@ -2983,6 +3034,7 @@ function DetailsPanel({
               <button className="aqua-button drawer-leave" type="button" onClick={() => {
                 setConfirmation({ title: `Leave ${room.name}?`, description: 'You may need another invitation to return to this room.', label: 'Leave room', action: () => onLeave?.(room.id) ?? Promise.resolve() });
               }}><DoorOpen size={13} /> Leave room</button>
+              {roomAdministration && onOpenReplacement ? <RoomAdministration key={room.id} room={room} actions={roomAdministration} onOpenReplacement={onOpenReplacement} /> : null}
 
             </div>
           ) : null}
@@ -3030,6 +3082,8 @@ export function Workspace({
   onSpaceSelected,
   onReorganizeSpaceChildren,
   onReorderRootSpaces,
+  spaceAdministration,
+  onKnockRoom,
   onSendReply,
   onEditMessage,
   onRedactMessage,
@@ -3064,6 +3118,7 @@ export function Workspace({
   onCallVideo,
   onScreenshare,
   onUpdateRoom,
+  roomAdministration,
   onUpdateRoomAvatar,
   onUploadRoomBackground,
   onSetRoomBackground,
@@ -4124,6 +4179,8 @@ export function Workspace({
             onAcceptInvite={onJoinRoom}
             onRejectInvite={onRejectInvite}
             onReorganize={onReorganizeSpaceChildren}
+            spaceAdministration={workspace.mode === 'matrix' ? spaceAdministration : undefined}
+            onKnockRoom={onKnockRoom}
           />}
           {!collapsedPanels.buddies ? <div className="workspace-panel-resize workspace-panel-resize--buddies" role="separator" aria-label="Resize rooms and conversation" aria-orientation="vertical" aria-valuemin={220} aria-valuemax={520} aria-valuenow={Math.round(buddyWidth)} tabIndex={0} onPointerDown={(event) => startPanelResize('buddies', event)} onPointerMove={resizePanel} onPointerUp={stopPanelResize} onPointerCancel={stopPanelResize} onKeyDown={(event) => { if (event.key === 'ArrowLeft') { event.preventDefault(); setPanelWidth('buddies', buddyWidth - 24); } if (event.key === 'ArrowRight') { event.preventDefault(); setPanelWidth('buddies', buddyWidth + 24); } if (event.key === 'Home') { event.preventDefault(); setPanelWidth('buddies', 220); } if (event.key === 'End') { event.preventDefault(); setPanelWidth('buddies', 520); } }} /> : null}
           {showingHome ? <Suspense fallback={<main style={{ gridColumn: '5 / span 3' }} role="status">Loading Home…</main>}><HomeActivity workspace={workspace} activity={workspace.activity} actions={activityActions} position={homePosition} onPosition={updateHomePosition} onOpen={openMatrixTarget} onBack={shellBack} onBrowse={() => navigateShell({ ...shellRoute, surface: 'list', panel: null })} onSettings={() => setSettingsOpen(true)} onDrafts={() => setDraftListOpen(true)} draftCount={draftsState.list.length} onMarkRead={onMarkRoomRead ? (roomId) => onMarkRoomRead(roomId, { explicit: true }) : undefined} firstUse={workspace.mode === 'matrix' && !workspace.rooms.some((room) => room.membership === 'join') ? <FirstUseGuide loadHealth={matrixSettingsActions?.load} onStartChat={() => { setRoomDialogMode('direct'); setRoomDialogOpen(true); }} onCreateRoom={() => { setRoomDialogMode('create'); setRoomDialogOpen(true); }} onRecovery={() => setSettingsOpen(true)} /> : undefined} /></Suspense> : <Conversation
@@ -4258,6 +4315,11 @@ export function Workspace({
               scopeSpace={scopeSpace}
               dataSaver={preferences.dataSaver}
               onUpdateRoom={onUpdateRoom}
+              roomAdministration={workspace.mode === 'matrix' ? roomAdministration : undefined}
+              onOpenReplacement={(replacementId) => {
+                if (!onJoinRoom) return;
+                void onJoinRoom(replacementId).then(() => selectRoom(replacementId)).catch(() => setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.'));
+              }}
               onUpdateAvatar={onUpdateRoomAvatar}
               onUploadBackground={workspace.mode === 'matrix' ? onUploadRoomBackground : undefined}
               onSetBackground={setConversationBackground}
@@ -4294,6 +4356,7 @@ export function Workspace({
           <RoomDialog
             initialMode={roomDialogMode}
             onJoin={onJoinRoom}
+            onKnock={onKnockRoom}
             onSearch={onSearchPublicRooms}
             onCreateDirect={onCreateDirectRoom}
             onCreate={onCreateRoom}

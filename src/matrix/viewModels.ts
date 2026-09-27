@@ -2,6 +2,7 @@ import type { MessageDelivery } from './messageDelivery';
 import type { EncryptedMediaInfo } from './mediaContext';
 import type { RoomBackground, RoomBackgroundPolicy } from './roomBackgrounds';
 import type { FormattedMessageNode } from './incomingFormatting';
+import type { RoomAccessSummary } from './roomAdministration';
 export type { FormattedMessageNode } from './incomingFormatting';
 
 export type PresenceState = 'online' | 'away' | 'busy' | 'offline';
@@ -19,16 +20,20 @@ export interface UserSummary {
 export interface SpaceSummary {
   id: string;
   name: string;
+  topic?: string;
   avatarUrl?: string;
   initials: string;
   color: string;
   kind: 'home' | 'directs' | 'matrix';
   membership: 'join' | 'invite' | 'leave';
   canManage: boolean;
+  canManageParents?: boolean;
   ownPowerLevel?: number;
   background?: RoomBackground;
   backgroundPolicy?: RoomBackgroundPolicy;
   childIds: string[];
+  suggestedChildIds?: string[];
+  canonicalParentId?: string;
   directRoomIds: string[];
   childSpaceIds: string[];
   parentSpaceIds: string[];
@@ -42,6 +47,8 @@ export interface SpaceRoomPreview {
   name: string;
   avatarUrl?: string;
   topic?: string;
+  joinRule?: string;
+  worldReadable?: boolean;
   membership: 'join' | 'invite' | 'leave';
 }
 
@@ -51,6 +58,7 @@ export interface RoomSummary {
   avatarUrl?: string;
   favorite?: boolean;
   canonicalAlias?: string;
+  access?: RoomAccessSummary;
   directUserId?: string;
   kind: RoomKind;
   group: 'Invites' | 'Favorites' | 'Direct Messages' | 'Rooms';
