@@ -1,4 +1,5 @@
 import { roomNotificationMode } from './notificationRules';
+import { decryptionGuidance } from './decryptionGuidance';
 import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent, supportedMessageTypes } from './historyEvents';
 import { MAX_FORMATTED_BODY_LENGTH, parseIncomingFormatting } from './incomingFormatting';
 import type { HistoryView } from './RoomHistory';
@@ -285,7 +286,7 @@ function eventBody(
   if (event.isRedacted() || event.isState?.()) return undefined;
   const type = event.getType();
   if (type === matrixEventType.encrypted) {
-    return { body: 'Waiting for encryption keys…', kind: 'encrypted' };
+    return { body: decryptionGuidance(event.decryptionFailureReason), kind: 'encrypted' };
   }
   const originalContent = originalEventContent(event);
   if (type === matrixEventType.sticker) {
