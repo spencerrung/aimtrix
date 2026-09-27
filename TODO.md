@@ -4,6 +4,8 @@ Checked items record the implemented scope described on that line, not universal
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the ordered GitHub issue queue for the next implementation program. It supplements this release/compatibility inventory; its baseline audit reconciles implementation and validation evidence without removing existing obligations.
 
+The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. Its live two-device and SSO interoperability acceptance remains open.
+
 The [visual reference handoff](docs/design/interaction-rules.md) records the step 02 design decisions and browser evidence. These are implementation inputs for the linked roadmap slices; the reference does not mark their production behavior complete.
 
 ## 0.1 release gate

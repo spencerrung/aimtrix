@@ -125,6 +125,8 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
       uploadAvatar: (file: File) => controller.uploadProfileAvatar(file),
       setupRecovery: (passphrase: string, accountPassword: string) =>
         controller.setupRecovery(passphrase, accountPassword),
+      resetRecovery: (passphrase: string, accountPassword: string) =>
+        controller.resetRecovery(passphrase, accountPassword, true),
       restoreRecovery: (recoveryKey: string) => controller.restoreRecovery(recoveryKey),
       changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) =>
         controller.changePassword(currentPassword, newPassword, logoutOtherDevices),
@@ -280,6 +282,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         warnings={warnings}
         onLogin={(credentials) => controller.login(credentials)}
         onSso={(credentials) => controller.startSso(credentials)}
+        onDiscover={(credentials) => controller.discoverLoginMethods(credentials)}
         onDemo={() => setDemo(true)}
       /></>
     );
@@ -313,6 +316,8 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
+        incomingVerification={snapshot.incomingVerification}
+        incomingVerificationActions={{ accept: (id, signal) => controller.acceptIncomingVerification(id, signal), decline: (id) => controller.declineIncomingVerification(id), showQr: (id, signal) => controller.showIncomingVerificationQr(id, signal), scanQr: (id, bytes, signal) => controller.scanIncomingVerificationQr(id, bytes, signal), confirmQr: (id) => controller.confirmIncomingVerificationQr(id) }}
           threadAttentionActions={threadAttentionActions}
           activityActions={{ refresh: () => controller.activity.refresh(), loadOlder: () => controller.activity.loadOlder(), loadMoreThreads: () => controller.activity.loadMoreThreads(), setThreadFollow: (roomId, rootId, following) => controller.activity.setThreadFollow(roomId, rootId, following) }}
         install={platform.install}

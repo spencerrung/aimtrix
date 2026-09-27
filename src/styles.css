@@ -374,6 +374,18 @@
     background: var(--surface);
   }
   .aimtrix-window.is-nudging { animation: aimtrix-nudge 520ms ease-out; }
+  .incoming-verification { position:absolute; z-index:20; top:58px; right:16px; width:min(390px, calc(100% - 32px)); max-height:calc(100% - 74px); overflow:auto; padding:16px; border:1px solid var(--border-strong); border-radius:14px; background:var(--surface-raised); box-shadow:0 12px 36px #10264055; }
+  .incoming-verification > strong { display:block; margin-bottom:8px; }
+  .incoming-verification__request { border-top:1px solid var(--border-soft); padding-top:8px; }
+  .incoming-verification__request p { margin:6px 0; line-height:1.45; }
+  .incoming-verification__request small { color:var(--text-soft); }
+  .incoming-verification__request > div { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
+  .incoming-verification__emoji { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0; }
+  .incoming-verification__emoji span { display:grid; min-width:65px; padding:8px; text-align:center; border:1px solid var(--border-soft); border-radius:9px; }
+  .incoming-verification__emoji b { font-size:24px; }
+  .incoming-verification__emoji small { font-size:11px; }
+  .incoming-verification__qr { display:block; width:min(256px, 100%); height:auto; margin:16px auto; image-rendering:pixelated; }
+  .incoming-verification__camera { display:block; width:min(320px, 100%); min-height:180px; margin:16px auto; border-radius:8px; background:#101820; }
   @keyframes aimtrix-nudge { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px); } 45% { transform: translateX(6px); } 68% { transform: translateX(-3px); } }
   @media (prefers-reduced-motion: reduce) { .aimtrix-window.is-nudging { animation: none; } }
   .app-titlebar {

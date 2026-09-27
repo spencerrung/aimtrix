@@ -7,7 +7,7 @@ import { defaultRuntimeConfig } from '../config/runtimeConfig';
 
 function setup(phase: VerificationPhase) {
   const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
-  const verifier = Object.assign(new EventEmitter(), { verify: vi.fn(() => new Promise<void>(() => undefined)) });
+  const verifier = Object.assign(new EventEmitter(), { getShowSasCallbacks: vi.fn().mockReturnValue(null), verify: vi.fn(() => new Promise<void>(() => undefined)) });
   const request = Object.assign(new EventEmitter(), { phase, verifier, cancel: vi.fn().mockResolvedValue(undefined) });
   const client = { getSafeUserId: () => '@synthetic:example.test', getCrypto: () => ({ requestDeviceVerification: vi.fn().mockResolvedValue(request) }) };
   (controller as unknown as { client: MatrixClient }).client = client as unknown as MatrixClient;
