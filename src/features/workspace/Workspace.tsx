@@ -96,6 +96,8 @@ import { mergeStickerPacks } from '../media/stickerPacks';
 import { LazyProfileDialog as ProfileDialog } from '../profile/LazyProfileDialog';
 import { BrandMark } from '../../components/BrandMark';
 import { RoomDialog, type PublicRoomChoice } from '../rooms/RoomDialog';
+import { PollActionsContext, type PollActions } from './pollContext';
+import type { PollDefinition, PollResults } from '../../matrix/polls';
 import { RoomAdministration } from '../rooms/RoomAdministration';
 import type { RoomAdministrationActions } from '../../matrix/roomAdministration';
 import { SpaceAdministration, type SpaceAdministrationActions } from '../rooms/SpaceAdministration';
@@ -137,6 +139,8 @@ import {
 
 const ThreadAttention = lazy(() => import('./ThreadAttention'));
 const HomeActivity = lazy(() => import('./HomeActivity'));
+const LocationDialog = lazy(() => import('../rooms/LocationDialog').then((module) => ({ default: module.LocationDialog })));
+const PollDialog = lazy(() => import('../rooms/PollDialog').then((module) => ({ default: module.PollDialog })));
 
 type ComposerMention = DraftMention;
 type ComposerInlineEmoji = DraftInlineEmoji;
@@ -166,6 +170,11 @@ interface WorkspaceProps extends MessageDeliveryActions {
   pushRoute?: PushRoute;
   onSendMessage?: (roomId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onSendNudge?: (roomId: string) => Promise<void>;
+  onSendLocation?: (roomId: string, latitude: number, longitude: number, description: string, threadRootId?: string) => Promise<void>;
+  onSendPoll?: (roomId: string, question: string, answers: string[], disclosed: boolean, threadRootId?: string) => Promise<void>;
+  onLoadPoll?: (roomId: string, pollId: string) => Promise<{ definition: PollDefinition; results: PollResults; canEnd: boolean }>;
+  onVotePoll?: (roomId: string, pollId: string, answerIds: string[]) => Promise<void>;
+  onEndPoll?: (roomId: string, pollId: string) => Promise<void>;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onRoomSelected?: (roomId: string) => Promise<void>;
   onLoadRoomHistory?: (roomId: string, direction: 'backward' | 'forward') => Promise<void>;
@@ -1553,6 +1562,8 @@ function Conversation({
   autoplayMedia,
   onLoadLinkPreview,
   onSendNudge,
+  onShareLocation,
+  onCreatePoll,
 }: {
   threadAttentionActions?: ThreadAttentionActions;
   searchRooms: RoomSummary[];
@@ -1648,6 +1659,8 @@ function Conversation({
   autoplayMedia: boolean;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
   onSendNudge?: () => void;
+  onShareLocation?: (threadRootId?: string) => void;
+  onCreatePoll?: (threadRootId?: string) => void;
 }) {
   const timeline = useRef<HTMLElement>(null);
   const timelineContent = useRef<HTMLDivElement>(null);
@@ -2490,6 +2503,8 @@ function Conversation({
             stageFiles={threadComposition.edit ? undefined : (files, language) => onStageFiles(files, activeThread.rootId, language)}
             sendSticker={threadComposition.edit ? undefined : async (sticker) => { await onSendSticker(sticker, activeThread.rootId); }}
             sendGif={threadComposition.edit ? undefined : async (gif) => { await onSendGif(gif, activeThread.rootId); }}
+            onShareLocation={threadComposition.edit || !onShareLocation ? undefined : () => onShareLocation(activeThread.rootId)}
+            onCreatePoll={threadComposition.edit || !onCreatePoll ? undefined : () => onCreatePoll(activeThread.rootId)}
             onCancelContext={onCancelThreadEdit}
             onEditLatest={() => { const message = [...activeThread.messages].reverse().find((item) => item.actions?.edit ?? (item.isOwn && item.kind === 'text' && !item.pending && (!item.delivery || item.delivery === 'accepted') && !item.pendingEdit)); if (message) startThreadEdit(message); }}
             onSubmitted={(result) => { if (result !== 'edited' && activeThread.history?.mode !== 'live') latestThread(); }}
@@ -2517,6 +2532,8 @@ function Conversation({
         stageFiles={composition.edit ? undefined : (files, language) => onStageFiles(files, undefined, language)}
         sendSticker={composition.edit ? undefined : async (sticker) => { await onSendSticker(sticker); }}
         sendGif={composition.edit ? undefined : async (gif) => { await onSendGif(gif); }}
+        onShareLocation={composition.edit || !onShareLocation ? undefined : () => onShareLocation()}
+        onCreatePoll={composition.edit || !onCreatePoll ? undefined : () => onCreatePoll()}
         onNudge={composition.edit ? undefined : onSendNudge} onCancelContext={onCancelContext}
         onEditLatest={() => { const message = [...messages].reverse().find((item) => item.actions?.edit ?? (item.isOwn && item.kind === 'text' && !item.pending && (!item.delivery || item.delivery === 'accepted') && !item.pendingEdit)); if (message) startEdit(message); }}
         onSubmitted={(result) => { if (result !== 'edited') returnToLatest(); }}
@@ -3072,6 +3089,11 @@ export function Workspace({
   pushRoute,
   onSendMessage,
   onSendNudge,
+  onSendLocation,
+  onSendPoll,
+  onLoadPoll,
+  onVotePoll,
+  onEndPoll,
   onLoadLinkPreview,
   onRoomSelected,
   onLoadRoomHistory,
@@ -3222,6 +3244,8 @@ export function Workspace({
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
+  const [locationTarget, setLocationTarget] = useState<{ roomId: string; roomName: string; threadRootId?: string }>();
+  const [pollTarget, setPollTarget] = useState<{ roomId: string; roomName: string; threadRootId?: string }>();
   const [roomDialogMode, setRoomDialogMode] = useState<'join' | 'direct' | 'create'>('join');
   const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
   const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
@@ -4077,7 +4101,11 @@ export function Workspace({
     };
   }, []);
 
+  const pollActions: PollActions | undefined = useMemo(() => onLoadPoll && onVotePoll && onEndPoll
+    ? { load: onLoadPoll, vote: onVotePoll, end: onEndPoll } : undefined,
+  [onLoadPoll, onVotePoll, onEndPoll]);
   return (
+    <PollActionsContext.Provider value={workspace.mode === 'matrix' ? pollActions : undefined}>
     <div ref={appStage} onClickCapture={(event) => {
       if (event.button !== 0 || event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       const anchor = (event.target as Element).closest?.('a');
@@ -4291,6 +4319,8 @@ export function Workspace({
               lastNudgeSentAt.current = Date.now();
               return onSendNudge(effectiveRoomId);
             } : undefined}
+            onShareLocation={workspace.mode === 'matrix' && onSendLocation && effectiveRoomId ? (threadRootId) => setLocationTarget({ roomId: effectiveRoomId, roomName: selectedRoomConfigured?.name ?? 'this room', threadRootId }) : undefined}
+            onCreatePoll={workspace.mode === 'matrix' && onSendPoll && effectiveRoomId ? (threadRootId) => setPollTarget({ roomId: effectiveRoomId, roomName: selectedRoomConfigured?.name ?? 'this room', threadRootId }) : undefined}
             gifEndpoint={config.features.gifs ? config.gifProvider?.searchEndpoint : undefined}
             stickerPacks={availableStickerPacks}
             defaultStickerPack={profilePersonalization.defaultStickerPack}
@@ -4365,6 +4395,9 @@ export function Workspace({
           />
         ) : null}
 
+        {locationTarget && onSendLocation ? <Suspense fallback={null}><LocationDialog roomName={locationTarget.roomName} onClose={() => setLocationTarget(undefined)} onSend={(latitude, longitude, description) => onSendLocation(locationTarget.roomId, latitude, longitude, description, locationTarget.threadRootId)} /></Suspense> : null}
+        {pollTarget && onSendPoll ? <Suspense fallback={null}><PollDialog roomName={pollTarget.roomName} onClose={() => setPollTarget(undefined)} onSend={(question, answers, disclosed) => onSendPoll(pollTarget.roomId, question, answers, disclosed, pollTarget.threadRootId)} /></Suspense> : null}
+
         {backgroundDialogOpen && selectedRoomConfigured ? (
           <Dialog className="room-background-dialog" backdropClassName="room-background-dialog-backdrop" aria-labelledby="room-background-title" onClose={() => setBackgroundDialogOpen(false)}>
               <header><div><Paintbrush size={16} /><strong id="room-background-title">Decorate {selectedRoomConfigured.name}</strong></div><DialogClose aria-label="Close background decorator"><X size={17} /></DialogClose></header>
@@ -4419,5 +4452,6 @@ export function Workspace({
         ) : null}
       </section>
     </div>
+    </PollActionsContext.Provider>
   );
 }

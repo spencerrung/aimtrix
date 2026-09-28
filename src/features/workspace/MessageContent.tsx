@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef, type CSSProperties, type ReactNode } from 'react';
+import { lazy, Suspense, useEffect, useState, useRef, type CSSProperties, type ReactNode } from 'react';
 import { Images, Paperclip, X } from 'lucide-react';
 import { Dialog, DialogClose } from '../../components/Dialog';
 import { useMediaSource } from '../../matrix/useMediaSource';
@@ -7,6 +7,8 @@ import type { FormattedMessageNode } from '../../matrix/incomingFormatting';
 import { emojiReactionKey, type EmojiPackEntry } from '../media/emojiPacks';
 import { copyMessageText } from './messageClipboard';
 import './messagePresentation.css';
+
+const PollCard = lazy(() => import('./PollCard').then((module) => ({ default: module.PollCard })));
 
 export type LinkPreview = { title?: string; description?: string; imageUrl?: string; siteName?: string };
 export function EmojiAsset({
@@ -235,6 +237,13 @@ export function MessageContent({ message, dataSaver = false, autoplayMedia = tru
       : mediaSrc ? message.mediaKind === 'image' && message.kind !== 'sticker'
         ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => setViewer(true)}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button>
         : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
+      : message.kind === 'poll' && message.poll ? <Suspense fallback={<span role="status">Loading poll…</span>}><PollCard message={message} /></Suspense>
+      : message.kind === 'location' && message.location ? <div className="message-location">
+        <strong>{message.body}</strong>
+        <span>{message.location.latitude}, {message.location.longitude}</span>
+        <a href={message.location.uri} aria-label={`Open ${message.body} in your map application`}>Open in map app</a>
+        <small>Opening the map app shares these coordinates with that app.</small>
+      </div>
       : <div className={`message-kind--${message.kind}`}>
         {message.kind === 'emote' ? `${message.senderName} ` : ''}
         {message.kind === 'unsupported' ? <p className="message-unsupported">{message.body || 'This message type is not supported yet.'}</p>

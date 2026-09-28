@@ -1,0 +1,11 @@
+@layer layout {
+  .message-poll { display:grid;gap:7px;min-width:min(280px,100%);max-width:380px;padding:10px;border:1px solid var(--border);border-radius:7px;background:var(--surface-soft) }
+  .message-poll strong,.message-poll span { overflow-wrap:anywhere }
+  .message-poll small { color:var(--text-soft) }
+  .message-poll__answers { display:grid;gap:5px }
+  .message-poll__answers button { display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:36px;padding:6px 9px;color:var(--text);border:1px solid var(--border);border-radius:5px;background:var(--surface-raised);text-align:left }
+  .message-poll__answers button[aria-pressed="true"] { border-color:var(--blue-deep);background:var(--blue-soft) }
+  .message-poll__answers button:disabled { cursor:default }
+  .message-poll__answers b { color:var(--blue-deep) }
+  .message-poll__actions { display:flex;flex-wrap:wrap;gap:6px }
+}

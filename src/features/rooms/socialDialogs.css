@@ -1,0 +1,8 @@
+.location-dialog form, .poll-dialog form { max-height: calc(100dvh - 80px); overflow-y: auto; }
+.location-dialog form > label, .poll-dialog form > label:not(.room-dialog-check), .poll-dialog__answers label { display: grid; gap: 5px; font-size: 0.68rem; font-weight: 700; }
+.location-dialog form input, .poll-dialog form input:not([type="checkbox"]) { width: 100%; min-width: 0; padding: 8px; color: var(--text); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
+.location-dialog__preview, .poll-dialog__preview { display: grid; gap: 5px; padding: 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); overflow-wrap: anywhere; }
+.poll-dialog__answers { display: grid; gap: 7px; }
+.poll-dialog__answers > div { display: flex; align-items: end; gap: 6px; }
+.poll-dialog__answers label { flex: 1; min-width: 0; }
+.poll-dialog__preview ol { margin: 0; padding-left: 20px; }

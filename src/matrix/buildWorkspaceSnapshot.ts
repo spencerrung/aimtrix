@@ -15,6 +15,8 @@ import {
 } from './roomBackgrounds';
 import { resolveReadReceiptTarget, resolveReadReceiptTargets } from './readReceipts';
 import { isMatrixNavigationTarget } from './matrixLinks';
+import { locationFromMessage } from './locations';
+import { parsePollStart } from './polls';
 import { LEGACY_MARKED_UNREAD_EVENT, MARKED_UNREAD_EVENT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import {
   resolveSpaceRelations,
@@ -50,6 +52,7 @@ const matrixMessageType = {
   file: 'm.file',
   audio: 'm.audio',
   video: 'm.video',
+  location: 'm.location',
 } as const;
 import {
   colorForId,
@@ -282,13 +285,22 @@ function eventBody(
   mediaKind?: MessageSummary['mediaKind'];
   codeFile?: boolean;
   codeLanguage?: string;
+  location?: MessageSummary['location'];
+  poll?: MessageSummary['poll'];
 } | undefined {
-  if (event.isRedacted() || event.isState?.()) return undefined;
+  if (event.isRedacted()) return event.getType() === 'org.matrix.msc3381.poll.start' || event.getType() === 'm.poll.start'
+    ? { body: 'This poll was removed.', kind: 'unsupported', fallbackType: event.getType() } : undefined;
+  if (event.isState?.()) return undefined;
   const type = event.getType();
   if (type === matrixEventType.encrypted) {
     return { body: decryptionGuidance(event.decryptionFailureReason), kind: 'encrypted' };
   }
   const originalContent = originalEventContent(event);
+  if (type === 'org.matrix.msc3381.poll.start' || type === 'm.poll.start') {
+    const poll = parsePollStart(type, originalContent);
+    return poll ? { body: poll.question, kind: 'poll', poll }
+      : { body: 'This poll is malformed or unsupported.', kind: 'unsupported', fallbackType: type };
+  }
   if (type === matrixEventType.sticker) {
     if (typeof originalContent.body !== 'string') return undefined;
     const file = originalContent.file;
@@ -325,6 +337,12 @@ function eventBody(
     body: typeof content.body === 'string' && content.body.trim() ? content.body : 'This message type is not supported yet.',
     kind: 'unsupported', fallbackType: content.msgtype.slice(0, 256), edited: Boolean(replacementContent),
   };
+  if (content.msgtype === matrixMessageType.location) {
+    const location = locationFromMessage(content);
+    return location
+      ? { body: location.description || 'Shared location', kind: 'location', location }
+      : { body: 'This location has invalid coordinates.', kind: 'unsupported', fallbackType: 'm.location' };
+  }
   if (typeof content.body !== 'string') return undefined;
   const body = originalContent['m.relates_to']?.['m.in_reply_to']
     ? stripReplyFallback(content.body)
@@ -541,6 +559,8 @@ function messagesForEvents(
       mediaKind: rendered.mediaKind,
       codeFile: rendered.codeFile,
       codeLanguage: rendered.codeLanguage,
+      location: rendered.location,
+      poll: rendered.poll,
       edited: rendered.edited,
       mentionUserIds: rendered.mentionUserIds,
       mentions: messageMentions(

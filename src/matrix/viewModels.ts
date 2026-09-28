@@ -3,6 +3,8 @@ import type { EncryptedMediaInfo } from './mediaContext';
 import type { RoomBackground, RoomBackgroundPolicy } from './roomBackgrounds';
 import type { FormattedMessageNode } from './incomingFormatting';
 import type { RoomAccessSummary } from './roomAdministration';
+import type { StaticLocation } from './locations';
+import type { PollDefinition } from './polls';
 export type { FormattedMessageNode } from './incomingFormatting';
 
 export type PresenceState = 'online' | 'away' | 'busy' | 'offline';
@@ -125,7 +127,9 @@ export interface MessageSummary {
   senderAvatarUrl?: string;
   body: string;
   timestamp: number;
-  kind: 'text' | 'notice' | 'emote' | 'media' | 'sticker' | 'encrypted' | 'unsupported';
+  kind: 'text' | 'notice' | 'emote' | 'media' | 'sticker' | 'location' | 'poll' | 'encrypted' | 'unsupported';
+  location?: StaticLocation;
+  poll?: PollDefinition;
   formatted?: FormattedMessageNode[];
   fallbackType?: string;
   actions?: { reply: boolean; thread: boolean; react: boolean; pin: boolean; edit: boolean; redact: boolean };

@@ -3,6 +3,7 @@ import type { MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk';
 import { inMainTimelineForReceipt } from 'matrix-js-sdk';
 import { MatrixEvent as SDKEvent, RoomState } from 'matrix-js-sdk';
 import { HISTORY_MESSAGE_LIMIT } from './historyEvents';
+import { POLL_START, POLL_TEXT } from './polls';
 import {
   buildWorkspaceSnapshot,
   createWorkspaceSnapshotCache,
@@ -901,5 +902,29 @@ describe('history window snapshots', () => {
     const snapshot = buildWorkspaceSnapshot(fakeClient([reply, pending]), 'online', [], [], cache);
     expect(snapshot.messagesByRoom['!room:test']).toHaveLength(1);
     expect(snapshot.messagesByRoom['!room:test'][0].replyTo).toEqual({ eventId: '$older', senderName: 'Earlier message', body: 'Open the original message' });
+  });
+});
+describe('social message transformations', () => {
+  it('renders valid static locations and rejects malformed coordinates', () => {
+    const events = [
+      fakeEvent('m.room.message', { msgtype: 'm.location', geo_uri: 'geo:40.7128,-74.006', body: 'Meeting spot: geo:40.7128,-74.006' }, '$location'),
+      fakeEvent('m.room.message', { msgtype: 'm.location', geo_uri: 'https://bad.test', body: 'Malicious location' }, '$bad-location'),
+    ];
+    const messages = buildWorkspaceSnapshot(fakeClient(events), 'online').messagesByRoom['!room:test'];
+    expect(messages[0]).toMatchObject({ kind: 'location', location: { latitude: 40.7128, longitude: -74.006 } });
+    expect(messages[1]).toMatchObject({ kind: 'unsupported', body: 'This location has invalid coordinates.' });
+  });
+
+  it('renders a poll start without turning votes into timeline messages', () => {
+    const events = [
+      fakeEvent(POLL_START, { [POLL_TEXT]: 'Lunch?\n1. Soup\n2. Salad', [POLL_START]: {
+        question: { [POLL_TEXT]: 'Lunch?' }, kind: 'org.matrix.msc3381.poll.disclosed', max_selections: 1,
+        answers: [{ id: 'a', [POLL_TEXT]: 'Soup' }, { id: 'b', [POLL_TEXT]: 'Salad' }],
+      } }, '$poll'),
+      fakeEvent('org.matrix.msc3381.poll.response', { 'm.relates_to': { rel_type: 'm.reference', event_id: '$poll' }, 'org.matrix.msc3381.poll.response': { answers: ['a'] } }, '$vote'),
+    ];
+    const messages = buildWorkspaceSnapshot(fakeClient(events), 'online').messagesByRoom['!room:test'];
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ kind: 'poll', poll: { question: 'Lunch?', answers: [{ text: 'Soup' }, { text: 'Salad' }] } });
   });
 });
