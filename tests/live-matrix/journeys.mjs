@@ -1,4 +1,4 @@
-/* global localStorage, indexedDB, fetch, AbortSignal, window, Event */
+/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob */
 import { Buffer } from 'node:buffer';
 import { URL } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -55,14 +55,38 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     return page;
   };
   const alice = await newPage(), bob = await newPage(), aliceSecond = await newPage();
+  await alice.addInitScript(() => {
+    const track = { stop() {}, onended: null };
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+      getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
+      enumerateDevices: async () => [],
+    } });
+    class SyntheticRecorder {
+      static isTypeSupported(type) { return type === 'audio/webm;codecs=opus'; }
+      state = 'inactive'; mimeType = 'audio/webm;codecs=opus';
+      start() { this.state = 'recording'; }
+      stop() {
+        this.state = 'inactive';
+        this.ondataavailable?.({ data: new Blob(['synthetic-voice-for-encrypted-test'], { type: this.mimeType }) });
+        this.onstop?.();
+      }
+    }
+    Object.defineProperty(window, 'MediaRecorder', { configurable: true, value: SyntheticRecorder });
+    Object.defineProperty(window, 'AudioContext', { configurable: true, value: undefined });
+  });
   let aliceSession, bobSession, secondSession, roomId;
   let navigationHistory, threadHistory, attachmentThreadRootId, formattedPeer;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
+  const bobWire = [];
   const uploads = [];
   alice.on('request', (request) => {
     const url = new URL(request.url());
     if (request.method() === 'PUT' && url.pathname.includes('/send/')) wire.push({ path: url.pathname, content: request.postDataJSON() });
+  });
+  bob.on('request', (request) => {
+    const url = new URL(request.url());
+    if (request.method() === 'PUT' && url.pathname.includes('/send/')) bobWire.push({ path: url.pathname, content: request.postDataJSON() });
   });
   alice.on('response', async (response) => {
     if (response.request().method() === 'POST' && new URL(response.url()).pathname.includes('/media/') && new URL(response.url()).pathname.endsWith('/upload') && response.ok()) {
@@ -692,6 +716,112 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const received = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
       invariant(Buffer.from(received).equals(bytes), 'attachment-decryption');
       invariant(wire.every((event) => event.path.includes('/m.room.encrypted/')), 'encrypted-media-event');
+    });
+    const openTool = async (name) => {
+      const more = alice.getByRole('button', { name: 'More message tools' });
+      if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
+      await alice.getByRole('button', { name, exact: true }).click();
+    };
+    const safeAction = async (category, action) => {
+      try { return await action(); }
+      catch { throw new Error(category); }
+    };
+    const question = `Synthetic poll ${randomBytes(6).toString('hex')}`;
+    const first = 'Synthetic option A', second = 'Synthetic option B';
+    const alicePoll = alice.getByRole('region', { name: `Poll: ${question}` });
+    const bobPoll = bob.getByRole('region', { name: `Poll: ${question}` });
+    await check('encrypted-poll-create', async () => {
+      const socialWireStart = wire.length;
+      await safeAction('poll-open-control', () => openTool('Create a poll'));
+      const pollDialog = alice.getByRole('dialog', { name: 'Create a poll' });
+      await safeAction('poll-dialog-input', async () => {
+        await pollDialog.getByLabel('Question').fill(question);
+        await pollDialog.getByLabel('Answer 1').fill(first);
+        await pollDialog.getByLabel('Answer 2').fill(second);
+      });
+      await safeAction('poll-submit', () => pollDialog.getByRole('button', { name: 'Create poll', exact: true }).click());
+      await safeAction('poll-render', async () => {
+        await alicePoll.waitFor({ timeout: 45000 });
+        await bobPoll.waitFor({ timeout: 45000 });
+      });
+      const pollStartWire = wire.slice(socialWireStart);
+      invariant(pollStartWire.length > 0 && pollStartWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(question)), 'poll-create-decrypted');
+    });
+    await check('encrypted-poll-vote', async () => {
+      const bobVoteStart = bobWire.length;
+      await safeAction('poll-vote-control', async () => {
+        const choice = bobPoll.getByRole('button', { name: second });
+        await until(async () => {
+          if (await choice.isEnabled()) return true;
+          const refresh = bobPoll.getByRole('button', { name: 'Refresh results' });
+          if (await refresh.isEnabled()) await refresh.click();
+          return false;
+        }, 'poll-vote-control');
+        await choice.click();
+      });
+      await safeAction('poll-vote-confirm', () => bobPoll.getByText('Vote saved.', { exact: true }).waitFor({ timeout: 45000 }));
+      const voteWire = bobWire.slice(bobVoteStart);
+      invariant(voteWire.length > 0 && voteWire.every((event) => event.path.includes('/m.room.encrypted/')), 'poll-vote-reconciled');
+      await until(async () => {
+        await alicePoll.getByRole('button', { name: 'Refresh results' }).click();
+        return (await alicePoll.textContent()).includes('1 vote');
+      }, 'poll-vote-reconciled');
+    });
+    await check('encrypted-poll-end', async () => {
+      const pollEndWireStart = wire.length;
+      await alicePoll.getByRole('button', { name: 'End poll' }).click();
+      await alice.getByRole('dialog', { name: 'End this poll?' }).getByRole('button', { name: 'End poll' }).click();
+      await alicePoll.getByText('Poll ended', { exact: true }).first().waitFor({ timeout: 45000 });
+      const endWire = wire.slice(pollEndWireStart);
+      invariant(endWire.length > 0 && endWire.every((event) => event.path.includes('/m.room.encrypted/')), 'poll-end-reconciled');
+      await until(async () => {
+        await bobPoll.getByRole('button', { name: 'Refresh results' }).click();
+        return (await bobPoll.textContent()).includes('Poll ended');
+      }, 'poll-end-reconciled');
+    });
+    await check('encrypted-location-interop', async () => {
+      const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;
+      const locationWireStart = wire.length;
+      await safeAction('location-open-control', () => openTool('Share a location'));
+      const locationDialog = alice.getByRole('dialog', { name: 'Share a location' });
+      await safeAction('location-dialog-input', async () => {
+        await locationDialog.getByRole('spinbutton', { name: 'Latitude' }).fill('40.7128');
+        await locationDialog.getByRole('spinbutton', { name: 'Longitude' }).fill('-74.006');
+        await locationDialog.getByLabel('Description (optional)').fill(location);
+      });
+      await safeAction('location-submit', () => locationDialog.getByRole('button', { name: 'Share this location' }).click());
+      const receivedLocation = bob.locator('.message-location').filter({ hasText: location });
+      await safeAction('location-render', () => receivedLocation.waitFor({ timeout: 45000 }));
+      const locationWire = wire.slice(locationWireStart);
+      invariant((await receivedLocation.textContent()).includes('40.7128, -74.006') &&
+        (await receivedLocation.getByRole('link', { name: `Open ${location} in your map application` }).getAttribute('href')) === 'geo:40.7128,-74.006' &&
+        locationWire.length > 0 && locationWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(location)), 'location-decrypted');
+    });
+    await check('encrypted-voice-interop', async () => {
+      const bytes = Buffer.from('synthetic-voice-for-encrypted-test');
+      const uploadStart = uploads.length;
+      const voiceWireStart = wire.length;
+      await openTool('Record a voice message');
+      const voiceDialog = alice.getByRole('dialog', { name: 'Record a voice message' });
+      invariant(uploads.length === uploadStart && wire.length === voiceWireStart, 'voice-no-premature-upload');
+      await voiceDialog.getByRole('button', { name: 'Start recording' }).click();
+      await voiceDialog.getByRole('button', { name: 'Stop recording' }).waitFor();
+      await alice.waitForTimeout(350);
+      await voiceDialog.getByRole('button', { name: 'Stop recording' }).click();
+      await voiceDialog.getByLabel('Voice message preview').waitFor();
+      invariant(uploads.length === uploadStart && wire.length === voiceWireStart, 'voice-no-premature-upload');
+      await voiceDialog.getByRole('button', { name: 'Send voice message' }).click();
+      await until(() => uploads.length > uploadStart, 'voice-encrypted-upload');
+      const audio = bob.locator('.message-audio-card').filter({ hasText: 'Voice message' }).last();
+      await audio.waitFor({ timeout: 45000 });
+      const link = audio.getByRole('link', { name: 'Download audio' });
+      await until(async () => (await link.getAttribute('href'))?.startsWith('blob:'), 'voice-decrypted-download');
+      const decrypted = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
+      invariant(Buffer.from(decrypted).equals(bytes), 'voice-decrypted-download');
+      const source = uploads.at(-1).content_uri;
+      const encrypted = await api(`/_matrix/client/v1/media/download/${source.slice(6)}`, { token: bobSession.accessToken, binary: true });
+      const voiceWire = wire.slice(voiceWireStart);
+      invariant(!Buffer.from(encrypted).equals(bytes) && voiceWire.length > 0 && voiceWire.every((event) => event.path.includes('/m.room.encrypted/')), 'voice-encrypted-upload');
     });
     await check('encrypted-staged-attachments-and-retry', async () => {
       const files = ['staged-alpha.bin', 'staged-beta.bin'].map((name) => ({ name, mimeType: 'application/octet-stream', buffer: randomBytes(64) }));
