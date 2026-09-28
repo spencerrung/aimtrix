@@ -63,6 +63,9 @@ jobs:
       - name: Push privacy proofs
         run: npm run proof:push && npm run proof:push-sw
 
+      - name: Scheduling feasibility proof
+        run: npm run proof:scheduling
+
   browser-compat:
     strategy:
       fail-fast: false

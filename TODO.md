@@ -175,7 +175,7 @@ These retain compatibility depth and validation obligations alongside additive f
 ### Product-contract decisions
 
 - [x] Decide that private profile decoration stays private; public or room-scoped expression is deferred pending explicit audience, capability and deletion evidence. — [#170](https://github.com/spencerrung/aimtrix/issues/170); [decision](docs/product-contract-decisions.md).
-- [ ] Validate the scheduling feasibility decision with a disposable suspend/restart/offline/time-zone proof; the current direction rejects guaranteed scheduled sending and timed reminders in the backend-free release. — [#172](https://github.com/spencerrung/aimtrix/issues/172); [draft decision](docs/product-contract-decisions.md).
+- [ ] Run and review the disposable Chromium close/restart/freeze/offline/time-zone proof in CI before closing the scheduling decision. The current direction rejects guaranteed scheduled sending and timed reminders in the backend-free release. — [#172](https://github.com/spencerrung/aimtrix/issues/172); [draft decision](docs/product-contract-decisions.md).
 - [x] Select operator-managed Matrix bot/bridge room membership for the first integration path, with no client catalog or provider secrets in public config. — [#173](https://github.com/spencerrung/aimtrix/issues/173); [decision](docs/product-contract-decisions.md).
 
 ### Scale, portability, and release validation
