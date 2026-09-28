@@ -19,8 +19,8 @@ test.beforeEach(async ({ page }, info) => {
 
 test('polls and static locations work at desktop and mobile sizes', async ({ page }, info) => {
   await expect(page.getByRole('region', { name: 'Poll: Lunch?' })).toBeVisible();
-  await page.getByRole('button', { name: 'Soup0' }).click();
-  await page.getByRole('button', { name: 'Salad0' }).click();
+  await page.getByRole('button', { name: /Soup/ }).click();
+  await page.getByRole('button', { name: /Salad/ }).click();
   await page.getByRole('button', { name: 'Save vote' }).click();
   await expect(page.getByText('Voted: soup, salad')).toBeVisible();
   await page.getByRole('button', { name: 'Create a poll' }).click();
