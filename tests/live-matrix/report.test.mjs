@@ -54,7 +54,7 @@ test('thread history evidence discards roots, replies, ciphertext, receipts and 
 
 test('messaging evidence discards filenames, captions, drafts, bytes and formatted event payloads', () => {
   const privateValue = randomBytes(24).toString('hex');
-  for (const name of ['encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment', 'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability']) {
+  for (const name of ['encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment', 'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop']) {
     const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
       filename: privateValue, caption: privateValue, bytes: [privateValue], draft: privateValue,
       formatted_body: privateValue, event: { content: privateValue }, transactionId: privateValue }],
