@@ -2370,7 +2370,7 @@ describe('Workspace quick navigation', () => {
     expect(anchor).toHaveAttribute('href', link);
     fireEvent.click(anchor);
     await waitFor(() => expect(resolve).toHaveBeenCalledWith({ roomId: '!synthetic:example.org', eventId }));
-    expect(screen.getByLabelText('Message Dev Shack')).toBeVisible();
+    await waitFor(() => expect(screen.getByLabelText('Message Dev Shack')).toBeVisible());
   });
 
   it('keeps the current draft when filtering hides its room and only shows synced favorites', async () => {
