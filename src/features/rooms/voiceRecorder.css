@@ -1,0 +1,5 @@
+.voice-recorder__body { display:grid;gap:14px;max-height:calc(100dvh - 80px);overflow-y:auto;padding:20px; }
+.voice-recorder__body > p { margin:0; }
+.voice-recorder__body audio { width:100%; }
+.voice-recorder__body > button { width:fit-content;display:inline-flex;align-items:center;gap:6px; }
+.voice-recorder__actions { display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px; }

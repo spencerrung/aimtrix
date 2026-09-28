@@ -86,7 +86,7 @@ The original TODO contains **18** unchecked compatibility bullets; the final row
 | Guided first conversation and recovery | Partial login/settings controls; cohesive guided first-use journey absent. | [#160](https://github.com/spencerrung/aimtrix/issues/160) |
 | Polished daily-client acceptance journeys | Partial local tests; complete journey suite and live evidence absent. | [#164](https://github.com/spencerrung/aimtrix/issues/164) |
 | Community onboarding | Partial room/directory/invite functions; welcome/discovery guidance and advanced administration remain. | [#165](https://github.com/spencerrung/aimtrix/issues/165) |
-| Voice messages/richer media navigation | Partial audio-file rendering/image viewer; recording and full browsing absent. | [#168](https://github.com/spencerrung/aimtrix/issues/168) |
+| Voice messages/richer media navigation | Reviewed recording and loaded-image navigation implemented; physical-device, cross-client and encrypted-room acceptance remain. See [voice/media evidence](voice-and-media-navigation.md). | [#168](https://github.com/spencerrung/aimtrix/issues/168) |
 | Public profile expression | Absent; private decoration is implemented. Audience/storage/interoperability decision required. | [#170](https://github.com/spencerrung/aimtrix/issues/170) |
 | Multiple active Matrix accounts | Absent; per-account crypto naming does not implement account switching or simultaneous lifecycle isolation. | [#171](https://github.com/spencerrung/aimtrix/issues/171) |
 | Reminders and scheduled sending | Absent; closed-app delivery feasibility/contract remains a decision. | [#172](https://github.com/spencerrung/aimtrix/issues/172) |

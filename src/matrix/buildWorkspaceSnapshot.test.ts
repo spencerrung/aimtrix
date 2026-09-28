@@ -296,6 +296,14 @@ describe('buildWorkspaceSnapshot stickers', () => {
 });
 
 describe('safe rich content and action capabilities', () => {
+  it('recognizes voice metadata while keeping ordinary audio as an interoperable fallback', () => {
+    const [voice, ordinary] = buildWorkspaceSnapshot(fakeClient([
+      fakeEvent('m.room.message', { msgtype: 'm.audio', body: 'Voice message', filename: 'voice-message.webm', url: 'mxc://test/voice', info: { mimetype: 'audio/webm', duration: 1200 }, 'org.matrix.msc3245.voice': {}, 'org.matrix.msc1767.audio': { duration: 1200 } }, '$voice'),
+      fakeEvent('m.room.message', { msgtype: 'm.audio', body: 'song.ogg', url: 'mxc://test/song', info: { mimetype: 'audio/ogg', duration: 50_000 } }, '$ordinary'),
+    ]), 'online').messagesByRoom['!room:test'];
+    expect(voice).toMatchObject({ kind: 'media', mediaKind: 'audio', voiceMessage: true, durationMs: 1200, fileName: 'voice-message.webm' });
+    expect(ordinary).toMatchObject({ kind: 'media', mediaKind: 'audio', voiceMessage: false, durationMs: 50_000 });
+  });
   it.each(['m.image', 'm.video', 'm.audio', 'm.file'])('keeps a %s caption separate from its safe download filename', (msgtype) => {
     const [captioned, legacy] = buildWorkspaceSnapshot(fakeClient([
       fakeEvent('m.room.message', { msgtype, body: 'A readable caption', filename: '../folder/report\u0000.txt', url: 'mxc://test/file' }, '$captioned'),

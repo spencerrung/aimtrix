@@ -15,6 +15,8 @@
   .message-location strong,.message-location span { overflow-wrap:anywhere }
   .message-location a { width:fit-content;color:var(--blue-deep);font-weight:700 }
   .message-location small { color:var(--text-soft) }
+  .message-audio-card { display:grid;gap:5px;max-width:320px }
+  .message-audio-card a { width:fit-content;color:var(--blue-deep) }
   .message-action-menu { position:fixed;z-index:1200;display:grid;gap:2px;min-width:190px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;padding:6px;border:1px solid var(--border);border-radius:9px;background:var(--surface-raised);box-shadow:var(--shadow) }
   .message-action-menu button { display:flex;align-items:center;gap:8px;min-height:36px;padding:6px 10px;border:0;border-radius:5px;color:var(--text);background:transparent;font:inherit;text-align:left }
   .message-action-menu button:hover,.message-action-menu button:focus-visible { background:var(--blue-soft) }

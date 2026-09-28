@@ -97,6 +97,7 @@ import { LazyProfileDialog as ProfileDialog } from '../profile/LazyProfileDialog
 import { BrandMark } from '../../components/BrandMark';
 import { RoomDialog, type PublicRoomChoice } from '../rooms/RoomDialog';
 import { PollActionsContext, type PollActions } from './pollContext';
+import { MediaGalleryContext } from './mediaGalleryContext';
 import type { PollDefinition, PollResults } from '../../matrix/polls';
 import { RoomAdministration } from '../rooms/RoomAdministration';
 import type { RoomAdministrationActions } from '../../matrix/roomAdministration';
@@ -141,6 +142,7 @@ const ThreadAttention = lazy(() => import('./ThreadAttention'));
 const HomeActivity = lazy(() => import('./HomeActivity'));
 const LocationDialog = lazy(() => import('../rooms/LocationDialog').then((module) => ({ default: module.LocationDialog })));
 const PollDialog = lazy(() => import('../rooms/PollDialog').then((module) => ({ default: module.PollDialog })));
+const VoiceRecorderDialog = lazy(() => import('../rooms/VoiceRecorderDialog').then((module) => ({ default: module.VoiceRecorderDialog })));
 
 type ComposerMention = DraftMention;
 type ComposerInlineEmoji = DraftInlineEmoji;
@@ -1564,6 +1566,7 @@ function Conversation({
   onSendNudge,
   onShareLocation,
   onCreatePoll,
+  onRecordVoice,
 }: {
   threadAttentionActions?: ThreadAttentionActions;
   searchRooms: RoomSummary[];
@@ -1661,8 +1664,12 @@ function Conversation({
   onSendNudge?: () => void;
   onShareLocation?: (threadRootId?: string) => void;
   onCreatePoll?: (threadRootId?: string) => void;
+  onRecordVoice?: (threadRootId?: string) => void;
 }) {
   const timeline = useRef<HTMLElement>(null);
+  const galleryEligible = useCallback((item: MessageSummary) => item.kind === 'media' && item.mediaKind === 'image' && Boolean(item.mediaUrl) && (autoplayMedia || item.mimeType !== 'image/gif'), [autoplayMedia]);
+  const roomGallery = useMemo(() => dataSaver ? [] : messages.filter(galleryEligible), [messages, dataSaver, galleryEligible]);
+  const threadGallery = useMemo(() => dataSaver ? [] : [...(threadRoot ? [threadRoot] : []), ...(activeThread?.messages ?? [])].filter(galleryEligible), [threadRoot, activeThread, dataSaver, galleryEligible]);
   const timelineContent = useRef<HTMLDivElement>(null);
   const { viewport: threadTimeline, capture: captureThread, restore: restoreThread, load: loadThread, latest: latestThread, retry: retryThread, error: threadHistoryError, busy: threadHistoryBusy, canRead: canReadThread } = useThreadViewport({
     roomId: room?.id, thread: activeThread, active: contextPanel === 'thread' && !threadCollapsed,
@@ -2346,6 +2353,7 @@ function Conversation({
           else if (['ArrowDown', 'PageDown', 'End', ' '].includes(event.key)) armEdgeScroll(event.shiftKey && event.key === ' ' ? 'backward' : 'forward');
         }}
       >
+        <MediaGalleryContext.Provider value={roomGallery}>
         <div ref={timelineContent} className="timeline-content">
           {history && onLoadMore ? <div className="history-edge">{history.canLoadOlder
             ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void requestHistory('backward')}>Load older messages</button>
@@ -2419,6 +2427,7 @@ function Conversation({
           )}
           {history && onLoadMore && (history.canLoadNewer || historicalWindow) ? <div className="history-edge">{history.canLoadNewer ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void requestHistory('forward')}>Load newer messages</button> : !historyLoading ? <p>End of available history. Jump to latest to follow new messages.</p> : null}</div> : null}
         </div>
+        </MediaGalleryContext.Provider>
       </section>
       {timelineDetached || historicalWindow ? <button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button> : null}
 
@@ -2449,6 +2458,7 @@ function Conversation({
             <span className="thread-panel__actions"><button type="button" aria-label="Collapse thread" onClick={onToggleThreadCollapsed}><ChevronRight size={16} /></button><button type="button" aria-label="Close thread" onClick={onCloseThread}><ArrowLeft size={16} /></button></span>
           </header>
           <div ref={threadTimeline} className="thread-panel__timeline" tabIndex={0} aria-label="Thread replies" aria-busy={threadHistoryBusy} onScroll={() => { captureThread(); reportThreadRead(false, true); }}>
+          <MediaGalleryContext.Provider value={threadGallery}>
           {threadAttentionActions ? <Suspense fallback={null}><ThreadAttention key={JSON.stringify([room.id, activeThread.rootId])} actions={threadAttentionActions} roomId={room.id} rootId={activeThread.rootId} /></Suspense> : null}
             <div className="thread-panel__root">
               {threadRoot && activeThread.rootStatus !== 'removed' ? <TimelineMessage message={threadRoot} hideThreadControls dataSaver={dataSaver} autoplayMedia={autoplayMedia}
@@ -2489,6 +2499,7 @@ function Conversation({
               />
             ))}
             {onPageThreadHistory && activeThread.history?.canLoadNewer ? <div className="history-edge"><button type="button" className="aqua-button" disabled={threadHistoryBusy} onClick={() => loadThread('forward')}>Load newer thread replies</button></div> : null}
+          </MediaGalleryContext.Provider>
           </div>
           <div className="conversation-composition">
             {onLatestThread && activeThread.history?.mode !== 'live' ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><button type="button" disabled={threadHistoryBusy} onClick={latestThread}>Jump to latest replies</button></div> : null}
@@ -2505,6 +2516,7 @@ function Conversation({
             sendGif={threadComposition.edit ? undefined : async (gif) => { await onSendGif(gif, activeThread.rootId); }}
             onShareLocation={threadComposition.edit || !onShareLocation ? undefined : () => onShareLocation(activeThread.rootId)}
             onCreatePoll={threadComposition.edit || !onCreatePoll ? undefined : () => onCreatePoll(activeThread.rootId)}
+            onRecordVoice={threadComposition.edit || !onRecordVoice ? undefined : () => onRecordVoice(activeThread.rootId)}
             onCancelContext={onCancelThreadEdit}
             onEditLatest={() => { const message = [...activeThread.messages].reverse().find((item) => item.actions?.edit ?? (item.isOwn && item.kind === 'text' && !item.pending && (!item.delivery || item.delivery === 'accepted') && !item.pendingEdit)); if (message) startThreadEdit(message); }}
             onSubmitted={(result) => { if (result !== 'edited' && activeThread.history?.mode !== 'live') latestThread(); }}
@@ -2534,6 +2546,7 @@ function Conversation({
         sendGif={composition.edit ? undefined : async (gif) => { await onSendGif(gif); }}
         onShareLocation={composition.edit || !onShareLocation ? undefined : () => onShareLocation()}
         onCreatePoll={composition.edit || !onCreatePoll ? undefined : () => onCreatePoll()}
+        onRecordVoice={composition.edit || !onRecordVoice ? undefined : () => onRecordVoice()}
         onNudge={composition.edit ? undefined : onSendNudge} onCancelContext={onCancelContext}
         onEditLatest={() => { const message = [...messages].reverse().find((item) => item.actions?.edit ?? (item.isOwn && item.kind === 'text' && !item.pending && (!item.delivery || item.delivery === 'accepted') && !item.pendingEdit)); if (message) startEdit(message); }}
         onSubmitted={(result) => { if (result !== 'edited') returnToLatest(); }}
@@ -3246,6 +3259,7 @@ export function Workspace({
   const [roomDialogOpen, setRoomDialogOpen] = useState(false);
   const [locationTarget, setLocationTarget] = useState<{ roomId: string; roomName: string; threadRootId?: string }>();
   const [pollTarget, setPollTarget] = useState<{ roomId: string; roomName: string; threadRootId?: string }>();
+  const [voiceTarget, setVoiceTarget] = useState<{ roomId: string; roomName: string; threadRootId?: string }>();
   const [roomDialogMode, setRoomDialogMode] = useState<'join' | 'direct' | 'create'>('join');
   const [backgroundDialogOpen, setBackgroundDialogOpen] = useState(false);
   const [activeThreadRootId, setActiveThreadRootId] = useState<string>();
@@ -3748,9 +3762,10 @@ export function Workspace({
         options.onPhase?.('uploading');
         const mediaUrl = URL.createObjectURL(file); demoAttachmentUrls.add(mediaUrl);
         const message: MessageSummary = { id: `demo-file-${crypto.randomUUID()}`, roomId: context.roomId, threadRootId: context.threadRootId,
-          senderId: actions.workspace.user.id, senderName: actions.workspace.user.displayName, body: options.caption || file.name, fileName: file.name,
+          senderId: actions.workspace.user.id, senderName: actions.workspace.user.displayName, body: options.voice ? 'Voice message' : options.caption || file.name, fileName: file.name,
           timestamp: Date.now(), kind: 'media', mediaKind: file.type.startsWith('image/') ? 'image' : file.type.startsWith('video/') ? 'video' : file.type.startsWith('audio/') ? 'audio' : 'file',
-          mediaUrl, mimeType: file.type, codeFile: Boolean(codeLanguage), codeLanguage, isOwn: true };
+          mediaUrl, mimeType: file.type, voiceMessage: Boolean(options.voice), durationMs: options.voice?.durationMs,
+          codeFile: Boolean(codeLanguage), codeLanguage, isOwn: true };
         if (context.threadRootId) setDemoThreadMessages((current) => ({ ...current, [context.threadRootId!]: [...(current[context.threadRootId!] ?? []), message] }));
         else setDemoMessages((current) => ({ ...current, [context.roomId]: [...(current[context.roomId] ?? []), message] }));
         progress(file.size, file.size);
@@ -3781,6 +3796,16 @@ export function Workspace({
     if (!effectiveRoomId || !draftsState.isActive()) return;
     const errors = attachmentQueue.stage({ roomId: effectiveRoomId, ...(threadRootId ? { threadRootId } : {}) }, files, codeLanguage);
     if (errors.length) setNotice(errors.join(' '));
+  };
+  const sendRecordedVoice = async (target: { roomId: string; threadRootId?: string }, file: File, durationMs: number, waveform?: number[]) => {
+    if (!draftsState.isActive()) throw new Error('This account is no longer active.');
+    const context = { roomId: target.roomId, ...(target.threadRootId ? { threadRootId: target.threadRootId } : {}) };
+    const before = new Set(attachmentQueue.list(context).map((item) => item.id));
+    const errors = attachmentQueue.stage(context, [file], undefined, { durationMs, waveform });
+    if (errors.length) throw new Error(errors.join(' '));
+    const item = attachmentQueue.list(context).find((entry) => !before.has(entry.id));
+    if (!item) throw new Error('The recording could not be staged. Try again.');
+    attachmentQueue.sendOne(item.id);
   };
 
   const sendGif = async (gif: GifChoice, threadRootId?: string) => {
@@ -4321,6 +4346,7 @@ export function Workspace({
             } : undefined}
             onShareLocation={workspace.mode === 'matrix' && onSendLocation && effectiveRoomId ? (threadRootId) => setLocationTarget({ roomId: effectiveRoomId, roomName: selectedRoomConfigured?.name ?? 'this room', threadRootId }) : undefined}
             onCreatePoll={workspace.mode === 'matrix' && onSendPoll && effectiveRoomId ? (threadRootId) => setPollTarget({ roomId: effectiveRoomId, roomName: selectedRoomConfigured?.name ?? 'this room', threadRootId }) : undefined}
+            onRecordVoice={effectiveRoomId && (workspace.mode === 'demo' || onUploadAttachment) && typeof MediaRecorder !== 'undefined' && typeof navigator.mediaDevices?.getUserMedia === 'function' ? (threadRootId) => setVoiceTarget({ roomId: effectiveRoomId, roomName: selectedRoomConfigured?.name ?? 'this room', threadRootId }) : undefined}
             gifEndpoint={config.features.gifs ? config.gifProvider?.searchEndpoint : undefined}
             stickerPacks={availableStickerPacks}
             defaultStickerPack={profilePersonalization.defaultStickerPack}
@@ -4397,6 +4423,7 @@ export function Workspace({
 
         {locationTarget && onSendLocation ? <Suspense fallback={null}><LocationDialog roomName={locationTarget.roomName} onClose={() => setLocationTarget(undefined)} onSend={(latitude, longitude, description) => onSendLocation(locationTarget.roomId, latitude, longitude, description, locationTarget.threadRootId)} /></Suspense> : null}
         {pollTarget && onSendPoll ? <Suspense fallback={null}><PollDialog roomName={pollTarget.roomName} onClose={() => setPollTarget(undefined)} onSend={(question, answers, disclosed) => onSendPoll(pollTarget.roomId, question, answers, disclosed, pollTarget.threadRootId)} /></Suspense> : null}
+        {voiceTarget ? <Suspense fallback={null}><VoiceRecorderDialog roomName={voiceTarget.roomName} maxBytes={config.media.maxUploadBytes} microphoneId={preferences.microphoneId} onClose={() => setVoiceTarget(undefined)} onSend={(file, durationMs, waveform) => sendRecordedVoice(voiceTarget, file, durationMs, waveform)} /></Suspense> : null}
 
         {backgroundDialogOpen && selectedRoomConfigured ? (
           <Dialog className="room-background-dialog" backdropClassName="room-background-dialog-backdrop" aria-labelledby="room-background-title" onClose={() => setBackgroundDialogOpen(false)}>

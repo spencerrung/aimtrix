@@ -610,10 +610,11 @@
   .message-media-button .message-media { display: block; }
   .media-viewer-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; padding: 24px; place-items: center; background: rgba(7, 16, 25, 0.78); }
   .media-viewer { display: grid; width: min(1100px, 100%); max-height: 100%; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 18px 60px rgba(0,0,0,0.45); }
-  .media-viewer header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+  .media-viewer header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
   .media-viewer header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.76rem; }
-  .media-viewer header span { display: flex; gap: 5px; }
-  .media-viewer header button { padding: 5px 7px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); font: inherit; font-size: 0.67rem; }
+  .media-viewer header span { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
+  .media-viewer header button, .media-viewer header a { padding: 5px 7px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); font: inherit; font-size: 0.67rem; }
+  .media-viewer header small { color: var(--text-soft); }
   .media-viewer > img { display: block; max-width: 100%; max-height: calc(100vh - 120px); margin: auto; object-fit: contain; }
   .media-viewer > img.is-actual-size { max-width: none; max-height: none; }
   .media-viewer > p { padding: 30px; color: var(--text-soft); text-align: center; }

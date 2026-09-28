@@ -12,6 +12,19 @@ function setup(send = vi.fn<Send>(async () => {})) {
 }
 
 describe('staged attachment queue', () => {
+  it('sends a recorded voice item without sending other reviewed files', async () => {
+    const { queue, send } = setup();
+    queue.stage(room, [file('unsent.txt')]);
+    const voice = new File(['voice'], 'voice-message.webm', { type: 'audio/webm' });
+    queue.stage(room, [voice], undefined, { durationMs: 1200 });
+    const item = queue.list(room).at(-1)!;
+    queue.sendOne(item.id);
+    await vi.waitFor(() => expect(item.phase).toBe('sent'));
+    expect(queue.list(room)[0].phase).toBe('staged');
+    expect(send).toHaveBeenCalledOnce();
+    expect(send.mock.calls[0][4].voice).toEqual({ durationMs: 1200 });
+  });
+
   it('preserves ordered captions, independent failures and stable retry identity without resending successes', async () => {
     let rejectSecond = true;
     const send = vi.fn<Send>(async (_context, input, _progress, _language, options) => { if (input.name === 'second.txt' && rejectSecond) { rejectSecond = false; throw new Error('private transport detail'); } expect(options.signal?.aborted).toBe(false); });

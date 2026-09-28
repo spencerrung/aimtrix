@@ -6,14 +6,17 @@ import './attachments.css';
 function AttachmentPreview({ item }: { item: StagedAttachment }) {
   const [requested, setRequested] = useState(false);
   const image = useRef<HTMLImageElement>(null);
+  const audio = useRef<HTMLAudioElement>(null);
   useEffect(() => {
-    if (!requested || !item.file || !item.type.startsWith('image/') || item.type === 'image/svg+xml') return;
+    if (!requested || !item.file || !(item.type.startsWith('image/') && item.type !== 'image/svg+xml' || item.voice)) return;
     const url = URL.createObjectURL(item.file);
     if (image.current) image.current.src = url;
+    if (audio.current) audio.current.src = url;
     return () => { URL.revokeObjectURL(url); };
-  }, [requested, item.file, item.type]);
-  if (!item.file || !item.type.startsWith('image/') || item.type === 'image/svg+xml') return null;
-  return requested ? <img ref={image} className="attachment-tray__preview" alt={`Preview of ${item.name}`} />
+  }, [requested, item.file, item.type, item.voice]);
+  if (!item.file || !(item.type.startsWith('image/') && item.type !== 'image/svg+xml' || item.voice)) return null;
+  return requested ? item.voice ? <audio ref={audio} controls preload="metadata" aria-label={`Preview of ${item.name}`} />
+    : <img ref={image} className="attachment-tray__preview" alt={`Preview of ${item.name}`} />
     : <button type="button" onClick={() => setRequested(true)}>Preview {item.name}</button>;
 }
 
@@ -29,11 +32,11 @@ export function AttachmentTray({ queue, context }: { queue: StagedAttachments; c
     <ol>{items.map((item, index) => {
       const active = ['queued', 'encrypting', 'uploading', 'sending'].includes(item.phase);
       return <li key={item.id}>
-        <div className="attachment-tray__details"><strong>{item.name}</strong><small>{Math.ceil(item.size / 1024)} KB</small>
+        <div className="attachment-tray__details"><strong>{item.voice ? 'Voice message' : item.name}</strong><small>{Math.ceil(item.size / 1024)} KB{item.voice ? ` · ${Math.ceil(item.voice.durationMs / 1000)}s` : ''}</small>
           <span role="status">{({ staged: 'Ready to send', reattach: 'Reattach file', queued: 'Queued', encrypting: 'Encrypting…', uploading: `Uploading ${item.progress}%`, sending: 'Sending…', failed: 'Not confirmed', sent: 'Sent', cancelled: 'Cancelled' })[item.phase]}</span>
         </div>
         <AttachmentPreview item={item} />
-        {!['sent', 'cancelled'].includes(item.phase) ? <label>Caption for {item.name}<input aria-label={`Caption for ${item.name}`} maxLength={16_384} value={item.caption ?? ''} disabled={!['staged', 'reattach'].includes(item.phase)} onChange={(event) => queue.caption(item.id, event.target.value)} /></label> : null}
+        {!item.voice && !['sent', 'cancelled'].includes(item.phase) ? <label>Caption for {item.name}<input aria-label={`Caption for ${item.name}`} maxLength={16_384} value={item.caption ?? ''} disabled={!['staged', 'reattach'].includes(item.phase)} onChange={(event) => queue.caption(item.id, event.target.value)} /></label> : null}
         {item.phase === 'reattach' ? <>
           <p>{item.interrupted ? 'A send was interrupted. Check the conversation before reattaching to avoid sending a second copy.' : 'File bytes are not saved with drafts. Choose the file again.'}</p>
           <label className="aqua-button">Reattach {item.name}<input className="sr-only" type="file" aria-label={`Reattach ${item.name}`} onChange={(event) => {

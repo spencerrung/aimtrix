@@ -222,11 +222,12 @@ interface MessageContent {
   url?: string;
   filename?: string;
   file?: EncryptedMediaInfo & { url?: string };
-  info?: { mimetype?: string };
+  info?: { mimetype?: string; duration?: number };
   'm.new_content'?: MessageContent;
   'm.relates_to'?: RelationContent;
   'm.mentions'?: { user_ids?: string[] };
   'dev.alucard.aimtrix.nudge.v1'?: { version?: unknown };
+  'org.matrix.msc3245.voice'?: unknown;
 }
 
 function originalEventContent(event: MatrixEvent): MessageContent {
@@ -283,6 +284,8 @@ function eventBody(
   encryptedFile?: MessageSummary['encryptedFile'];
   mimeType?: string;
   mediaKind?: MessageSummary['mediaKind'];
+  voiceMessage?: boolean;
+  durationMs?: number;
   codeFile?: boolean;
   codeLanguage?: string;
   location?: MessageSummary['location'];
@@ -384,6 +387,8 @@ function eventBody(
         encryptedFile: content.file,
         mimeType: content.info?.mimetype,
         mediaKind,
+        voiceMessage: mediaKind === 'audio' && Boolean(content['org.matrix.msc3245.voice'] && typeof content['org.matrix.msc3245.voice'] === 'object'),
+        durationMs: mediaKind === 'audio' && typeof content.info?.duration === 'number' && content.info.duration >= 0 && content.info.duration <= 300_000 ? content.info.duration : undefined,
         codeFile: Boolean(content['dev.alucard.aimtrix.code.v1']),
         codeLanguage: typeof (content['dev.alucard.aimtrix.code.v1'] as { language?: unknown } | undefined)?.language === 'string'
           ? (content['dev.alucard.aimtrix.code.v1'] as { language: string }).language
@@ -557,6 +562,8 @@ function messagesForEvents(
       encryptedFile: rendered.encryptedFile,
       mimeType: rendered.mimeType,
       mediaKind: rendered.mediaKind,
+      voiceMessage: rendered.voiceMessage,
+      durationMs: rendered.durationMs,
       codeFile: rendered.codeFile,
       codeLanguage: rendered.codeLanguage,
       location: rendered.location,
