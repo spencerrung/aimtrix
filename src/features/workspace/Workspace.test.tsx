@@ -361,6 +361,38 @@ describe('Workspace demo', () => {
     await waitFor(() => expect(trigger).toHaveFocus());
   });
 
+  it('browses loaded room images with keyboard and authenticated-source download controls', async () => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome = ['one', 'two'].map((name, index) => ({
+      id: `$image-${name}`, roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+      body: `${name}.png`, timestamp: index + 1, kind: 'media' as const, isOwn: false,
+      mediaKind: 'image' as const, mediaUrl: `blob:${name}`, mimeType: 'image/png',
+    }));
+    renderWorkspace({ workspace });
+    fireEvent.click(screen.getByRole('button', { name: 'View one.png full size' }));
+    expect(screen.getByRole('dialog', { name: 'Viewing one.png' })).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+    expect(screen.getByRole('dialog', { name: 'Viewing two.png' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Download image' })).toHaveAttribute('href', 'blob:two');
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Actual size' }), { key: 'ArrowLeft' });
+    expect(screen.getByRole('dialog', { name: 'Viewing one.png' })).toBeVisible();
+  });
+
+  it('keeps data-saver images behind individual load controls during viewing', () => {
+    const workspace = structuredClone(demoWorkspace);
+    workspace.messagesByRoom.welcome = ['one', 'two'].map((name, index) => ({
+      id: `$gated-${name}`, roomId: 'welcome', senderId: '@mara:example.com', senderName: 'Mara',
+      body: `${name}.png`, timestamp: index + 1, kind: 'media' as const, isOwn: false,
+      mediaKind: 'image' as const, mediaUrl: `blob:${name}`, mimeType: 'image/png',
+    }));
+    renderWorkspace({ workspace, preferences: { ...defaultUserPreferences, dataSaver: true } });
+    expect(screen.getAllByRole('button', { name: 'Load media' })).toHaveLength(2);
+    fireEvent.click(screen.getAllByRole('button', { name: 'Load media' })[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'View one.png full size' }));
+    expect(screen.queryByRole('button', { name: 'Next image' })).not.toBeInTheDocument();
+    expect(screen.getByRole('dialog', { name: 'Viewing one.png' })).toBeVisible();
+  });
+
   it('does not open stickers or non-image attachments in the image viewer', () => {
     const workspace = structuredClone(demoWorkspace);
     workspace.messagesByRoom.welcome = [

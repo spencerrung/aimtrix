@@ -8,6 +8,7 @@ export interface AttachmentSendOptions {
   id?: string;
   signal?: AbortSignal;
   caption?: string;
+  voice?: { durationMs: number; waveform?: number[] };
   onPhase?: (phase: AttachmentPhase) => void;
 }
 
@@ -68,7 +69,7 @@ export class AttachmentSender {
     const invalid = attachmentValidationError(file, this.hooks.maxBytes);
     if (invalid) throw new Error(invalid);
     const id = options.id ?? client.makeTxnId();
-    const fingerprint = JSON.stringify([file.name, file.size, file.type, file.lastModified, options.caption ?? '', codeLanguage ?? '']);
+    const fingerprint = JSON.stringify([file.name, file.size, file.type, file.lastModified, options.caption ?? '', codeLanguage ?? '', options.voice]);
     let operation = this.operations.get(id);
     if (operation && (operation.client !== client || operation.roomId !== roomId || operation.rootId !== rootId || operation.fingerprint !== fingerprint)) {
       throw new Error('This attachment changed. Remove it and add it again.');
@@ -120,8 +121,15 @@ export class AttachmentSender {
       if (!current.content) {
         const encryptedRoom = requiresEncryption;
         const msgtype = file.type.startsWith('image/') ? MsgType.Image : file.type.startsWith('video/') ? MsgType.Video : file.type.startsWith('audio/') ? MsgType.Audio : MsgType.File;
-        const metadata = { msgtype, body: options.caption?.trim() || file.name, filename: file.name,
-          info: { mimetype: file.type || 'application/octet-stream', size: file.size },
+        const voice = options.voice;
+        if (voice && (msgtype !== MsgType.Audio || !Number.isInteger(voice.durationMs) || voice.durationMs < 1 || voice.durationMs > 300_000 ||
+          voice.waveform && (voice.waveform.length !== 32 || voice.waveform.some((value) => !Number.isInteger(value) || value < 0 || value > 1024)))) {
+          throw new Error('This recording has invalid voice metadata. Record it again.');
+        }
+        const metadata = { msgtype, body: voice ? 'Voice message' : options.caption?.trim() || file.name, filename: file.name,
+          info: { mimetype: file.type || 'application/octet-stream', size: file.size, ...(voice ? { duration: voice.durationMs } : {}) },
+          ...(voice ? { 'org.matrix.msc3245.voice': {}, 'org.matrix.msc1767.text': 'Voice message',
+            'org.matrix.msc1767.audio': { duration: voice.durationMs, ...(voice.waveform ? { waveform: voice.waveform } : {}) } } : {}),
           ...(codeLanguage ? { 'dev.alucard.aimtrix.code.v1': { language: codeLanguage } } : {}) };
         const uploadOptions = { abortController: abort, progressHandler: (value: { loaded: number; total: number }) => {
           if (this.generation === generation && !abort.signal.aborted) progress?.(value.loaded, value.total || file.size);
@@ -136,7 +144,8 @@ export class AttachmentSender {
           guard(); permission(); phase('uploading'); guard(); permission();
           const uploaded = await client.uploadContent(new Blob([encrypted.data]), { ...uploadOptions, type: 'application/octet-stream', includeFilename: false });
           guard();
-          current.content = { ...metadata, file: { ...encrypted.info, hashes: encrypted.info.hashes ?? {}, url: uploaded.content_uri } } as RoomMessageEventContent;
+          const encryptedFile = { ...encrypted.info, hashes: encrypted.info.hashes ?? {}, url: uploaded.content_uri };
+          current.content = { ...metadata, file: encryptedFile, ...(voice ? { 'org.matrix.msc1767.file': { file: encryptedFile, name: file.name, mimetype: file.type, size: file.size } } : {}) } as RoomMessageEventContent;
         } else {
           guard(); permission(); phase('uploading'); guard(); permission();
           const uploaded = await client.uploadContent(file, { ...uploadOptions, name: file.name, type: file.type });
@@ -144,7 +153,7 @@ export class AttachmentSender {
           // Encryption can be enabled during an upload. Never publish a plaintext
           // file reference into a room which became encrypted in the meantime.
           if (await encryptionRequired()) throw new Error('Room encryption changed. Retry to encrypt this attachment.');
-          current.content = { ...metadata, url: uploaded.content_uri } as RoomMessageEventContent;
+          current.content = { ...metadata, url: uploaded.content_uri, ...(voice ? { 'org.matrix.msc1767.file': { url: uploaded.content_uri, name: file.name, mimetype: file.type, size: file.size } } : {}) } as RoomMessageEventContent;
         }
       }
       guard();

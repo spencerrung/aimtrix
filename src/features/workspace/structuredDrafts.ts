@@ -5,7 +5,7 @@ export interface DraftMention { userId: string; label: string }
 export interface DraftInlineEmoji { id: string; shortcode: string; name: string; src: string; start: number; end: number; alt?: string; title?: string }
 export interface DraftText { body: string; mentions?: DraftMention[]; inlineEmojis?: DraftInlineEmoji[]; codeLanguage?: string; codeMode?: boolean }
 export interface DraftReply { id: string; senderId: string; senderName: string; body: string; threadRootId?: string }
-export interface DraftAttachment { id: string; name: string; size: number; type: string; lastModified?: number; codeLanguage?: string; caption?: string; interrupted?: boolean }
+export interface DraftAttachment { id: string; name: string; size: number; type: string; lastModified?: number; codeLanguage?: string; caption?: string; interrupted?: boolean; voice?: { durationMs: number; waveform?: number[] } }
 export interface DraftComposition extends DraftText {
   reply?: DraftReply;
   /** Descriptors only. A restored file always requires explicit reattachment. */
@@ -111,10 +111,14 @@ function draftValue(value: unknown, allowEdit = true): StructuredDraft {
         || item.lastModified !== undefined && (!Number.isSafeInteger(item.lastModified) || Number(item.lastModified) < 0)
         || item.codeLanguage !== undefined && !text(item.codeLanguage, 80)
         || item.caption !== undefined && !text(item.caption, DRAFT_LIMITS.body)
+        || item.voice !== undefined && (!object(item.voice) || !Number.isInteger(item.voice.durationMs) || Number(item.voice.durationMs) < 1 || Number(item.voice.durationMs) > 300_000 ||
+          item.voice.waveform !== undefined && (!Array.isArray(item.voice.waveform) || item.voice.waveform.length !== 32 || item.voice.waveform.some((value) => !Number.isInteger(value) || value < 0 || value > 1024)))
         || item.interrupted !== undefined && typeof item.interrupted !== 'boolean') throw new Error('Invalid attachment');
       return { id: item.id, name: item.name, type: item.type, size: Number(item.size),
         ...(item.lastModified !== undefined ? { lastModified: Number(item.lastModified) } : {}), ...(item.codeLanguage !== undefined ? { codeLanguage: item.codeLanguage as string } : {}),
-        ...(item.caption !== undefined ? { caption: item.caption as string } : {}), ...(item.interrupted !== undefined ? { interrupted: item.interrupted as boolean } : {}) };
+        ...(item.caption !== undefined ? { caption: item.caption as string } : {}), ...(item.interrupted !== undefined ? { interrupted: item.interrupted as boolean } : {}),
+        ...(item.voice !== undefined ? { voice: { durationMs: Number((item.voice as Record<string, unknown>).durationMs),
+          ...((item.voice as Record<string, unknown>).waveform !== undefined ? { waveform: (item.voice as Record<string, unknown>).waveform as number[] } : {}) } } : {}) };
     });
     if (new Set(result.attachments.map((item) => item.id)).size !== result.attachments.length) throw new Error('Duplicate attachment');
   }

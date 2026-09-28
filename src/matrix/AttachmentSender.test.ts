@@ -30,6 +30,22 @@ function fixture(encrypted = false) {
 }
 
 describe('AttachmentSender', () => {
+  it.each([false, true])('sends voice metadata with an ordinary audio fallback (encrypted=%s)', async (encrypted) => {
+    const test = fixture(encrypted);
+    const recording = new File(['synthetic'], 'voice-message.webm', { type: 'audio/webm', lastModified: 1 });
+    Object.defineProperty(recording, 'arrayBuffer', { value: async () => new ArrayBuffer(9) });
+    await test.sender.send(test.room.roomId, recording, undefined, undefined, undefined, {
+      voice: { durationMs: 1500, waveform: Array(32).fill(512) },
+    });
+    const content = test.sendMessage.mock.calls[0][1];
+    expect(content).toMatchObject({ msgtype: 'm.audio', info: { mimetype: 'audio/webm', duration: 1500 },
+      'org.matrix.msc3245.voice': {}, 'org.matrix.msc1767.audio': { duration: 1500, waveform: Array(32).fill(512) },
+      'org.matrix.msc1767.file': encrypted ? { file: { url: 'mxc://synthetic.test/file' } } : { url: 'mxc://synthetic.test/file' },
+    });
+    expect(content).toHaveProperty(encrypted ? 'file' : 'url');
+    expect(content).not.toHaveProperty(encrypted ? 'url' : 'file');
+  });
+
   it.each([false, true])('honors synchronous cancellation from upload phase feedback (encrypted=%s)', async (encrypted) => {
     const test = fixture(encrypted);
     await expect(test.sender.send(test.room.roomId, file(), undefined, undefined, undefined, {

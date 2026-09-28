@@ -163,6 +163,8 @@ export interface MessageSummary {
   encryptedFile?: EncryptedMediaInfo;
   mimeType?: string;
   mediaKind?: 'image' | 'video' | 'audio' | 'file';
+  voiceMessage?: boolean;
+  durationMs?: number;
   codeFile?: boolean;
   codeLanguage?: string;
   pinned?: boolean;
