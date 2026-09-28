@@ -326,6 +326,11 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onRetryMessage={(roomId, eventId) => controller.retryMessage(roomId, eventId)}
         onCancelMessage={(roomId, eventId) => controller.cancelMessage(roomId, eventId)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
+        onSendLocation={(roomId, latitude, longitude, description, threadRootId) => controller.sendLocation(roomId, latitude, longitude, description, threadRootId)}
+        onSendPoll={(roomId, question, answers, disclosed, threadRootId) => controller.sendPoll(roomId, question, answers, disclosed, threadRootId)}
+        onLoadPoll={(roomId, pollId) => controller.loadPoll(roomId, pollId)}
+        onVotePoll={(roomId, pollId, answerIds) => controller.votePoll(roomId, pollId, answerIds)}
+        onEndPoll={(roomId, pollId) => controller.endPoll(roomId, pollId)}
         onLoadLinkPreview={(url) => controller.getLinkPreview(url)}
         onRoomSelected={(roomId) => controller.openRoomHistory(roomId)}
         onThreadSelected={(roomId, rootId, eventId) => controller.openThreadHistory(roomId, rootId, eventId)}

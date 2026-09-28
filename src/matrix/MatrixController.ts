@@ -55,6 +55,8 @@ import { PrivateSearchStore, MAX_PRIVATE_SEARCH_EVENTS, allowPrivateSearchRoom, 
 import { Direction } from 'matrix-js-sdk/lib/models/event-timeline.js';
 import { SAVED_REFERENCES_EVENT, changeSavedReference, parseSavedReferences, type SavedReference } from './savedReferences';
 import { historyRelation, isVisibleTimelineEvent } from './historyEvents';
+import { createGeoUri } from './locations';
+import { aggregatePoll, createPollStart, parsePollStart, POLL_END, POLL_RESPONSE, POLL_TEXT, type PollDefinition, type PollRelation, type PollResults } from './polls';
 import {
   matrixFormattedMessage,
   matrixReplyFormattedBody,
@@ -3434,6 +3436,122 @@ export class MatrixController {
       ...(formatted.formattedBody ? { format: 'org.matrix.custom.html', formatted_body: formatted.formattedBody } : {}),
     } as RoomMessageEventContent, txnId));
     if (this.notificationPreferences.notificationSounds) this.playSendTone();
+    this.scheduleWorkspacePublish();
+  }
+
+  public async sendLocation(roomId: string, latitude: number, longitude: number, description = '', threadRootId?: string): Promise<void> {
+    const client = this.client;
+    const sdk = this.sdk;
+    if (!client || !sdk) throw new MessageSendError(false);
+    const uri = createGeoUri(latitude, longitude);
+    const label = description.trim().slice(0, 200);
+    if ([...label].some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127)) throw new Error('Location description contains unsupported characters.');
+    const room = this.messageRoom(client, roomId);
+    if (room.getMyMembership() !== 'join' || threadRootId && (!validUnreadEventId(threadRootId) || room.hasPendingEvent(threadRootId))) throw new MessageSendError(false);
+    await this.mediaSendEncryption(client, room, 'm.room.message');
+    this.actionRoom(client, roomId, room);
+    const body = `${label || 'Shared location'}: ${uri}`;
+    const content = {
+      msgtype: sdk.MsgType.Location,
+      body,
+      geo_uri: uri,
+      info: {},
+      'm.location': { uri, ...(label ? { description: label } : {}) },
+      'm.asset': { type: 'm.pin' },
+      'm.text': body,
+      ...(threadRootId ? this.threadMessageRelation(roomId, threadRootId) : {}),
+    } as RoomMessageEventContent;
+    await this.sendTrackedMessage(client, room, (txnId) => threadRootId
+      ? client.sendEvent(roomId, threadRootId, sdk.EventType.RoomMessage, content, txnId)
+      : client.sendEvent(roomId, sdk.EventType.RoomMessage, content, txnId));
+    this.scheduleWorkspacePublish();
+  }
+
+  public async sendPoll(roomId: string, question: string, answers: string[], disclosed: boolean, threadRootId?: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new MessageSendError(false);
+    const poll = createPollStart(question, answers, disclosed);
+    const room = this.messageRoom(client, roomId);
+    if (room.getMyMembership() !== 'join' || threadRootId && (!validUnreadEventId(threadRootId) || room.hasPendingEvent(threadRootId))) throw new MessageSendError(false);
+    await this.mediaSendEncryption(client, room, poll.type);
+    this.actionRoom(client, roomId, room);
+    const sendWire = client.sendEvent.bind(client) as unknown as (...args: [string, string, Record<string, unknown>, string] | [string, string, string, Record<string, unknown>, string]) => Promise<unknown>;
+    await this.sendTrackedMessage(client, room, (txnId) => threadRootId
+      ? sendWire(roomId, threadRootId, poll.type, poll.content, txnId)
+      : sendWire(roomId, poll.type, poll.content, txnId));
+    this.scheduleWorkspacePublish();
+  }
+
+  public async loadPoll(roomId: string, pollId: string): Promise<{ definition: PollDefinition; results: PollResults; canEnd: boolean }> {
+    const client = this.client;
+    const room = client?.getRoom(roomId);
+    if (!client || !room || room.getMyMembership() !== 'join' || !validUnreadEventId(pollId)) throw new Error('The poll is unavailable.');
+    let nextBatch: string | undefined;
+    const seen = new Set<string>();
+    const relations: PollRelation[] = [];
+    let definition: PollDefinition | undefined;
+    let root: MatrixEvent | undefined;
+    let incomplete = false;
+    do {
+      const page = await client.relations(roomId, pollId, 'm.reference', undefined, { from: nextBatch });
+      if (this.client !== client) throw new Error('The session changed while loading poll results.');
+      root = page.originalEvent ?? root;
+      if (root) {
+        await client.decryptEventIfNeeded(root);
+        definition = parsePollStart(root.getType(), root.getContent<Record<string, unknown>>());
+      }
+      for (const event of page.events) {
+        await client.decryptEventIfNeeded(event);
+        if (event.isDecryptionFailure()) { incomplete = true; continue; }
+        const senderId = event.getSender();
+        const id = event.getId();
+        if (!senderId || !id) continue;
+        relations.push({ id, type: event.getType(), senderId, timestamp: event.getTs(), content: event.getContent<Record<string, unknown>>(), redacted: event.isRedacted(),
+          canEnd: senderId === root?.getSender() || Boolean(root && room.currentState.maySendRedactionForEvent(root, senderId)),
+        });
+      }
+      const cursor = page.nextBatch ?? undefined;
+      if (!cursor || seen.has(cursor)) { if (cursor) incomplete = true; break; }
+      seen.add(cursor);
+      nextBatch = cursor;
+      if (relations.length >= 5_000) { incomplete = true; break; }
+    } while (nextBatch);
+    if (!definition || !root || root.isRedacted()) throw new Error('This poll was removed or has unsupported content.');
+    return { definition, results: aggregatePoll(definition, pollId, client.getSafeUserId(), relations, incomplete),
+      canEnd: root.getSender() === client.getSafeUserId() || room.currentState.maySendRedactionForEvent(root, client.getSafeUserId()),
+    };
+  }
+
+  public async votePoll(roomId: string, pollId: string, answerIds: string[]): Promise<void> {
+    const client = this.client;
+    if (!client) throw new MessageSendError(false);
+    const { definition, results } = await this.loadPoll(roomId, pollId);
+    if (results.closed || results.incomplete) throw new Error('Poll results are incomplete or the poll has ended. Refresh before voting.');
+    if (!answerIds.length || answerIds.length > definition.maxSelections || new Set(answerIds).size !== answerIds.length ||
+      answerIds.some((id) => !definition.answers.some((answer) => answer.id === id))) throw new Error('Choose available poll answers within the selection limit.');
+    const room = this.messageRoom(client, roomId);
+    await this.mediaSendEncryption(client, room, POLL_RESPONSE);
+    const sendWire = client.sendEvent.bind(client) as unknown as (roomId: string, type: string, content: Record<string, unknown>, txnId: string) => Promise<unknown>;
+    await this.sendTrackedMessage(client, room, (txnId) => sendWire(roomId, POLL_RESPONSE, {
+      'm.relates_to': { rel_type: 'm.reference', event_id: pollId },
+      [POLL_RESPONSE]: { answers: answerIds },
+    }, txnId));
+    this.scheduleWorkspacePublish();
+  }
+
+  public async endPoll(roomId: string, pollId: string): Promise<void> {
+    const client = this.client;
+    if (!client) throw new MessageSendError(false);
+    const room = this.messageRoom(client, roomId);
+    const { definition, results, canEnd } = await this.loadPoll(roomId, pollId);
+    if (!canEnd) throw new Error('Only the poll author or a moderator may end this poll.');
+    if (results.closed || results.incomplete) throw new Error('The poll has ended or its state is incomplete.');
+    await this.mediaSendEncryption(client, room, POLL_END);
+    const sendWire = client.sendEvent.bind(client) as unknown as (roomId: string, type: string, content: Record<string, unknown>, txnId: string) => Promise<unknown>;
+    await this.sendTrackedMessage(client, room, (txnId) => sendWire(roomId, POLL_END, {
+      'm.relates_to': { rel_type: 'm.reference', event_id: pollId },
+      [POLL_END]: {}, [POLL_TEXT]: `Poll ended: ${definition.question}`,
+    }, txnId));
     this.scheduleWorkspacePublish();
   }
 

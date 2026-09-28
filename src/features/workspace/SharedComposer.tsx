@@ -1,5 +1,5 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { BellRing, Film, Paperclip, Plus, Search, Send, Smile, Sticker, X } from 'lucide-react';
+import { BarChart3, BellRing, Film, MapPin, Paperclip, Plus, Search, Send, Smile, Sticker, X } from 'lucide-react';
 import { Popover } from '../../components/Popover';
 import { useMediaSource } from '../../matrix/useMediaSource';
 import type { MemberSummary } from '../../matrix/viewModels';
@@ -23,6 +23,8 @@ export interface SharedComposerProps {
   sendSticker?(sticker: ComposerSticker): void | Promise<void>;
   sendGif?(gif: GifChoice): void | Promise<void>;
   onNudge?(): void | Promise<void>;
+  onShareLocation?(): void;
+  onCreatePoll?(): void;
   onEditLatest?(): void;
   onCancelContext?(): void;
   onSubmitted?(result: Exclude<ComposerResult, false>): void;
@@ -227,6 +229,8 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
         }, <Sticker size={18} />) : null}
         {button('Add emoji', () => setPicker(picker === 'emoji' ? undefined : 'emoji'), <Smile size={19} />)}
         {props.onNudge ? button('Send a nudge', () => runTool(props.onNudge!), <BellRing size={18} />) : null}
+        {props.onShareLocation ? button('Share a location', props.onShareLocation, <MapPin size={18} />) : null}
+        {props.onCreatePoll ? button('Create a poll', props.onCreatePoll, <BarChart3 size={18} />) : null}
         <select className="composer__code-language" aria-label="Code language" value={value.codeLanguage ?? 'text'} disabled={disabled} onChange={(event) => change({ ...value, codeLanguage: event.target.value })}>{Object.entries(LANGUAGES).map(([language, label]) => <option key={language} value={language}>{label}</option>)}</select>
         {button(value.codeMode ? 'Exit code mode' : 'Insert code block', () => { if (value.codeMode) { change({ ...value, codeMode: false }); focus(); return; } const selection = composer.current?.getSelection(); const body = selection && selection.end > selection.start ? value.body.slice(selection.start, selection.end) : value.body; change({ ...value, body, codeMode: true, inlineEmojis: [], mentions: [] }); focus(); }, <span aria-hidden="true">&lt;/&gt;</span>)}
         {(value.codeMode || value.body.startsWith('```')) && props.stageFiles ? button('Send code as file', () => { if (value.body.trim()) stage([new File([value.body], `snippet.${EXTENSIONS[value.codeLanguage ?? 'text'] ?? 'txt'}`, { type: 'text/plain' })], value.codeLanguage ?? 'text'); }, <span aria-hidden="true">▤</span>) : null}

@@ -11,6 +11,10 @@
   .message-kind--text blockquote,.message-kind--notice blockquote,.message-kind--emote blockquote { margin:6px 0;padding:4px 10px;border-inline-start:3px solid var(--border) }
   .message-kind--text ul,.message-kind--text ol,.message-kind--notice ul,.message-kind--notice ol,.message-kind--emote ul,.message-kind--emote ol { padding-inline-start:24px;margin:6px 0 }
   .message-unsupported { border:1px dashed var(--border);border-radius:6px;padding:8px;color:var(--text-soft) }
+  .message-location { display:grid;gap:5px;max-width:320px;padding:10px;border:1px solid var(--border);border-radius:7px;background:var(--surface-soft) }
+  .message-location strong,.message-location span { overflow-wrap:anywhere }
+  .message-location a { width:fit-content;color:var(--blue-deep);font-weight:700 }
+  .message-location small { color:var(--text-soft) }
   .message-action-menu { position:fixed;z-index:1200;display:grid;gap:2px;min-width:190px;max-width:calc(100vw - 24px);max-height:calc(100dvh - 24px);overflow:auto;padding:6px;border:1px solid var(--border);border-radius:9px;background:var(--surface-raised);box-shadow:var(--shadow) }
   .message-action-menu button { display:flex;align-items:center;gap:8px;min-height:36px;padding:6px 10px;border:0;border-radius:5px;color:var(--text);background:transparent;font:inherit;text-align:left }
   .message-action-menu button:hover,.message-action-menu button:focus-visible { background:var(--blue-soft) }
