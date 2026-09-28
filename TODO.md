@@ -172,6 +172,12 @@ These retain compatibility depth and validation obligations alongside additive f
 - [ ] Add room call activity, participant grid, active speaker, member controls, reconnect state, and group-call E2EE indicators. — [#169](https://github.com/spencerrung/aimtrix/issues/169).
 - [ ] Add automated WebRTC tests with fake media plus disposable Synapse/LiveKit/TURN interoperability coverage. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#169](https://github.com/spencerrung/aimtrix/issues/169).
 
+### Product-contract decisions
+
+- [x] Decide that private profile decoration stays private; public or room-scoped expression is deferred pending explicit audience, capability and deletion evidence. — [#170](https://github.com/spencerrung/aimtrix/issues/170); [decision](docs/product-contract-decisions.md).
+- [ ] Validate the scheduling feasibility decision with a disposable suspend/restart/offline/time-zone proof; the current direction rejects guaranteed scheduled sending and timed reminders in the backend-free release. — [#172](https://github.com/spencerrung/aimtrix/issues/172); [draft decision](docs/product-contract-decisions.md).
+- [x] Select operator-managed Matrix bot/bridge room membership for the first integration path, with no client catalog or provider secrets in public config. — [#173](https://github.com/spencerrung/aimtrix/issues/173); [decision](docs/product-contract-decisions.md).
+
 ### Scale, portability, and release validation
 
 - [x] Add disposable Synapse/Dex integration infrastructure and CI for password/standard SSO, encrypted multi-device sync, authenticated encrypted uploads, and moderation; see [live evidence](docs/live-matrix-tests.md).
