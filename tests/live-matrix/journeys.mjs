@@ -144,7 +144,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
         const composer = elementPeer.getByRole('textbox', { name: /Send an encrypted message/ });
         await until(async () => {
-          if (await skip.isVisible()) await skip.click();
+          // Startup prompts can disappear between visibility and click. Keep
+          // waiting for the encrypted composer rather than failing the journey.
+          if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
           return composer.isVisible() && composer.isEnabled();
         }, 'element-encrypted-composer', 60000);
         const hello = `Synthetic Element encrypted hello ${randomBytes(6).toString('hex')}`;
