@@ -1406,6 +1406,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     await check('moderation-role-kick-ban-unban', async () => {
       const drawer = alice.getByRole('complementary', { name: 'Buddy and room drawer' });
       if (!(await drawer.isVisible())) await alice.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+      await drawer.getByRole('tab', { name: 'People', exact: true }).click();
       await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
       await drawer.getByRole('menuitemradio', { name: 'Decorator', exact: true }).click();
       const memberPath = `/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.member/${encode(accounts.charlie.user_id)}`;
