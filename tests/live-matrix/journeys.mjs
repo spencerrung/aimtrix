@@ -910,7 +910,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.getByRole('region', { name: 'Attachments', exact: true }).locator('li').filter({ hasText: files[1].name }).getByText('Sent', { exact: true }).waitFor();
         for (let index = 0; index < files.length; index++) {
           await verifyAttachment(bob, files[index], captions[index]);
-          invariant(await alice.locator('.timeline-message').filter({ has: alice.locator('.message-file').filter({ hasText: files[index].name }) }).count() === 1, 'single-accepted-attachment');
+          await until(async () => await alice.locator('.timeline-message').filter({ has: alice.locator('.message-file').filter({ hasText: files[index].name }) }).count() === 1, 'single-accepted-attachment');
         }
         const attempts = wire.slice(start);
         invariant(attempts.length === 3 && attempts.every((event) => event.path.includes('/m.room.encrypted/')), 'attachment-retry-transaction');
@@ -1109,7 +1109,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await source.getByRole('button', { name: 'Pin message', exact: true }).click();
         const pinsPath = `/_matrix/client/v3/rooms/${encode(formattedPeer.roomId)}/state/m.room.pinned_events`;
         stage = 'pin-server-state';
-        await until(async () => (await api(pinsPath, { token: bobSession.accessToken })).pinned?.includes(formattedPeer.outboundId), 'pin-server-state');
+        await until(async () => (await api(pinsPath, { token: bobSession.accessToken }).catch(() => ({}))).pinned?.includes(formattedPeer.outboundId), 'pin-server-state');
         stage = 'pin-peer-collection';
         await openRoom(bob, formattedName);
         const drawer = bob.getByRole('complementary', { name: 'Buddy and room drawer' });
