@@ -1041,6 +1041,139 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       formattedPeer = { roomId: formattedRoomId, rootId: root.event_id, replyId: reply.event_id, outboundId: await roomOutbound.getAttribute('data-event-id') };
       for (const page of [alice, bob]) await openRoom(page, roomName);
     });
+    await check('saved-reference-own-device-and-context', async () => {
+      let stage = 'saved-open-source';
+      try {
+        const formattedName = 'Disposable formatted API peer';
+        await openRoom(alice, formattedName);
+        const source = alice.locator(`[data-event-id=${JSON.stringify(formattedPeer.outboundId)}]`);
+        await source.getByRole('button', { name: 'More message actions' }).click();
+        stage = 'saved-write';
+        await alice.getByRole('menuitem', { name: 'Save message', exact: true }).click();
+        await source.getByText('Message saved.', { exact: true }).waitFor();
+        const savedPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/im.aimtrix.saved_events.v1`;
+        await until(async () => {
+          try { return (await api(savedPath, { token: aliceSession.accessToken })).items?.some((item) => item.roomId === formattedPeer.roomId && item.eventId === formattedPeer.outboundId); }
+          catch { return false; }
+        }, 'saved-account-data');
+        const accountData = await api(savedPath, { token: secondSession.accessToken });
+        invariant(!JSON.stringify(accountData).includes('Synthetic outbound room formatting') && accountData.items?.length === 1, 'saved-opaque-reference');
+        stage = 'saved-own-device';
+        await aliceSecond.getByRole('button', { name: 'Saved messages', exact: true }).click();
+        const secondList = aliceSecond.getByRole('dialog', { name: 'Saved messages' });
+        await secondList.getByRole('button', { name: /^Disposable formatted API peer Saved/ }).waitFor({ timeout: 45000 });
+        stage = 'saved-exact-context';
+        await secondList.getByRole('button', { name: /^Disposable formatted API peer Saved/ }).click();
+        await aliceSecond.locator(`[data-event-id=${JSON.stringify(formattedPeer.outboundId)}]`).waitFor({ timeout: 45000 });
+        stage = 'saved-remove-own-device';
+        await aliceSecond.getByRole('button', { name: 'Saved messages', exact: true }).click();
+        await aliceSecond.getByRole('dialog', { name: 'Saved messages' }).getByRole('button', { name: `Remove saved message from ${formattedName}` }).click();
+        await until(async () => (await api(savedPath, { token: aliceSession.accessToken })).items?.length === 0, 'saved-removed-account-data');
+        stage = 'saved-removal-sync';
+        await alice.getByRole('button', { name: 'Saved messages', exact: true }).click();
+        const firstList = alice.getByRole('dialog', { name: 'Saved messages' });
+        await firstList.getByText('No saved messages yet.', { exact: false }).waitFor({ timeout: 45000 });
+        await firstList.getByRole('button', { name: 'Close saved messages' }).click();
+        await aliceSecond.getByRole('dialog', { name: 'Saved messages' }).getByRole('button', { name: 'Close saved messages' }).click();
+        stage = 'saved-access-loss';
+        const departedName = 'Disposable saved departure';
+        const departed = await api('/_matrix/client/v3/createRoom', { token: aliceSession.accessToken, method: 'POST', body: { name: departedName, preset: 'private_chat' } });
+        const departedEvent = await api(`/_matrix/client/v3/rooms/${encode(departed.room_id)}/send/m.room.message/${randomBytes(12).toString('hex')}`,
+          { token: aliceSession.accessToken, method: 'PUT', body: { msgtype: 'm.text', body: 'Synthetic saved departure marker' } });
+        await openRoom(alice, departedName);
+        const departedRow = alice.locator(`[data-event-id=${JSON.stringify(departedEvent.event_id)}]`);
+        await departedRow.getByRole('button', { name: 'More message actions' }).click();
+        await alice.getByRole('menuitem', { name: 'Save message', exact: true }).click();
+        await until(async () => (await api(savedPath, { token: aliceSession.accessToken })).items?.some((item) => item.eventId === departedEvent.event_id), 'saved-departure-account-data');
+        await api(`/_matrix/client/v3/rooms/${encode(departed.room_id)}/leave`, { token: aliceSession.accessToken, method: 'POST', body: {} });
+        await alice.getByRole('button', { name: 'Saved messages', exact: true }).click();
+        const departedList = alice.getByRole('dialog', { name: 'Saved messages' });
+        const unavailable = departedList.getByRole('button', { name: /^Conversation no longer available Saved/ });
+        await unavailable.waitFor({ timeout: 45000 });
+        invariant(await unavailable.isDisabled(), 'saved-inaccessible-disabled');
+        stage = 'saved-remove-after-leave';
+        await departedList.getByRole('button', { name: 'Remove saved message from unavailable conversation' }).click();
+        await until(async () => (await api(savedPath, { token: aliceSession.accessToken })).items?.length === 0, 'saved-removed-after-leave');
+        await departedList.getByRole('button', { name: 'Close saved messages' }).click();
+        await openRoom(alice, formattedName);
+      } catch { throw new Error(stage); }
+    });
+    await check('shared-pins-and-member-permission', async () => {
+      let stage = 'pin-source';
+      try {
+        const formattedName = 'Disposable formatted API peer';
+        const source = alice.locator(`[data-event-id=${JSON.stringify(formattedPeer.outboundId)}]`);
+        await source.getByRole('button', { name: 'Pin message', exact: true }).click();
+        const pinsPath = `/_matrix/client/v3/rooms/${encode(formattedPeer.roomId)}/state/m.room.pinned_events`;
+        stage = 'pin-server-state';
+        await until(async () => (await api(pinsPath, { token: bobSession.accessToken })).pinned?.includes(formattedPeer.outboundId), 'pin-server-state');
+        stage = 'pin-peer-collection';
+        await openRoom(bob, formattedName);
+        const drawer = bob.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!await drawer.isVisible()) await bob.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        await drawer.getByRole('tab', { name: 'Collections' }).click();
+        await drawer.getByRole('button', { name: 'Pins', exact: true }).click();
+        await drawer.locator('.drawer-collection-item').filter({ hasText: 'Synthetic outbound room formatting' }).waitFor({ timeout: 45000 });
+        stage = 'pin-member-denied';
+        const peerSource = bob.locator(`[data-event-id=${JSON.stringify(formattedPeer.outboundId)}]`);
+        invariant(await peerSource.getByRole('button', { name: 'Pin message', exact: true }).count() === 0, 'pin-member-control-hidden');
+        await api(pinsPath, { token: bobSession.accessToken, method: 'PUT', body: { pinned: [] }, status: 403 });
+        stage = 'pin-remove-sync';
+        await source.getByRole('button', { name: 'Unpin message', exact: true }).click();
+        await until(async () => (await api(pinsPath, { token: bobSession.accessToken })).pinned?.length === 0, 'pin-removed-server-state');
+        await drawer.getByText('No shared pins in this room.', { exact: true }).waitFor({ timeout: 45000 });
+        for (const page of [alice, bob]) await openRoom(page, roomName);
+      } catch { throw new Error(stage); }
+    });
+    await check('old-cross-room-server-search-and-context', async () => {
+      let stage = 'search-create-peer';
+      try {
+        const created = await api('/_matrix/client/v3/createRoom', { token: aliceSession.accessToken, method: 'POST', body: { name: 'Disposable search peer', preset: 'private_chat', invite: [accounts.bob.user_id] } });
+        const searchRoomId = created.room_id;
+        await api(`/_matrix/client/v3/rooms/${encode(searchRoomId)}/join`, { token: bobSession.accessToken, method: 'POST', body: {} });
+        const send = (target, body) => api(`/_matrix/client/v3/rooms/${encode(target)}/send/m.room.message/${randomBytes(12).toString('hex')}`, { token: bobSession.accessToken, method: 'PUT', body: { msgtype: 'm.text', body } });
+        const needle = `Synthetic retrieval needle ${randomBytes(6).toString('hex')}`;
+        stage = 'search-old-history';
+        const first = await send(formattedPeer.roomId, `${needle} in formatted room`);
+        const second = await send(searchRoomId, `${needle} in search room`);
+        for (let index = 0; index < 45; index += 1) {
+          await send(formattedPeer.roomId, `Synthetic formatted history padding ${index}`);
+          await send(searchRoomId, `Synthetic search history padding ${index}`);
+        }
+        await alice.reload();
+        await openRoom(alice, 'Disposable formatted API peer');
+        invariant(await alice.locator(`[data-event-id=${JSON.stringify(first.event_id)}]`).count() === 0, 'search-old-not-loaded');
+        await openRoom(alice, roomName);
+        stage = 'search-query';
+        const searchRequests = [];
+        const receiptTargets = [];
+        const observe = (request) => {
+          const path = new URL(request.url()).pathname;
+          if (request.method() === 'POST' && path.endsWith('/search')) searchRequests.push(request.postDataJSON());
+          if (path.includes('/receipt/')) receiptTargets.push(path);
+        };
+        alice.on('request', observe);
+        try {
+          await alice.getByRole('button', { name: 'Search message history', exact: true }).click();
+          const panel = alice.getByRole('complementary', { name: 'Message search' });
+          await panel.getByLabel('Search conversation').selectOption('');
+          await panel.getByLabel('Search sender Matrix ID').fill(accounts.bob.user_id);
+          await panel.getByLabel('Search words').fill(needle);
+          await panel.getByRole('button', { name: 'Search history', exact: true }).click();
+          const results = panel.locator('.search-results button').filter({ hasText: needle });
+          await until(async () => await results.count() === 2, 'search-cross-room-results', 60000);
+          const filter = searchRequests.at(-1)?.search_categories?.room_events?.filter;
+          invariant(filter?.rooms?.includes(formattedPeer.roomId) && filter.rooms.includes(searchRoomId) && !filter.rooms.includes(roomId) &&
+            filter.senders?.length === 1 && filter.senders[0] === accounts.bob.user_id, 'search-joined-unencrypted-filter');
+          invariant(!receiptTargets.some((path) => [first.event_id, second.event_id].some((id) => path.includes(encode(id)))), 'search-no-passive-read');
+          stage = 'search-exact-context';
+          await results.filter({ hasText: 'in search room' }).click();
+          await alice.locator(`[data-event-id=${JSON.stringify(second.event_id)}]`).waitFor({ timeout: 45000 });
+          await alice.getByRole('status').filter({ hasText: 'Showing the selected message and its surrounding conversation.' }).waitFor();
+        } finally { alice.off('request', observe); }
+        await openRoom(alice, roomName);
+      } catch { throw new Error(stage); }
+    });
     await check('notification-rules-and-own-device-sync', async () => {
       let stage = 'notification-open-controls';
       try {

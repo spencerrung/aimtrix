@@ -10,6 +10,7 @@ export const checkNames = new Set([
   'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop',
   'element-ui-encrypted-poll', 'element-ui-encrypted-location', 'element-ui-encrypted-voice',
   'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'element-ui-formatted-interoperability',
+  'saved-reference-own-device-and-context', 'shared-pins-and-member-permission', 'old-cross-room-server-search-and-context',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback',
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
@@ -20,6 +21,9 @@ export const failureCategories = ['strict mode violation', 'Timeout', 'not a fil
 failureCategories.push('poll-open-control', 'poll-dialog-input', 'poll-submit', 'poll-render', 'poll-vote-control', 'poll-vote-confirm', 'poll-create-decrypted', 'poll-vote-reconciled', 'poll-end-reconciled', 'location-open-control', 'location-dialog-input', 'location-submit', 'location-render', 'location-decrypted', 'voice-no-premature-upload', 'voice-encrypted-upload', 'voice-decrypted-download');
 failureCategories.push('element-encrypted-login', 'element-encrypted-room', 'element-encrypted-composer', 'element-encrypted-fill', 'element-encrypted-send', 'element-encrypted-receive', 'element-encrypted-message', 'element-poll-render', 'element-location-render', 'element-voice-render');
 failureCategories.push('element-back-at-login', 'element-left-room-route', 'element-room-not-rendered', 'element-composer-hidden', 'element-room-dialog', 'element-room-no-composer');
+failureCategories.push('saved-open-source', 'saved-write', 'saved-own-device', 'saved-exact-context', 'saved-remove-own-device', 'saved-removal-sync', 'saved-access-loss', 'saved-remove-after-leave',
+  'pin-source', 'pin-server-state', 'pin-peer-collection', 'pin-member-denied', 'pin-remove-sync',
+  'search-create-peer', 'search-old-history', 'search-query', 'search-exact-context');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
