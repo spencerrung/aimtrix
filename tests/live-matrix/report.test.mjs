@@ -66,14 +66,15 @@ test('messaging evidence discards filenames, captions, drafts, bytes and formatt
 
 test('optional Element evidence records the pinned client without session or rendered content', () => {
   const privateValue = randomBytes(24).toString('hex');
-  const name = 'element-ui-formatted-interoperability';
-  const result = makeReport({ ...base, elementUi: true, failureStage: name, checks: [{ name, passed: true,
-    storage: privateValue, renderedContent: privateValue, screenshot: privateValue, accessToken: privateValue }],
-  });
-  assert.match(result.images.element, /^vectorim\/element-web:v[0-9.]+@sha256:[a-f0-9]{64}$/);
-  assert.equal('element' in makeReport(base).images, false);
-  assert.deepEqual(result.checks, [{ name, passed: true }]);
-  assert.equal(JSON.stringify(result).includes(privateValue), false);
+  for (const name of ['element-ui-formatted-interoperability', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-encrypted-poll', 'element-ui-encrypted-location', 'element-ui-encrypted-voice']) {
+    const result = makeReport({ ...base, elementUi: true, failureStage: name, checks: [{ name, passed: true,
+      storage: privateValue, renderedContent: privateValue, screenshot: privateValue, accessToken: privateValue }],
+    });
+    assert.match(result.images.element, /^vectorim\/element-web:v[0-9.]+@sha256:[a-f0-9]{64}$/);
+    assert.equal('element' in makeReport(base).images, false);
+    assert.deepEqual(result.checks, [{ name, passed: true }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
 });
 
 test('attention evidence discards notification policies, patterns, routes, activity and follow data', () => {
