@@ -143,12 +143,25 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'element-encrypted-composer';
         const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
         const composer = elementPeer.getByRole('textbox', { name: /Send an encrypted message/ });
-        await until(async () => {
-          // Startup prompts can disappear between visibility and click. Keep
-          // waiting for the encrypted composer rather than failing the journey.
-          if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
-          return (await composer.isVisible()) && await composer.isEnabled();
-        }, 'element-encrypted-composer', 60000);
+        try {
+          await until(async () => {
+            // Startup prompts can disappear between visibility and click. Keep
+            // waiting for the encrypted composer rather than failing the journey.
+            if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
+            return (await composer.isVisible()) && await composer.isEnabled();
+          }, 'element-encrypted-composer', 30000);
+        } catch {
+          // Fixed categories preserve the privacy boundary: no URL, room data,
+          // dialog text, or DOM snapshot is written to the report.
+          const route = new URL(elementPeer.url()).hash;
+          stage = route.startsWith('#/login') ? 'element-back-at-login'
+            : !route.startsWith('#/room/') ? 'element-left-room-route'
+              : !await elementPeer.locator('.mx_RoomView').count() ? 'element-room-not-rendered'
+                : await elementPeer.locator('.mx_BasicMessageComposer_input').count() ? 'element-composer-label'
+                  : await elementPeer.getByRole('dialog').count() ? 'element-room-dialog'
+                    : 'element-room-no-composer';
+          throw new Error(stage);
+        }
         const hello = `Synthetic Element encrypted hello ${randomBytes(6).toString('hex')}`;
         stage = 'element-encrypted-fill';
         await composer.fill(hello);
