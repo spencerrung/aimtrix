@@ -1199,16 +1199,16 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         // Startup prompts can arrive after navigation; wait for the actual tile
         // while dismissing only the optional verification deferral control.
         const skip = peer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
-        const outbound = peer.locator('.mx_EventTile').filter({ hasText: 'Synthetic outbound room formatting' });
+        const outbound = peer.locator('.mx_EventTile').filter({ hasText: 'Synthetic outbound room formatting' }).last();
         await until(async () => {
-          if (await skip.isVisible()) await skip.click();
+          if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
           return outbound.locator('strong').filter({ hasText: /^Synthetic outbound room formatting$/ }).isVisible();
         }, 'element-timeline', 60000);
         stage = 'element-outbound-emphasis';
         await outbound.locator('em').filter({ hasText: /^emphasis$/ }).waitFor();
         await outbound.locator('code').filter({ hasText: /^inline code$/ }).waitFor();
         stage = 'element-root-format';
-        const root = peer.locator('.mx_EventTile').filter({ has: peer.locator('strong').filter({ hasText: /^API peer root$/ }) });
+        const root = peer.locator('.mx_EventTile').filter({ has: peer.locator('strong').filter({ hasText: /^API peer root$/ }) }).last();
         await root.locator('strong').filter({ hasText: /^API peer root$/ }).waitFor();
         stage = 'element-root-quote';
         await root.locator('blockquote').filter({ hasText: /^Preserved quotation$/ }).waitFor();
@@ -1221,7 +1221,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
         if (await latest.isVisible()) { await latest.click(); await latest.waitFor({ state: 'hidden' }); }
         stage = 'element-return-composer';
-        const composer = peer.getByRole('textbox', { name: 'Send an unencrypted message…', exact: true });
+        const composer = peer.locator('.mx_BasicMessageComposer_input');
         await composer.fill('**Synthetic Element return** with _peer emphasis_ and `peer code`.');
         const [response] = await Promise.all([
           peer.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes(`/rooms/${encode(formattedPeer.roomId)}/send/m.room.message/`)),
