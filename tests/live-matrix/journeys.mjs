@@ -1057,7 +1057,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           catch { return false; }
         }, 'saved-account-data');
         const accountData = await api(savedPath, { token: secondSession.accessToken });
-        invariant(!JSON.stringify(accountData).includes('Synthetic outbound room formatting') && accountData.items?.length === 1, 'saved-opaque-reference');
+        invariant(Object.keys(accountData).join() === 'items' && accountData.items?.length === 1 &&
+          Object.keys(accountData.items[0]).sort().join() === 'eventId,roomId,savedAt' &&
+          accountData.items[0].roomId === formattedPeer.roomId && accountData.items[0].eventId === formattedPeer.outboundId &&
+          Number.isSafeInteger(accountData.items[0].savedAt), 'saved-opaque-reference');
         stage = 'saved-own-device';
         await aliceSecond.getByRole('button', { name: 'Saved messages', exact: true }).click();
         const secondList = aliceSecond.getByRole('dialog', { name: 'Saved messages' });
