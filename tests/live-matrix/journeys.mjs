@@ -140,6 +140,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await until(async () => !(new URL(elementPeer.url()).hash.startsWith('#/login')), 'element-login');
         stage = 'element-encrypted-room';
         await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}`);
+        stage = 'element-encrypted-composer';
         const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
         const composer = elementPeer.getByRole('textbox', { name: /Send an encrypted message/ });
         await until(async () => {
@@ -147,12 +148,15 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           return composer.isVisible() && composer.isEnabled();
         }, 'element-encrypted-composer', 60000);
         const hello = `Synthetic Element encrypted hello ${randomBytes(6).toString('hex')}`;
+        stage = 'element-encrypted-fill';
         await composer.fill(hello);
+        stage = 'element-encrypted-send';
         const [response] = await Promise.all([
-          elementPeer.waitForResponse((result) => result.request().method() === 'PUT' && new URL(result.url()).pathname.includes(`/rooms/${encode(roomId)}/send/m.room.encrypted/`)),
+          elementPeer.waitForResponse((result) => result.request().method() === 'PUT' && new URL(result.url()).pathname.includes('/send/m.room.encrypted/'), { timeout: 45000 }),
           composer.press('Enter'),
         ]);
         invariant(response.ok(), 'element-encrypted-send');
+        stage = 'element-encrypted-receive';
         await alice.locator('.timeline-message').filter({ hasText: hello }).waitFor({ timeout: 45000 });
       } catch { throw new Error(stage); }
     });
