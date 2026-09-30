@@ -1143,10 +1143,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           await send(formattedPeer.roomId, `Synthetic formatted history padding ${index}`);
           await send(searchRoomId, `Synthetic search history padding ${index}`);
         }
-        await alice.reload();
-        await openRoom(alice, 'Disposable formatted API peer');
-        invariant(await alice.locator(`[data-event-id=${JSON.stringify(first.event_id)}]`).count() === 0, 'search-old-not-loaded');
-        await openRoom(alice, roomName);
+        await aliceSecond.reload();
+        await openRoom(aliceSecond, 'Disposable formatted API peer');
+        invariant(await aliceSecond.locator(`[data-event-id=${JSON.stringify(first.event_id)}]`).count() === 0, 'search-old-not-loaded');
+        await openRoom(aliceSecond, roomName);
         stage = 'search-query';
         const searchRequests = [];
         const receiptTargets = [];
@@ -1155,10 +1155,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           if (request.method() === 'POST' && path.endsWith('/search')) searchRequests.push(request.postDataJSON());
           if (path.includes('/receipt/')) receiptTargets.push(path);
         };
-        alice.on('request', observe);
+        aliceSecond.on('request', observe);
         try {
-          await alice.getByRole('button', { name: 'Search message history', exact: true }).click();
-          const panel = alice.getByRole('complementary', { name: 'Message search' });
+          await aliceSecond.getByRole('button', { name: 'Search message history', exact: true }).click();
+          const panel = aliceSecond.getByRole('complementary', { name: 'Message search' });
           await panel.getByLabel('Search conversation').selectOption('');
           await panel.getByLabel('Search sender Matrix ID').fill(accounts.bob.user_id);
           await panel.getByLabel('Search words').fill(needle);
@@ -1171,10 +1171,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           invariant(!receiptTargets.some((path) => [first.event_id, second.event_id].some((id) => path.includes(encode(id)))), 'search-no-passive-read');
           stage = 'search-exact-context';
           await results.filter({ hasText: 'in search room' }).click();
-          await alice.locator(`[data-event-id=${JSON.stringify(second.event_id)}]`).waitFor({ timeout: 45000 });
-          await alice.getByRole('status').filter({ hasText: 'Showing the selected message and its surrounding conversation.' }).waitFor();
-        } finally { alice.off('request', observe); }
-        await openRoom(alice, roomName);
+          await aliceSecond.locator(`[data-event-id=${JSON.stringify(second.event_id)}]`).waitFor({ timeout: 45000 });
+          await aliceSecond.getByRole('status').filter({ hasText: 'Showing the selected message and its surrounding conversation.' }).waitFor();
+        } finally { aliceSecond.off('request', observe); }
+        await openRoom(aliceSecond, roomName);
       } catch { throw new Error(stage); }
     });
     await check('notification-rules-and-own-device-sync', async () => {
