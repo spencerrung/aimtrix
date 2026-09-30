@@ -142,7 +142,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}`);
         stage = 'element-encrypted-composer';
         const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
-        const composer = elementPeer.getByRole('textbox', { name: /Send an encrypted message/ });
+        const composer = elementPeer.locator('.mx_BasicMessageComposer_input');
         try {
           await until(async () => {
             // Startup prompts can disappear between visibility and click. Keep
@@ -157,7 +157,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           stage = route.startsWith('#/login') ? 'element-back-at-login'
             : !route.startsWith('#/room/') ? 'element-left-room-route'
               : !await elementPeer.locator('.mx_RoomView').count() ? 'element-room-not-rendered'
-                : await elementPeer.locator('.mx_BasicMessageComposer_input').count() ? 'element-composer-label'
+                : await composer.count() ? 'element-composer-hidden'
                   : await elementPeer.getByRole('dialog').count() ? 'element-room-dialog'
                     : 'element-room-no-composer';
           throw new Error(stage);
