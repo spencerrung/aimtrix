@@ -147,7 +147,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           // Startup prompts can disappear between visibility and click. Keep
           // waiting for the encrypted composer rather than failing the journey.
           if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
-          return composer.isVisible() && composer.isEnabled();
+          return (await composer.isVisible()) && await composer.isEnabled();
         }, 'element-encrypted-composer', 60000);
         const hello = `Synthetic Element encrypted hello ${randomBytes(6).toString('hex')}`;
         stage = 'element-encrypted-fill';
