@@ -1,5 +1,6 @@
-/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob */
+/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob, atob */
 import { Buffer } from 'node:buffer';
+import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
 import { randomBytes } from 'node:crypto';
 import { invariant, until, register, matrixApi } from './stack.mjs';
@@ -55,7 +56,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     return page;
   };
   const alice = await newPage(), bob = await newPage(), aliceSecond = await newPage();
-  await alice.addInitScript(() => {
+  const voiceBytes = await readFile(new URL('./fixtures/synthetic-tone.webm', import.meta.url));
+  await alice.addInitScript((voiceBase64) => {
     const track = { stop() {}, onended: null };
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
       getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }),
@@ -67,15 +69,15 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       start() { this.state = 'recording'; }
       stop() {
         this.state = 'inactive';
-        this.ondataavailable?.({ data: new Blob(['synthetic-voice-for-encrypted-test'], { type: this.mimeType }) });
+        this.ondataavailable?.({ data: new Blob([Uint8Array.from(atob(voiceBase64), (character) => character.charCodeAt(0))], { type: this.mimeType }) });
         this.onstop?.();
       }
     }
     Object.defineProperty(window, 'MediaRecorder', { configurable: true, value: SyntheticRecorder });
     Object.defineProperty(window, 'AudioContext', { configurable: true, value: undefined });
-  });
+  }, voiceBytes.toString('base64'));
   let aliceSession, bobSession, secondSession, roomId;
-  let navigationHistory, threadHistory, attachmentThreadRootId, formattedPeer;
+  let navigationHistory, threadHistory, attachmentThreadRootId, formattedPeer, elementPeer;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
   const bobWire = [];
@@ -127,8 +129,54 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(state.algorithm === 'm.megolm.v1.aes-sha2', 'room-encryption-state');
       for (const page of [alice, bob, aliceSecond]) await openRoom(page, roomName);
     });
+    if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
+      let stage = 'element-encrypted-login';
+      try {
+        elementPeer = await newPage();
+        await elementPeer.goto(`${stack.origins.element}/#/login`);
+        await elementPeer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.bob.user_id);
+        await elementPeer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await elementPeer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        await until(async () => !(new URL(elementPeer.url()).hash.startsWith('#/login')), 'element-login');
+        stage = 'element-encrypted-room';
+        await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}`);
+        stage = 'element-encrypted-composer';
+        const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
+        const composer = elementPeer.locator('.mx_BasicMessageComposer_input');
+        try {
+          await until(async () => {
+            // Startup prompts can disappear between visibility and click. Keep
+            // waiting for the encrypted composer rather than failing the journey.
+            if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
+            return (await composer.isVisible()) && await composer.isEnabled();
+          }, 'element-encrypted-composer', 30000);
+        } catch {
+          // Fixed categories preserve the privacy boundary: no URL, room data,
+          // dialog text, or DOM snapshot is written to the report.
+          const route = new URL(elementPeer.url()).hash;
+          stage = route.startsWith('#/login') ? 'element-back-at-login'
+            : !route.startsWith('#/room/') ? 'element-left-room-route'
+              : !await elementPeer.locator('.mx_RoomView').count() ? 'element-room-not-rendered'
+                : await composer.count() ? 'element-composer-hidden'
+                  : await elementPeer.getByRole('dialog').count() ? 'element-room-dialog'
+                    : 'element-room-no-composer';
+          throw new Error(stage);
+        }
+        const hello = `Synthetic Element encrypted hello ${randomBytes(6).toString('hex')}`;
+        stage = 'element-encrypted-fill';
+        await composer.fill(hello);
+        stage = 'element-encrypted-send';
+        const [response] = await Promise.all([
+          elementPeer.waitForResponse((result) => result.request().method() === 'PUT' && new URL(result.url()).pathname.includes('/send/m.room.encrypted/'), { timeout: 45000 }),
+          composer.press('Enter'),
+        ]);
+        invariant(response.ok(), 'element-encrypted-send');
+        stage = 'element-encrypted-receive';
+        await alice.locator('.timeline-message').filter({ hasText: hello }).waitFor({ timeout: 45000 });
+      } catch { throw new Error(stage); }
+    });
+    const marker = `Encrypted round trip ${randomBytes(12).toString('hex')}`;
     await check('encrypted-send-receive-and-latency', async () => {
-      const marker = `Encrypted round trip ${randomBytes(12).toString('hex')}`;
       const start = Date.now();
       await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
       await alice.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -145,6 +193,13 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       // does not isolate persisted keys from possible peer key sharing.
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
+    });
+    if (elementPeer) await check('element-ui-encrypted-message', async () => {
+      const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
+      await until(async () => {
+        if (await skip.isVisible()) await skip.click();
+        return elementPeer.locator('.mx_EventTile').filter({ hasText: marker }).last().isVisible();
+      }, 'element-encrypted-message', 60000);
     });
     await check('encrypted-retry-reconnect-and-cancel', async () => {
       const marker = `Retry round trip ${randomBytes(12).toString('hex')}`;
@@ -747,6 +802,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const pollStartWire = wire.slice(socialWireStart);
       invariant(pollStartWire.length > 0 && pollStartWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(question)), 'poll-create-decrypted');
     });
+    if (elementPeer) await check('element-ui-encrypted-poll', async () => {
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: question }).last().isVisible(), 'element-poll-render', 60000);
+    });
     await check('encrypted-poll-vote', async () => {
       const bobVoteStart = bobWire.length;
       await safeAction('poll-vote-control', async () => {
@@ -779,8 +837,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         return (await bobPoll.textContent()).includes('Poll ended');
       }, 'poll-end-reconciled');
     });
+    const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;
     await check('encrypted-location-interop', async () => {
-      const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;
       const locationWireStart = wire.length;
       await safeAction('location-open-control', () => openTool('Share a location'));
       const locationDialog = alice.getByRole('dialog', { name: 'Share a location' });
@@ -797,8 +855,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         (await receivedLocation.getByRole('link', { name: `Open ${location} in your map application` }).getAttribute('href')) === 'geo:40.7128,-74.006' &&
         locationWire.length > 0 && locationWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(location)), 'location-decrypted');
     });
+    if (elementPeer) await check('element-ui-encrypted-location', async () => {
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last().isVisible(), 'element-location-render', 60000);
+    });
     await check('encrypted-voice-interop', async () => {
-      const bytes = Buffer.from('synthetic-voice-for-encrypted-test');
+      const bytes = voiceBytes;
       const uploadStart = uploads.length;
       const voiceWireStart = wire.length;
       await openTool('Record a voice message');
@@ -822,6 +883,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const encrypted = await api(`/_matrix/client/v1/media/download/${source.slice(6)}`, { token: bobSession.accessToken, binary: true });
       const voiceWire = wire.slice(voiceWireStart);
       invariant(!Buffer.from(encrypted).equals(bytes) && voiceWire.length > 0 && voiceWire.every((event) => event.path.includes('/m.room.encrypted/')), 'voice-encrypted-upload');
+    });
+    if (elementPeer) await check('element-ui-encrypted-voice', async () => {
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: 'Voice message' }).last().isVisible(), 'element-voice-render', 60000);
     });
     await check('encrypted-staged-attachments-and-retry', async () => {
       const files = ['staged-alpha.bin', 'staged-beta.bin'].map((name) => ({ name, mimeType: 'application/octet-stream', buffer: randomBytes(64) }));
@@ -1129,27 +1193,22 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       try {
         // An actual separately distributed Element UI reads the server's events.
         // Only this disposable browser context holds its login/session data.
-        const peer = await newPage();
-        await peer.goto(`${stack.origins.element}/#/login`);
-        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.bob.user_id);
-        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
-        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
-        await until(async () => !(new URL(peer.url()).hash.startsWith('#/login')), 'element-login');
+        const peer = elementPeer;
         stage = 'element-room-timeline';
         await peer.goto(`${stack.origins.element}/#/room/${encode(formattedPeer.roomId)}`);
         // Startup prompts can arrive after navigation; wait for the actual tile
         // while dismissing only the optional verification deferral control.
         const skip = peer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
-        const outbound = peer.locator('.mx_EventTile').filter({ hasText: 'Synthetic outbound room formatting' });
+        const outbound = peer.locator('.mx_EventTile').filter({ hasText: 'Synthetic outbound room formatting' }).last();
         await until(async () => {
-          if (await skip.isVisible()) await skip.click();
+          if (await skip.isVisible()) await skip.click({ timeout: 1500 }).catch(() => {});
           return outbound.locator('strong').filter({ hasText: /^Synthetic outbound room formatting$/ }).isVisible();
         }, 'element-timeline', 60000);
         stage = 'element-outbound-emphasis';
         await outbound.locator('em').filter({ hasText: /^emphasis$/ }).waitFor();
         await outbound.locator('code').filter({ hasText: /^inline code$/ }).waitFor();
         stage = 'element-root-format';
-        const root = peer.locator('.mx_EventTile').filter({ has: peer.locator('strong').filter({ hasText: /^API peer root$/ }) });
+        const root = peer.locator('.mx_EventTile').filter({ has: peer.locator('strong').filter({ hasText: /^API peer root$/ }) }).last();
         await root.locator('strong').filter({ hasText: /^API peer root$/ }).waitFor();
         stage = 'element-root-quote';
         await root.locator('blockquote').filter({ hasText: /^Preserved quotation$/ }).waitFor();
@@ -1162,7 +1221,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
         if (await latest.isVisible()) { await latest.click(); await latest.waitFor({ state: 'hidden' }); }
         stage = 'element-return-composer';
-        const composer = peer.getByRole('textbox', { name: 'Send an unencrypted message…', exact: true });
+        const composer = peer.locator('.mx_BasicMessageComposer_input');
         await composer.fill('**Synthetic Element return** with _peer emphasis_ and `peer code`.');
         const [response] = await Promise.all([
           peer.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes(`/rooms/${encode(formattedPeer.roomId)}/send/m.room.message/`)),
