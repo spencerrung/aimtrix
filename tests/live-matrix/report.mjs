@@ -24,6 +24,7 @@ failureCategories.push('element-back-at-login', 'element-left-room-route', 'elem
 failureCategories.push('saved-open-source', 'saved-write', 'saved-own-device', 'saved-exact-context', 'saved-remove-own-device', 'saved-removal-sync', 'saved-access-loss', 'saved-remove-after-leave',
   'pin-source', 'pin-server-state', 'pin-peer-collection', 'pin-member-denied', 'pin-remove-sync',
   'search-create-peer', 'search-old-history', 'search-query', 'search-exact-context');
+failureCategories.push('moderation-open-drawer', 'moderation-people-tab', 'moderation-set-role', 'moderation-kick', 'moderation-invite', 'moderation-ban', 'moderation-unban');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

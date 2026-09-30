@@ -1404,25 +1404,34 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await dialog.getByRole('button', { name: 'Close background decorator' }).click();
     });
     await check('moderation-role-kick-ban-unban', async () => {
-      const drawer = alice.getByRole('complementary', { name: 'Buddy and room drawer' });
-      if (!(await drawer.isVisible())) await alice.getByRole('button', { name: 'Toggle room details', exact: true }).click();
-      await drawer.getByRole('tab', { name: 'People', exact: true }).click();
-      await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
-      await drawer.getByRole('menuitemradio', { name: 'Decorator', exact: true }).click();
-      const memberPath = `/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.member/${encode(accounts.charlie.user_id)}`;
-      await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.power_levels`, { token: aliceSession.accessToken })).users?.[accounts.charlie.user_id] === 25, 'moderation-power');
-      await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
-      await drawer.getByRole('menuitem', { name: 'Remove member', exact: true }).click();
-      await alice.getByRole('dialog').getByRole('button', { name: 'Remove member', exact: true }).click();
-      await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'leave', 'moderation-kick');
-      await api(`/_matrix/client/v3/rooms/${encode(roomId)}/invite`, { token: aliceSession.accessToken, method: 'POST', body: { user_id: accounts.charlie.user_id } });
-      await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
-      await drawer.getByRole('menuitem', { name: 'Ban member', exact: true }).click();
-      await alice.getByRole('dialog').getByRole('button', { name: 'Ban member', exact: true }).click();
-      await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'ban', 'moderation-ban');
-      await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
-      await drawer.getByRole('menuitem', { name: 'Unban member', exact: true }).click();
-      await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'leave', 'moderation-unban');
+      let stage = 'moderation-open-drawer';
+      try {
+        const drawer = alice.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!(await drawer.isVisible())) await alice.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        stage = 'moderation-people-tab';
+        await drawer.getByRole('tab', { name: 'People', exact: true }).click();
+        stage = 'moderation-set-role';
+        await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
+        await drawer.getByRole('menuitemradio', { name: 'Decorator', exact: true }).click();
+        const memberPath = `/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.member/${encode(accounts.charlie.user_id)}`;
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.power_levels`, { token: aliceSession.accessToken })).users?.[accounts.charlie.user_id] === 25, 'moderation-power');
+        stage = 'moderation-kick';
+        await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
+        await drawer.getByRole('menuitem', { name: 'Remove member', exact: true }).click();
+        await alice.getByRole('dialog').getByRole('button', { name: 'Remove member', exact: true }).click();
+        await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'leave', 'moderation-kick');
+        stage = 'moderation-invite';
+        await api(`/_matrix/client/v3/rooms/${encode(roomId)}/invite`, { token: aliceSession.accessToken, method: 'POST', body: { user_id: accounts.charlie.user_id } });
+        stage = 'moderation-ban';
+        await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
+        await drawer.getByRole('menuitem', { name: 'Ban member', exact: true }).click();
+        await alice.getByRole('dialog').getByRole('button', { name: 'Ban member', exact: true }).click();
+        await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'ban', 'moderation-ban');
+        stage = 'moderation-unban';
+        await drawer.getByRole('button', { name: 'Actions for charlie', exact: true }).click();
+        await drawer.getByRole('menuitem', { name: 'Unban member', exact: true }).click();
+        await until(async () => (await api(memberPath, { token: aliceSession.accessToken })).membership === 'leave', 'moderation-unban');
+      } catch { throw new Error(stage); }
     });
     await check('private-dm-backdrop-isolation', async () => {
       await alice.getByRole('button', { name: 'Join or create room' }).click();
