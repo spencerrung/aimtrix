@@ -198,7 +198,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
       await until(async () => {
         if (await skip.isVisible()) await skip.click();
-        return elementPeer.locator('.mx_EventTile').filter({ hasText: marker }).isVisible();
+        return elementPeer.locator('.mx_EventTile').filter({ hasText: marker }).last().isVisible();
       }, 'element-encrypted-message', 60000);
     });
     await check('encrypted-retry-reconnect-and-cancel', async () => {
@@ -803,7 +803,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(pollStartWire.length > 0 && pollStartWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(question)), 'poll-create-decrypted');
     });
     if (elementPeer) await check('element-ui-encrypted-poll', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: question }).isVisible(), 'element-poll-render', 60000);
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: question }).last().isVisible(), 'element-poll-render', 60000);
     });
     await check('encrypted-poll-vote', async () => {
       const bobVoteStart = bobWire.length;
@@ -856,7 +856,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         locationWire.length > 0 && locationWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(location)), 'location-decrypted');
     });
     if (elementPeer) await check('element-ui-encrypted-location', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).isVisible(), 'element-location-render', 60000);
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last().isVisible(), 'element-location-render', 60000);
     });
     await check('encrypted-voice-interop', async () => {
       const bytes = voiceBytes;
@@ -885,7 +885,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(!Buffer.from(encrypted).equals(bytes) && voiceWire.length > 0 && voiceWire.every((event) => event.path.includes('/m.room.encrypted/')), 'voice-encrypted-upload');
     });
     if (elementPeer) await check('element-ui-encrypted-voice', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: 'Voice message' }).isVisible(), 'element-voice-render', 60000);
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: 'Voice message' }).last().isVisible(), 'element-voice-render', 60000);
     });
     await check('encrypted-staged-attachments-and-retry', async () => {
       const files = ['staged-alpha.bin', 'staged-beta.bin'].map((name) => ({ name, mimeType: 'application/octet-stream', buffer: randomBytes(64) }));
