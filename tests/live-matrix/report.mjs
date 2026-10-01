@@ -12,7 +12,7 @@ export const checkNames = new Set([
   'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'element-ui-formatted-interoperability',
   'saved-reference-own-device-and-context', 'shared-pins-and-member-permission', 'old-cross-room-server-search-and-context',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
-  'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback',
+  'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback', 'standard-sso-recovery-guidance',
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
   'diagnostic-failure-probe', 'cleanup',
@@ -30,6 +30,7 @@ failureCategories.push('private-search-keyed-device', 'private-search-keyed-resu
 failureCategories.push('recovery-key-generated', 'recovery-key-dismissed', 'recovery-key-cleared', 'recovery-old-event-unavailable', 'recovery-imported-keys');
 failureCategories.push('recovery-open-first-settings', 'recovery-setup-control', 'recovery-setup-result', 'recovery-setup-unsupported', 'recovery-setup-failed', 'recovery-setup-pending', 'recovery-server-backup', 'recovery-server-secret-storage', 'recovery-new-device-history', 'recovery-open-second-settings', 'recovery-restore-result', 'recovery-restore-cross-signing', 'recovery-restore-backup', 'recovery-restore-room-keys', 'recovery-restore-key-mismatch', 'recovery-restore-no-backup', 'recovery-restore-failed', 'recovery-restore-zero-import', 'recovery-restore-unmatched-count', 'recovery-restore-unmatched-success', 'recovery-restore-unmatched-error', 'recovery-restore-pending', 'recovery-restore-pending-identity', 'recovery-restore-pending-backup-key', 'recovery-restore-pending-backup-trust', 'recovery-restore-pending-import', 'recovery-restore-dialog-gone', 'recovery-restore-idle', 'recovery-old-event-restored');
 failureCategories.push('verification-new-device', 'verification-distinct-device', 'verification-open-initiator', 'verification-device-row', 'verification-device-refresh', 'verification-button', 'verification-incoming-request', 'verification-emoji', 'verification-matching-emoji', 'verification-completion');
+failureCategories.push('sso-recovery-passphrase-retained', 'sso-recovery-no-key-export');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

@@ -1684,8 +1684,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await api(path, { token: bobSession.accessToken, status: 403 });
       await profile.getByRole('button', { name: 'Close profile page' }).click();
     });
+    let sso;
     await check('standard-sso-token-callback', async () => {
-      const sso = await newPage();
+      sso = await newPage();
       await sso.goto(stack.origins.app);
       await sso.getByRole('button', { name: 'Sign in with homeserver SSO', exact: true }).click();
       // Dex is a real OIDC provider; no callback route or login response is mocked.
@@ -1697,6 +1698,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(saved?.userId === '@sso:aimtrix.test', 'sso-identity');
       invariant(!new URL(sso.url()).searchParams.has('loginToken'), 'sso-token-cleanup');
       invariant((await api('/_matrix/client/v3/account/whoami', { token: saved.accessToken })).user_id === saved.userId, 'sso-valid-session');
+    });
+    await check('standard-sso-recovery-guidance', async () => {
+      await sso.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const settings = sso.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic SSO recovery ${randomBytes(12).toString('hex')}`);
+      await settings.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
+      await settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).waitFor({ timeout: 60000 });
+      invariant(await settings.getByLabel('New recovery passphrase', { exact: true }).inputValue() !== '', 'sso-recovery-passphrase-retained');
+      invariant(await settings.locator('.recovery-key-output').count() === 0, 'sso-recovery-no-key-export');
+      await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
     });
     const assertExpired = async (page) => {
       await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });
