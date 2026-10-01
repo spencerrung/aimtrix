@@ -262,7 +262,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           else if (await alert.filter({ hasText: 'no compatible recovery backup' }).count()) stage = 'recovery-restore-no-backup';
           else if (await alert.count()) stage = 'recovery-restore-failed';
           else if (await recoveryDevice.getByText('Recovery complete. Imported 0 room keys.', { exact: true }).count()) stage = 'recovery-restore-zero-import';
-          else if (await recoveryDevice.getByRole('status').filter({ hasText: 'Working with your homeserver' }).count()) stage = 'recovery-restore-pending';
+          else if (await recoveryDevice.locator('.settings-success').count()) stage = 'recovery-restore-unmatched-success';
+          else if (await recoveryDevice.locator('.settings-error').count()) stage = 'recovery-restore-unmatched-error';
+          else if (await recoveryDevice.locator('.matrix-settings-panel fieldset:disabled').count()) stage = 'recovery-restore-pending';
+          else if (await recoveryDevice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true }).count() === 0) stage = 'recovery-restore-dialog-gone';
+          else stage = 'recovery-restore-idle';
         }
         throw new Error(stage);
       }
