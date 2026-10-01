@@ -231,7 +231,13 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           else if (await alice.getByRole('alert').filter({ hasText: 'Recovery setup failed' }).count()) stage = 'recovery-setup-failed';
           else if (await alice.getByRole('status').filter({ hasText: 'Working with your homeserver' }).count()) stage = 'recovery-setup-pending';
         }
-        if (stage === 'recovery-restore-result' && await aliceSecond.getByRole('alert').filter({ hasText: 'could not unlock' }).count()) stage = 'recovery-restore-failed';
+        if (stage === 'recovery-restore-result') {
+          const alert = aliceSecond.getByRole('alert');
+          if (await alert.filter({ hasText: 'could not restore its encryption identity' }).count()) stage = 'recovery-restore-cross-signing';
+          else if (await alert.filter({ hasText: 'room-key backup could not be enabled' }).count()) stage = 'recovery-restore-backup';
+          else if (await alert.filter({ hasText: 'room keys could not be imported' }).count()) stage = 'recovery-restore-room-keys';
+          else if (await alert.count()) stage = 'recovery-restore-failed';
+        }
         throw new Error(stage);
       }
     });

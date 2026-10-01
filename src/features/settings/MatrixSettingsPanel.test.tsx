@@ -91,3 +91,11 @@ it('keeps recovery-reset failure visible after refreshing account health', async
   await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
   expect(await screen.findByRole('alert')).toHaveTextContent('previous backup may already have changed');
 });
+
+it('distinguishes an unlocked recovery key from a failed backup operation', async () => {
+  setup({ restoreRecovery: vi.fn().mockRejectedValue(new Error('Recovery restore failed at backup-key.')) });
+  fireEvent.change(await screen.findByLabelText('Existing recovery key'), { target: { value: 'synthetic-key-only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore existing room keys' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('key unlocked recovery storage');
+  expect(screen.getByLabelText('Existing recovery key')).toHaveValue('synthetic-key-only');
+});

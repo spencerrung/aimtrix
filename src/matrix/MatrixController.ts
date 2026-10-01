@@ -1364,12 +1364,18 @@ export class MatrixController {
     const crossSigning = await crypto.getCrossSigningStatus();
     if (this.client !== client) throw new Error('The Matrix session changed.');
     this.inMemoryRecoveryKey = decoded;
+    let stage = 'cross-signing';
     try {
       if (crossSigning.privateKeysInSecretStorage) await crypto.bootstrapCrossSigning({});
+      stage = 'backup-key';
       await crypto.loadSessionBackupPrivateKeyFromSecretStorage();
+      stage = 'backup-enable';
       await crypto.checkKeyBackupAndEnable();
+      stage = 'room-keys';
       const restored = await crypto.restoreKeyBackup();
       return restored.imported;
+    } catch {
+      throw new Error(`Recovery restore failed at ${stage}.`);
     } finally {
       this.inMemoryRecoveryKey = undefined;
     }

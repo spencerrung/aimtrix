@@ -70,6 +70,16 @@ function recoverySetupError(error: unknown): string {
   return 'Recovery setup failed. Confirm your account password and try again.';
 }
 
+function recoveryRestoreError(error: unknown): string {
+  if (!(error instanceof Error)) return 'Recovery could not finish. Check the key and retry.';
+  if (error.message.startsWith('This recovery key does not match')) return 'This key does not match this account’s recovery storage. Check the key before retrying.';
+  if (error.message.startsWith('This account has no existing recovery storage') || error.message.startsWith('This account has no encrypted room-key backup')) return 'This account has no compatible recovery backup to restore. Check account health or use a trusted device.';
+  if (error.message === 'Recovery restore failed at cross-signing.') return 'The key unlocked recovery storage, but this device could not restore its encryption identity. Retry or use another trusted device.';
+  if (error.message === 'Recovery restore failed at backup-key.' || error.message === 'Recovery restore failed at backup-enable.') return 'The key unlocked recovery storage, but its room-key backup could not be enabled. Refresh account health before retrying.';
+  if (error.message === 'Recovery restore failed at room-keys.') return 'The backup was unlocked, but its room keys could not be imported. Refresh account health before retrying.';
+  return 'Recovery could not finish. Check the key and retry.';
+}
+
 export function MatrixSettingsPanel({
   preferences,
   onPreferencesChange,
@@ -303,8 +313,8 @@ export function MatrixSettingsPanel({
       setExistingRecoveryKey('');
       setNotice(`Recovery complete. Imported ${imported} room keys.`);
       await refresh();
-    } catch {
-      setError('That recovery key could not unlock this account’s encrypted backup.');
+    } catch (error) {
+      setError(recoveryRestoreError(error));
     }
   });
 
