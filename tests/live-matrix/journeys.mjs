@@ -261,9 +261,41 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           else if (await alert.filter({ hasText: 'does not match this account' }).count()) stage = 'recovery-restore-key-mismatch';
           else if (await alert.filter({ hasText: 'no compatible recovery backup' }).count()) stage = 'recovery-restore-no-backup';
           else if (await alert.count()) stage = 'recovery-restore-failed';
+          else if (await recoveryDevice.getByText('Recovery complete. Imported 0 room keys.', { exact: true }).count()) stage = 'recovery-restore-zero-import';
+          else if (await recoveryDevice.getByRole('status').filter({ hasText: 'Working with your homeserver' }).count()) stage = 'recovery-restore-pending';
         }
         throw new Error(stage);
       }
+    });
+    await check('incoming-two-device-sas-verification', async () => {
+      let stage = 'verification-open-initiator';
+      try {
+        await alice.bringToFront();
+        await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
+        const settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+        const device = settings.locator('.device-card').filter({ has: settings.getByRole('textbox', { name: `Name for ${secondSession.deviceId}` }) });
+        await device.getByRole('button', { name: 'Verify', exact: true }).click();
+        stage = 'verification-incoming-request';
+        await aliceSecond.bringToFront();
+        const incoming = aliceSecond.getByRole('complementary', { name: 'Incoming device verification' });
+        await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
+        stage = 'verification-emoji';
+        const initiatedChallenge = alice.getByRole('dialog', { name: 'Compare verification emoji', exact: true });
+        const incomingChallenge = aliceSecond.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
+        await initiatedChallenge.waitFor({ timeout: 45000 });
+        await incomingChallenge.waitFor({ timeout: 45000 });
+        const firstEmoji = await initiatedChallenge.locator('small').allTextContents();
+        const secondEmoji = await incomingChallenge.locator('small').allTextContents();
+        invariant(firstEmoji.length === 7 && JSON.stringify(firstEmoji) === JSON.stringify(secondEmoji), 'verification-matching-emoji');
+        await initiatedChallenge.getByRole('button', { name: 'They match', exact: true }).click();
+        await incomingChallenge.getByRole('button', { name: 'They match', exact: true }).click();
+        stage = 'verification-completion';
+        await initiatedChallenge.waitFor({ state: 'hidden', timeout: 45000 });
+        await incomingChallenge.waitFor({ state: 'hidden', timeout: 45000 });
+        await settings.getByText('Device verified.', { exact: true }).waitFor({ timeout: 45000 });
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
     });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();

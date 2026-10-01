@@ -5,7 +5,7 @@ export const checkNames = new Set([
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
   'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
-  'encrypted-send-receive-and-latency', 'password-two-device-recovery-setup-and-restore', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'authenticated-encrypted-media',
+  'encrypted-send-receive-and-latency', 'password-two-device-recovery-setup-and-restore', 'incoming-two-device-sas-verification', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'authenticated-encrypted-media',
   'encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment',
   'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop',
   'element-ui-encrypted-poll', 'element-ui-encrypted-location', 'element-ui-encrypted-voice',
@@ -28,7 +28,8 @@ failureCategories.push('moderation-open-drawer', 'moderation-people-tab', 'moder
 failureCategories.push('private-search-keyed-device', 'private-search-keyed-result', 'private-search-no-plaintext-upload', 'private-search-exact-context',
   'private-search-new-device', 'private-search-missing-keys', 'private-search-sending-still-available', 'private-search-delete');
 failureCategories.push('recovery-key-generated', 'recovery-key-dismissed', 'recovery-key-cleared', 'recovery-old-event-unavailable');
-failureCategories.push('recovery-open-first-settings', 'recovery-setup-control', 'recovery-setup-result', 'recovery-setup-unsupported', 'recovery-setup-failed', 'recovery-setup-pending', 'recovery-server-backup', 'recovery-server-secret-storage', 'recovery-new-device-history', 'recovery-open-second-settings', 'recovery-restore-result', 'recovery-restore-cross-signing', 'recovery-restore-backup', 'recovery-restore-room-keys', 'recovery-restore-key-mismatch', 'recovery-restore-no-backup', 'recovery-restore-failed', 'recovery-old-event-restored');
+failureCategories.push('recovery-open-first-settings', 'recovery-setup-control', 'recovery-setup-result', 'recovery-setup-unsupported', 'recovery-setup-failed', 'recovery-setup-pending', 'recovery-server-backup', 'recovery-server-secret-storage', 'recovery-new-device-history', 'recovery-open-second-settings', 'recovery-restore-result', 'recovery-restore-cross-signing', 'recovery-restore-backup', 'recovery-restore-room-keys', 'recovery-restore-key-mismatch', 'recovery-restore-no-backup', 'recovery-restore-failed', 'recovery-restore-zero-import', 'recovery-restore-pending', 'recovery-old-event-restored');
+failureCategories.push('verification-open-initiator', 'verification-incoming-request', 'verification-emoji', 'verification-matching-emoji', 'verification-completion');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
