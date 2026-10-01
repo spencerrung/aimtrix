@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { MatrixSettingsPanel, type MatrixSettingsActions } from './MatrixSettingsPanel';
 import { defaultUserPreferences } from '../../settings/preferences';
@@ -69,4 +69,25 @@ it('loads notification rules only when the controls are opened', async () => {
   await screen.findByText('Join a room to set its notification rules.');
   expect(loadAttention).toHaveBeenCalledTimes(1);
   expect(screen.getByRole('button', { name: 'Test local notification' })).toBeDisabled();
+});
+
+it('gives SSO users a supported recovery path when setup needs unsupported authorization', async () => {
+  setup({
+    load: vi.fn().mockResolvedValue({ ...snapshot, security: { ...snapshot.security, secretStorageConfigured: false, keyBackupEnabled: false } }),
+    setupRecovery: vi.fn().mockRejectedValue(new Error('This homeserver requires interactive authentication that Aimtrix cannot complete here.')),
+  });
+  fireEvent.change(await screen.findByLabelText('New recovery passphrase'), { target: { value: 'synthetic passphrase only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Set up new recovery' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('trusted Matrix client');
+  expect(screen.getByLabelText('New recovery passphrase')).toHaveValue('synthetic passphrase only');
+});
+
+it('keeps recovery-reset failure visible after refreshing account health', async () => {
+  const load = vi.fn().mockResolvedValue(snapshot);
+  setup({ load, resetRecovery: vi.fn().mockRejectedValue(new Error('synthetic network failure')) });
+  fireEvent.change(await screen.findByLabelText('New recovery passphrase'), { target: { value: 'synthetic passphrase only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Reset recovery and backup' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Reset encryption recovery?' })).getByRole('button', { name: 'Reset recovery and backup' }));
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+  expect(await screen.findByRole('alert')).toHaveTextContent('previous backup may already have changed');
 });

@@ -5,7 +5,7 @@ export const checkNames = new Set([
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
   'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
-  'encrypted-send-receive-and-latency', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'authenticated-encrypted-media',
+  'encrypted-send-receive-and-latency', 'password-two-device-recovery-setup-and-restore', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'authenticated-encrypted-media',
   'encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment',
   'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop',
   'element-ui-encrypted-poll', 'element-ui-encrypted-location', 'element-ui-encrypted-voice',
@@ -27,6 +27,7 @@ failureCategories.push('saved-open-source', 'saved-write', 'saved-own-device', '
 failureCategories.push('moderation-open-drawer', 'moderation-people-tab', 'moderation-set-role', 'moderation-kick', 'moderation-invite', 'moderation-ban', 'moderation-unban');
 failureCategories.push('private-search-keyed-device', 'private-search-keyed-result', 'private-search-no-plaintext-upload', 'private-search-exact-context',
   'private-search-new-device', 'private-search-missing-keys', 'private-search-sending-still-available', 'private-search-delete');
+failureCategories.push('recovery-key-generated', 'recovery-key-dismissed', 'recovery-key-cleared');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

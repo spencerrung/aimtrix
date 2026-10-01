@@ -60,6 +60,16 @@ function formatLastSeen(timestamp?: number): string {
   }).format(timestamp);
 }
 
+function recoverySetupError(error: unknown): string {
+  if (error instanceof Error && error.message.startsWith('This homeserver requires interactive authentication')) {
+    return 'This homeserver requires an authorization step Aimtrix cannot complete here. Set up recovery in a trusted Matrix client, then return with its recovery key.';
+  }
+  if (error instanceof Error && (error.message.startsWith('Recovery or key backup already exists') || error.message.startsWith('This account already has an encryption identity'))) {
+    return 'This account already has recovery or an encryption identity. Restore its existing key or use a trusted device before considering a confirmed reset.';
+  }
+  return 'Recovery setup failed. Confirm your account password and try again.';
+}
+
 export function MatrixSettingsPanel({
   preferences,
   onPreferencesChange,
@@ -308,8 +318,8 @@ export function MatrixSettingsPanel({
       setRecoveryPassword('');
       setNotice('Encryption recovery and key backup are ready. Store this key safely.');
       await refresh();
-    } catch {
-      setError('Recovery setup failed. Confirm your account password and try again.');
+    } catch (error) {
+      setError(recoverySetupError(error));
     }
   });
 
@@ -324,8 +334,8 @@ export function MatrixSettingsPanel({
       setNotice('Recovery was reset. Older backup versions may no longer be available. Save the new key now.');
       await refresh();
     } catch {
-      setError('Recovery reset did not finish. Refresh account health before retrying; the previous backup may already have changed.');
       await refresh();
+      setError('Recovery reset did not finish. Check the refreshed account health before retrying; the previous backup may already have changed.');
     }
   });
 
