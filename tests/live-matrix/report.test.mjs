@@ -54,9 +54,9 @@ test('thread history evidence discards roots, replies, ciphertext, receipts and 
 
 test('messaging evidence discards filenames, captions, drafts, bytes and formatted event payloads', () => {
   const privateValue = randomBytes(24).toString('hex');
-  for (const name of ['encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment', 'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop', 'saved-reference-own-device-and-context', 'shared-pins-and-member-permission', 'old-cross-room-server-search-and-context']) {
+  for (const name of ['encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment', 'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop', 'saved-reference-own-device-and-context', 'shared-pins-and-member-permission', 'old-cross-room-server-search-and-context', 'private-encrypted-search-key-availability']) {
     const result = makeReport({ ...base, failureStage: name, checks: [{ name, passed: true, durationMs: 10,
-      filename: privateValue, caption: privateValue, bytes: [privateValue], draft: privateValue,
+      filename: privateValue, caption: privateValue, bytes: [privateValue], draft: privateValue, passphrase: privateValue,
       formatted_body: privateValue, event: { content: privateValue }, transactionId: privateValue }],
     });
     assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 10 }]);

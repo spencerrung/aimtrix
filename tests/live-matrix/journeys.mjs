@@ -549,6 +549,86 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.getByText('That message was removed.', { exact: true }).waitFor({ timeout: 45000 });
       invariant(await entry(20).count() === 0, 'redacted-context-hidden');
     });
+    await check('private-encrypted-search-key-availability', async () => {
+      let stage = 'private-search-keyed-device';
+      const passphrase = () => randomBytes(24).toString('hex');
+      const historyPrefix = navigationHistory.firstText.slice(0, navigationHistory.firstText.lastIndexOf(' '));
+      const openIndex = async (page, localPassphrase) => {
+        await openRoom(page, roomName);
+        await page.getByRole('button', { name: 'Search message history', exact: true }).click();
+        const panel = page.getByRole('complementary', { name: 'Message search' });
+        await panel.getByLabel('Search conversation').selectOption(roomId);
+        await panel.locator('summary').filter({ hasText: 'Encrypted history on this device' }).click();
+        await panel.getByLabel('Local index passphrase').fill(localPassphrase);
+        await panel.getByRole('button', { name: 'Create or unlock index' }).click();
+        await panel.getByRole('button', { name: 'Index up to 1,000 older messages' }).waitFor();
+        return panel;
+      };
+      try {
+        const capture = (page) => {
+          const bodies = [];
+          const searches = [];
+          const observe = (request) => {
+            const body = request.postData();
+            if (body) bodies.push(body);
+            if (request.method() === 'POST' && new URL(request.url()).pathname.endsWith('/search')) searches.push(true);
+          };
+          page.on('request', observe);
+          return { bodies, searches, stop: () => page.off('request', observe) };
+        };
+        const keyedPassphrase = passphrase();
+        const keyedTraffic = capture(aliceSecond);
+        try {
+          const panel = await openIndex(aliceSecond, keyedPassphrase);
+          await panel.getByRole('button', { name: 'Index up to 1,000 older messages' }).click();
+          await panel.getByRole('button', { name: 'Available history indexed' }).waitFor({ timeout: 120000 });
+          invariant(/oldest indexed .+, newest /.test(await panel.locator('.private-search-controls [role="status"]').textContent() ?? ''), 'private-search-keyed-device');
+          stage = 'private-search-keyed-result';
+          await panel.getByLabel('Search words').fill(navigationHistory.secondText);
+          await panel.getByRole('button', { name: 'Search history', exact: true }).click();
+          const result = panel.locator('.search-results button').filter({ hasText: navigationHistory.secondText });
+          await result.waitFor({ timeout: 60000 });
+          invariant(await result.count() === 1, 'private-search-keyed-result');
+          invariant(keyedTraffic.searches.length === 0 && keyedTraffic.bodies.every((body) => !body.includes(historyPrefix) && !body.includes(keyedPassphrase)), 'private-search-no-plaintext-upload');
+          stage = 'private-search-exact-context';
+          await result.click();
+          await aliceSecond.locator(`[data-event-id=${JSON.stringify(navigationHistory.secondId)}]`).waitFor({ timeout: 45000 });
+        } finally { keyedTraffic.stop(); }
+        stage = 'private-search-new-device';
+        // Charlie joined before the history was sent but had no browser session
+        // receiving its room keys. A first signed-in device exposes that gap.
+        const charlieFresh = await newPage();
+        await login(charlieFresh, stack.origins.app, 'charlie', stack.credentials.password);
+        const freshSession = await session(charlieFresh);
+        invariant(freshSession.userId === accounts.charlie.user_id, 'private-search-new-device');
+        const freshPassphrase = passphrase();
+        const freshTraffic = capture(charlieFresh);
+        const freshPanel = await openIndex(charlieFresh, freshPassphrase);
+        await freshPanel.getByRole('button', { name: 'Index up to 1,000 older messages' }).click();
+        await freshPanel.getByRole('button', { name: 'Available history indexed' }).waitFor({ timeout: 120000 });
+        stage = 'private-search-missing-keys';
+        await until(async () => /[1-9]\d* skipped without keys/.test(await freshPanel.locator('.private-search-controls [role="status"]').textContent() ?? ''), 'private-search-missing-keys');
+        await freshPanel.getByLabel('Search words').fill(navigationHistory.secondText);
+        await freshPanel.getByRole('button', { name: 'Search history', exact: true }).click();
+        await freshPanel.getByText('No matches in the searched coverage.', { exact: true }).waitFor();
+        invariant(freshTraffic.searches.length === 0 && freshTraffic.bodies.every((body) => !body.includes(historyPrefix) && !body.includes(freshPassphrase)), 'private-search-no-plaintext-upload');
+        freshTraffic.stop();
+        stage = 'private-search-sending-still-available';
+        await freshPanel.getByRole('button', { name: 'Close message search' }).click();
+        const marker = `Synthetic private search send ${randomBytes(8).toString('hex')}`;
+        await charlieFresh.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
+        const sent = charlieFresh.waitForRequest((request) => request.method() === 'PUT' && new URL(request.url()).pathname.includes('/send/m.room.encrypted/'));
+        await charlieFresh.getByRole('button', { name: 'Send message', exact: true }).click();
+        await sent;
+        await charlieFresh.locator('.timeline-message').filter({ hasText: marker }).getByText('Accepted by server', { exact: true }).waitFor();
+        stage = 'private-search-delete';
+        await charlieFresh.getByRole('button', { name: 'Search message history', exact: true }).click();
+        await freshPanel.getByRole('button', { name: 'Delete local index' }).click();
+        await charlieFresh.getByRole('dialog', { name: 'Delete private search index?' }).getByRole('button', { name: 'Delete local index' }).click();
+        await freshPanel.getByRole('button', { name: 'Create or unlock index' }).waitFor();
+        invariant(await charlieFresh.evaluate(async () => (await indexedDB.databases()).every((database) => !database.name?.startsWith('aimtrix.private-search.'))), 'private-search-delete');
+      } catch { throw new Error(stage); }
+    });
     await check('standard-favorites-and-own-device-sync', async () => {
       const tagPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/rooms/${encode(roomId)}/tags`;
       const customTag = 'org.example.synthetic-navigation';
