@@ -195,14 +195,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
     });
     await check('password-two-device-recovery-setup-and-restore', async () => {
+      let stage = 'recovery-open-first-settings';
+      try {
       await alice.bringToFront();
       await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
       const first = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await first.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      stage = 'recovery-setup-control';
       await first.getByRole('button', { name: 'Set up new recovery', exact: true }).waitFor();
       await first.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic recovery ${randomBytes(12).toString('hex')}`);
       await first.getByLabel('Matrix password, if this account has one', { exact: true }).fill(stack.credentials.password);
       await first.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
+      stage = 'recovery-setup-result';
       await first.getByText('Encryption recovery and key backup are ready.', { exact: false }).waitFor({ timeout: 60000 });
       const key = await first.locator('.recovery-key-output code').textContent();
       invariant(Boolean(key), 'recovery-key-generated');
@@ -210,15 +214,26 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(await first.locator('.recovery-key-output code').count() === 0, 'recovery-key-dismissed');
       await first.getByRole('button', { name: 'Close settings', exact: true }).click();
 
+      stage = 'recovery-open-second-settings';
       await aliceSecond.bringToFront();
       await aliceSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
       const second = aliceSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await second.getByRole('button', { name: 'Matrix & security', exact: true }).click();
       await second.getByLabel('Existing recovery key', { exact: true }).fill(key);
       await second.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
+      stage = 'recovery-restore-result';
       await second.getByText(/^Recovery complete\. Imported \d+ room keys\.$/).waitFor({ timeout: 60000 });
       invariant(await second.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'recovery-key-cleared');
       await second.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch {
+        if (stage === 'recovery-setup-result') {
+          if (await alice.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).count()) stage = 'recovery-setup-unsupported';
+          else if (await alice.getByRole('alert').filter({ hasText: 'Recovery setup failed' }).count()) stage = 'recovery-setup-failed';
+          else if (await alice.getByRole('status').filter({ hasText: 'Working with your homeserver' }).count()) stage = 'recovery-setup-pending';
+        }
+        if (stage === 'recovery-restore-result' && await aliceSecond.getByRole('alert').filter({ hasText: 'could not unlock' }).count()) stage = 'recovery-restore-failed';
+        throw new Error(stage);
+      }
     });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
