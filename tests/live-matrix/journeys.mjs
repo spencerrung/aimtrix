@@ -236,6 +236,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           if (await alert.filter({ hasText: 'could not restore its encryption identity' }).count()) stage = 'recovery-restore-cross-signing';
           else if (await alert.filter({ hasText: 'room-key backup could not be enabled' }).count()) stage = 'recovery-restore-backup';
           else if (await alert.filter({ hasText: 'room keys could not be imported' }).count()) stage = 'recovery-restore-room-keys';
+          else if (await alert.filter({ hasText: 'does not match this account' }).count()) stage = 'recovery-restore-key-mismatch';
+          else if (await alert.filter({ hasText: 'no compatible recovery backup' }).count()) stage = 'recovery-restore-no-backup';
           else if (await alert.count()) stage = 'recovery-restore-failed';
         }
         throw new Error(stage);
