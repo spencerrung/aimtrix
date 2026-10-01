@@ -296,8 +296,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
         await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
         stage = 'verification-device-row';
-        const device = settings.locator('.device-card').filter({ has: settings.getByRole('textbox', { name: `Name for ${verifySession.deviceId}` }) });
-        await device.waitFor();
+        const deviceInput = settings.getByRole('textbox', { name: `Name for ${verifySession.deviceId}` });
+        for (let attempt = 0; attempt < 5 && !await deviceInput.count(); attempt++) {
+          const refresh = settings.getByRole('button', { name: 'Refresh', exact: true });
+          await refresh.click();
+          await until(() => refresh.isEnabled(), 'verification-device-refresh', 10000);
+        }
+        await deviceInput.waitFor();
+        const device = deviceInput.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " device-card ")]');
         stage = 'verification-button';
         await device.getByRole('button', { name: 'Verify', exact: true }).click();
         stage = 'verification-incoming-request';
