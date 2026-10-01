@@ -4,7 +4,7 @@ Checked items record the implemented scope described on that line, not universal
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the ordered GitHub issue queue for the next implementation program. It supplements this release/compatibility inventory; its baseline audit reconciles implementation and validation evidence without removing existing obligations.
 
-The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. Its live two-device and SSO interoperability acceptance remains open.
+The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. Disposable Synapse now exercises password-account fresh-device backup restore and incoming Aimtrix-to-Aimtrix SAS. SSO authorization variants, cross-client QR/SAS, and withheld-key/secret-sharing interoperability remain open.
 
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
 
@@ -156,15 +156,15 @@ These retain compatibility depth and validation obligations alongside additive f
 - [x] Basic emphasis, inline/fenced code, code-file previews/copy, safe text links, link previews, and authored Matrix formatting/mention metadata. General incoming rich HTML remains a separate partial capability.
 - [ ] Complete sanitized incoming `formatted_body` HTML, spoilers and extensible event rendering; validate polls and locations across independent clients and deeper relation/closure cases. Poll and static-location controls, rendering, mocked protocol coverage, and a disposable encrypted-room exchange are implemented; see [social messages](docs/polls-and-locations.md). — [#152](https://github.com/spencerrung/aimtrix/issues/152), [#166](https://github.com/spencerrung/aimtrix/issues/166), [#167](https://github.com/spencerrung/aimtrix/issues/167).
 - [x] Explicit per-event delivery, original-transaction retry/cancel and room/thread text draft protection. — [#145](https://github.com/spencerrung/aimtrix/issues/145); [behavior and evidence](docs/message-delivery.md).
-- [ ] Complete deeper per-event decryption diagnostics beyond delivery state and read-position avatars. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Validate per-event decryption and withheld-key diagnostics against real cross-client key-request/withholding cases, beyond mocked reason-code tests. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Validate the implemented aliases, history visibility, join rules/knocking, guest access, room upgrades, and server ACL editing with live accounts at several power levels. The UI and mocked paths are documented in [community onboarding](docs/community-onboarding.md). — [#165](https://github.com/spencerrung/aimtrix/issues/165).
 - [ ] Validate implemented suggested-child controls, canonical-parent selection, and explicit space removal against a live homeserver, including partial-write recovery. — [#165](https://github.com/spencerrung/aimtrix/issues/165).
 - [x] Room all/mentions/nothing, keyword/thread rules, account DND, local quiet time and safe delivery troubleshooting. — [#159](https://github.com/spencerrung/aimtrix/issues/159); [behavior and boundaries](docs/attention-and-catch-up.md). Actual closed-app provider acceptance remains [#176](https://github.com/spencerrung/aimtrix/issues/176).
 
 ### Encryption and identity depth
 
-- [ ] Handle incoming verification requests and QR scan/show flows in addition to initiated emoji SAS. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
-- [ ] Add key-request diagnostics, withheld-key reasons, secret-sharing approval, and recovery reset guidance for every server variant. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Validate implemented incoming QR scan/show and cancellation with an independent Matrix client; disposable Aimtrix-to-Aimtrix incoming SAS is exercised separately. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Validate key-request and withheld-key guidance, SDK-owned secret sharing, and confirmed recovery reset across relevant server/UIA variants. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Test delegated OIDC/MSC3861 native flows beyond standard Matrix SSO token login. — [#174](https://github.com/spencerrung/aimtrix/issues/174).
 
 ### Group calls
