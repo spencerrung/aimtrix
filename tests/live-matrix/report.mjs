@@ -28,7 +28,7 @@ failureCategories.push('moderation-open-drawer', 'moderation-people-tab', 'moder
 failureCategories.push('private-search-keyed-device', 'private-search-keyed-result', 'private-search-no-plaintext-upload', 'private-search-exact-context',
   'private-search-new-device', 'private-search-missing-keys', 'private-search-sending-still-available', 'private-search-delete');
 failureCategories.push('recovery-key-generated', 'recovery-key-dismissed', 'recovery-key-cleared');
-failureCategories.push('recovery-open-first-settings', 'recovery-setup-control', 'recovery-setup-result', 'recovery-setup-unsupported', 'recovery-setup-failed', 'recovery-setup-pending', 'recovery-open-second-settings', 'recovery-restore-result', 'recovery-restore-cross-signing', 'recovery-restore-backup', 'recovery-restore-room-keys', 'recovery-restore-key-mismatch', 'recovery-restore-no-backup', 'recovery-restore-failed');
+failureCategories.push('recovery-open-first-settings', 'recovery-setup-control', 'recovery-setup-result', 'recovery-setup-unsupported', 'recovery-setup-failed', 'recovery-setup-pending', 'recovery-server-backup', 'recovery-server-secret-storage', 'recovery-open-second-settings', 'recovery-restore-result', 'recovery-restore-cross-signing', 'recovery-restore-backup', 'recovery-restore-room-keys', 'recovery-restore-key-mismatch', 'recovery-restore-no-backup', 'recovery-restore-failed');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

@@ -208,6 +208,20 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await first.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
       stage = 'recovery-setup-result';
       await first.getByText('Encryption recovery and key backup are ready.', { exact: false }).waitFor({ timeout: 60000 });
+      stage = 'recovery-server-backup';
+      await until(async () => {
+        try {
+          const info = await api('/_matrix/client/v3/room_keys/version', { token: aliceSession.accessToken });
+          return Boolean(info.version && info.count > 0);
+        } catch { return false; }
+      }, 'recovery-server-backup', 60000);
+      stage = 'recovery-server-secret-storage';
+      await until(async () => {
+        try {
+          const data = await api(`/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/m.secret_storage.default`, { token: aliceSession.accessToken });
+          return typeof data.key === 'string' && data.key.length > 0;
+        } catch { return false; }
+      }, 'recovery-server-secret-storage', 60000);
       const key = await first.locator('.recovery-key-output code').textContent();
       invariant(Boolean(key), 'recovery-key-generated');
       await first.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
@@ -215,6 +229,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await first.getByRole('button', { name: 'Close settings', exact: true }).click();
 
       stage = 'recovery-open-second-settings';
+      await aliceSecond.reload();
       await aliceSecond.bringToFront();
       await aliceSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
       const second = aliceSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });

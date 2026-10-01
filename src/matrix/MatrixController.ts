@@ -975,13 +975,14 @@ export class MatrixController {
     const session = this.activeSession;
     if (!client || !session) throw new Error('Matrix is not connected.');
     const crypto = client.getCrypto();
-    const [deviceResponse, versions, crossSigningReady, secretStorageReady, backupInfo, defaultSecretKeyId] =
+    const [deviceResponse, versions, crossSigningReady, secretStorageReady, backupInfo, activeBackupVersion, defaultSecretKeyId] =
       await Promise.all([
         client.getDevices(),
         client.getVersions(),
         crypto?.isCrossSigningReady() ?? Promise.resolve(false),
         crypto?.isSecretStorageReady() ?? Promise.resolve(false),
         crypto?.getKeyBackupInfo() ?? Promise.resolve(null),
+        crypto?.getActiveSessionBackupVersion() ?? Promise.resolve(null),
         client.secretStorage.getDefaultKeyId(),
       ]);
     const devices = await Promise.all(
@@ -1036,7 +1037,8 @@ export class MatrixController {
         crossSigningReady,
         secretStorageReady,
         secretStorageConfigured: Boolean(defaultSecretKeyId),
-        keyBackupEnabled: Boolean(backupInfo),
+        keyBackupConfigured: Boolean(backupInfo),
+        keyBackupEnabled: Boolean(activeBackupVersion && activeBackupVersion === backupInfo?.version),
         keyBackupVersion: backupInfo?.version,
       },
       devices: devices.sort((left, right) => {
@@ -1370,7 +1372,11 @@ export class MatrixController {
       stage = 'backup-key';
       await crypto.loadSessionBackupPrivateKeyFromSecretStorage();
       stage = 'backup-enable';
-      await crypto.checkKeyBackupAndEnable();
+      const checkedBackup = await crypto.checkKeyBackupAndEnable();
+      if (!checkedBackup?.trustInfo.trusted || checkedBackup.backupInfo.version !== backup.version ||
+          await crypto.getActiveSessionBackupVersion() !== backup.version) {
+        throw new Error('Backup is not active on this device.');
+      }
       stage = 'room-keys';
       const restored = await crypto.restoreKeyBackup();
       return restored.imported;

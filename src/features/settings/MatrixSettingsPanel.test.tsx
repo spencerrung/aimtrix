@@ -99,3 +99,10 @@ it('distinguishes an unlocked recovery key from a failed backup operation', asyn
   expect(await screen.findByRole('alert')).toHaveTextContent('key unlocked recovery storage');
   expect(screen.getByLabelText('Existing recovery key')).toHaveValue('synthetic-key-only');
 });
+
+it('does not offer new recovery setup when a server backup exists but is inactive on this device', async () => {
+  setup({ load: vi.fn().mockResolvedValue({ ...snapshot, security: { ...snapshot.security, secretStorageConfigured: false, keyBackupConfigured: true, keyBackupEnabled: false } }) });
+  expect(await screen.findByText('On server; inactive here')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Set up new recovery' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Restore existing room keys' })).toBeInTheDocument();
+});

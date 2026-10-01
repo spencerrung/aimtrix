@@ -423,7 +423,7 @@ export function MatrixSettingsPanel({
               <span className={snapshot.security.encryptionReady ? 'is-ready' : ''}>E2EE <b>{snapshot.security.encryptionReady ? 'Ready' : 'Unavailable'}</b></span>
               <span className={snapshot.security.crossSigningReady ? 'is-ready' : ''}>Cross-signing <b>{snapshot.security.crossSigningReady ? 'Ready' : 'Needs setup'}</b></span>
               <span className={snapshot.security.secretStorageReady ? 'is-ready' : ''}>Secret storage <b>{snapshot.security.secretStorageReady ? 'Ready' : 'Needs setup'}</b></span>
-              <span className={snapshot.security.keyBackupEnabled ? 'is-ready' : ''}>Key backup <b>{snapshot.security.keyBackupEnabled ? `v${snapshot.security.keyBackupVersion}` : 'Needs setup'}</b></span>
+              <span className={snapshot.security.keyBackupEnabled ? 'is-ready' : ''}>Key backup <b>{snapshot.security.keyBackupEnabled ? `v${snapshot.security.keyBackupVersion}` : snapshot.security.keyBackupConfigured ? 'On server; inactive here' : 'Needs setup'}</b></span>
             </div>
             <div className="recovery-setup">
               <strong>Restore existing recovery</strong>
@@ -431,7 +431,7 @@ export function MatrixSettingsPanel({
               <label>Existing recovery key<input type="password" value={existingRecoveryKey} autoComplete="off" onChange={(event) => setExistingRecoveryKey(event.target.value)} /></label>
               <button className="aqua-button" type="button" onClick={() => void restoreRecovery()} disabled={!existingRecoveryKey.trim()}>Restore existing room keys</button>
             </div>
-            {!snapshot.security.secretStorageConfigured && !snapshot.security.keyBackupEnabled ? (
+            {!snapshot.security.secretStorageConfigured && !snapshot.security.keyBackupConfigured && !snapshot.security.keyBackupEnabled ? (
               <div className="recovery-setup">
                 <strong>Set up new recovery</strong>
                 <p>Choose this only for an account without existing recovery. Save the generated key before closing this page. Some servers ask for your account password to authorize setup; SSO-only authorization is not supported here when they do.</p>

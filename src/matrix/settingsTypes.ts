@@ -13,6 +13,7 @@ export interface MatrixSecuritySummary {
   crossSigningReady: boolean;
   secretStorageReady: boolean;
   secretStorageConfigured?: boolean;
+  keyBackupConfigured?: boolean;
   keyBackupEnabled: boolean;
   keyBackupVersion?: string;
 }
