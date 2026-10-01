@@ -1705,10 +1705,35 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
       await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic SSO recovery ${randomBytes(12).toString('hex')}`);
       await settings.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
-      await settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).waitFor({ timeout: 60000 });
-      invariant(await settings.getByLabel('New recovery passphrase', { exact: true }).inputValue() !== '', 'sso-recovery-passphrase-retained');
-      invariant(await settings.locator('.recovery-key-output').count() === 0, 'sso-recovery-no-key-export');
+      const unsupported = settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' });
+      const output = settings.locator('.recovery-key-output code');
+      await until(async () => Boolean(await unsupported.count() || await output.count()), 'sso-recovery-outcome', 60000);
+      if (await unsupported.count()) {
+        invariant(await settings.getByLabel('New recovery passphrase', { exact: true }).inputValue() !== '', 'sso-recovery-passphrase-retained');
+        invariant(await output.count() === 0, 'sso-recovery-no-key-export');
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+        return;
+      }
+      const key = await output.textContent();
+      invariant(Boolean(key), 'sso-recovery-key-generated');
+      await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
       await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      const ssoSecond = await newPage();
+      await ssoSecond.goto(stack.origins.app);
+      await ssoSecond.getByRole('button', { name: 'Sign in with homeserver SSO', exact: true }).click();
+      await ssoSecond.getByLabel(/^Email address$/i).fill('sso@aimtrix.test');
+      await ssoSecond.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
+      await ssoSecond.getByRole('button', { name: 'Login', exact: true }).click();
+      await ssoSecond.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
+      invariant((await session(ssoSecond))?.deviceId !== (await session(sso))?.deviceId, 'sso-recovery-distinct-device');
+      await ssoSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const secondSettings = ssoSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await secondSettings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await secondSettings.getByLabel('Existing recovery key', { exact: true }).fill(key);
+      await secondSettings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
+      await secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 60000 });
+      invariant(await secondSettings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'sso-recovery-key-cleared');
+      await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
     });
     const assertExpired = async (page) => {
       await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });
