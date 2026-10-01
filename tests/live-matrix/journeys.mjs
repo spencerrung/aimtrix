@@ -242,7 +242,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await second.getByLabel('Existing recovery key', { exact: true }).fill(key);
       await second.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
       stage = 'recovery-restore-result';
-      await second.getByText(/^Recovery complete\. Imported [1-9]\d* room keys\.$/).waitFor({ timeout: 60000 });
+      const result = second.locator('.settings-success').filter({ hasText: 'Recovery complete.' });
+      await result.waitFor({ timeout: 60000 });
+      stage = 'recovery-imported-keys';
+      const imported = Number((await result.textContent())?.match(/Imported (\d+) room keys/)?.[1] ?? 0);
+      invariant(imported > 0, 'recovery-imported-keys');
       invariant(await second.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'recovery-key-cleared');
       await second.getByRole('button', { name: 'Close settings', exact: true }).click();
       stage = 'recovery-old-event-restored';

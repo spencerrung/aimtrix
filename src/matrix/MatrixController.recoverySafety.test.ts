@@ -8,6 +8,7 @@ function fixture(matches: boolean, hasStorage = true) {
   const crypto = {
     bootstrapCrossSigning: vi.fn(), loadSessionBackupPrivateKeyFromSecretStorage: vi.fn(),
     checkKeyBackupAndEnable: vi.fn(), restoreKeyBackup: vi.fn(),
+    getActiveSessionBackupVersion: vi.fn().mockResolvedValue('1'),
     getKeyBackupInfo: vi.fn().mockResolvedValue({ version: '1' }),
     getCrossSigningStatus: vi.fn().mockResolvedValue({ publicKeysOnDevice: true, privateKeysInSecretStorage: true, privateKeysCachedLocally: { masterKey: false, selfSigningKey: false, userSigningKey: false } }),
   };
@@ -48,5 +49,21 @@ describe('recovery safety', () => {
     await expect(controller.setupRecovery('long synthetic passphrase', '')).rejects.toThrow(/already has an encryption identity/);
     expect(crypto.bootstrapCrossSigning).not.toHaveBeenCalled();
     expect(client.secretStorage.getDefaultKeyId).toHaveBeenCalled();
+  });
+
+  it('does not claim recovery when the backup is present but untrusted', async () => {
+    const { controller, crypto } = fixture(true);
+    crypto.checkKeyBackupAndEnable.mockResolvedValue({ backupInfo: { version: '1' }, trustInfo: { trusted: false, matchesDecryptionKey: true } });
+    await expect(controller.restoreRecovery(key)).rejects.toThrow('Recovery restore failed at backup-enable.');
+    expect(crypto.restoreKeyBackup).not.toHaveBeenCalled();
+  });
+
+  it('restores from an active trusted backup and reports fixed progress stages', async () => {
+    const { controller, crypto } = fixture(true);
+    const progress = vi.fn();
+    crypto.checkKeyBackupAndEnable.mockResolvedValue({ backupInfo: { version: '1' }, trustInfo: { trusted: true, matchesDecryptionKey: true } });
+    crypto.restoreKeyBackup.mockResolvedValue({ imported: 2 });
+    await expect(controller.restoreRecovery(key, progress)).resolves.toBe(2);
+    expect(progress.mock.calls.map(([stage]) => stage)).toEqual(['checking-key', 'restoring-identity', 'loading-backup-key', 'enabling-backup', 'importing-room-keys']);
   });
 });
