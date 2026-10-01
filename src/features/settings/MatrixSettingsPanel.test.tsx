@@ -100,6 +100,19 @@ it('distinguishes an unlocked recovery key from a failed backup operation', asyn
   expect(screen.getByLabelText('Existing recovery key')).toHaveValue('synthetic-key-only');
 });
 
+it('shows the active recovery step while a restore is pending', async () => {
+  let finish!: (count: number) => void;
+  setup({ restoreRecovery: vi.fn().mockImplementation((_, onStage: (stage: 'importing-room-keys') => void) => {
+    onStage('importing-room-keys');
+    return new Promise<number>((resolve) => { finish = resolve; });
+  }) });
+  fireEvent.change(await screen.findByLabelText('Existing recovery key'), { target: { value: 'synthetic-key-only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore existing room keys' }));
+  expect(await screen.findByText('Importing encrypted room keys…')).toBeInTheDocument();
+  await act(async () => finish(1));
+  expect(await screen.findByText('Recovery complete. Imported 1 room keys.')).toBeInTheDocument();
+});
+
 it('does not offer new recovery setup when a server backup exists but is inactive on this device', async () => {
   setup({ load: vi.fn().mockResolvedValue({ ...snapshot, security: { ...snapshot.security, secretStorageConfigured: false, keyBackupConfigured: true, keyBackupEnabled: false } }) });
   expect(await screen.findByText('On server; inactive here')).toBeInTheDocument();

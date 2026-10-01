@@ -127,7 +127,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         controller.setupRecovery(passphrase, accountPassword),
       resetRecovery: (passphrase: string, accountPassword: string) =>
         controller.resetRecovery(passphrase, accountPassword, true),
-      restoreRecovery: (recoveryKey: string) => controller.restoreRecovery(recoveryKey),
+      restoreRecovery: (recoveryKey: string, onStage?: (stage: import('./matrix/settingsTypes').RecoveryRestoreStage) => void) => controller.restoreRecovery(recoveryKey, onStage),
       changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) =>
         controller.changePassword(currentPassword, newPassword, logoutOtherDevices),
       deactivateAccount: async (password: string, erase: boolean) => {

@@ -262,9 +262,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           else if (await alert.filter({ hasText: 'no compatible recovery backup' }).count()) stage = 'recovery-restore-no-backup';
           else if (await alert.count()) stage = 'recovery-restore-failed';
           else if (await recoveryDevice.getByText('Recovery complete. Imported 0 room keys.', { exact: true }).count()) stage = 'recovery-restore-zero-import';
+          else if (await recoveryDevice.locator('.matrix-settings-panel fieldset:disabled').count()) {
+            const notice = recoveryDevice.locator('.settings-success');
+            if (await notice.filter({ hasText: 'Restoring the encryption identity' }).count()) stage = 'recovery-restore-pending-identity';
+            else if (await notice.filter({ hasText: 'Unlocking the room-key backup' }).count()) stage = 'recovery-restore-pending-backup-key';
+            else if (await notice.filter({ hasText: 'Checking backup trust' }).count()) stage = 'recovery-restore-pending-backup-trust';
+            else if (await notice.filter({ hasText: 'Importing encrypted room keys' }).count()) stage = 'recovery-restore-pending-import';
+            else stage = 'recovery-restore-pending';
+          }
+          else if (await recoveryDevice.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).count()) stage = 'recovery-restore-unmatched-count';
           else if (await recoveryDevice.locator('.settings-success').count()) stage = 'recovery-restore-unmatched-success';
           else if (await recoveryDevice.locator('.settings-error').count()) stage = 'recovery-restore-unmatched-error';
-          else if (await recoveryDevice.locator('.matrix-settings-panel fieldset:disabled').count()) stage = 'recovery-restore-pending';
           else if (await recoveryDevice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true }).count() === 0) stage = 'recovery-restore-dialog-gone';
           else stage = 'recovery-restore-idle';
         }

@@ -34,6 +34,8 @@ export interface MatrixSettingsSnapshot {
   ignoredUsers: string[];
 }
 
+export type RecoveryRestoreStage = 'checking-key' | 'restoring-identity' | 'loading-backup-key' | 'enabling-backup' | 'importing-room-keys';
+
 export interface DeviceVerificationChallenge {
   emoji: Array<[symbol: string, name: string]>;
   confirm: () => Promise<void>;

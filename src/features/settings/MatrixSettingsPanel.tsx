@@ -24,6 +24,7 @@ import type {
   DeviceRemovalResult,
   DeviceVerificationChallenge,
   MatrixSettingsSnapshot,
+  RecoveryRestoreStage,
 } from '../../matrix/settingsTypes';
 import type { PushRegistrationResult } from '../../matrix/MatrixController';
 import type { UserPreferences } from '../../settings/preferences';
@@ -38,7 +39,7 @@ export interface MatrixSettingsActions {
   uploadAvatar: (file: File) => Promise<void>;
   setupRecovery: (passphrase: string, accountPassword: string) => Promise<string>;
   resetRecovery?: (passphrase: string, accountPassword: string) => Promise<string>;
-  restoreRecovery: (recoveryKey: string) => Promise<number>;
+  restoreRecovery: (recoveryKey: string, onStage?: (stage: RecoveryRestoreStage) => void) => Promise<number>;
   changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) => Promise<void>;
   deactivateAccount: (password: string, erase: boolean) => Promise<void>;
   previewMessageSound?: () => void;
@@ -79,6 +80,14 @@ function recoveryRestoreError(error: unknown): string {
   if (error.message === 'Recovery restore failed at room-keys.') return 'The backup was unlocked, but its room keys could not be imported. Refresh account health before retrying.';
   return 'Recovery could not finish. Check the key and retry.';
 }
+
+const recoveryRestoreProgress: Record<RecoveryRestoreStage, string> = {
+  'checking-key': 'Checking the recovery key…',
+  'restoring-identity': 'Restoring the encryption identity…',
+  'loading-backup-key': 'Unlocking the room-key backup…',
+  'enabling-backup': 'Checking backup trust on this device…',
+  'importing-room-keys': 'Importing encrypted room keys…',
+};
 
 export function MatrixSettingsPanel({
   preferences,
@@ -309,7 +318,7 @@ export function MatrixSettingsPanel({
     setError(undefined);
     setNotice('Restoring encrypted room keys…');
     try {
-      const imported = await actions.restoreRecovery(existingRecoveryKey);
+      const imported = await actions.restoreRecovery(existingRecoveryKey, (stage) => setNotice(recoveryRestoreProgress[stage]));
       setExistingRecoveryKey('');
       setNotice(`Recovery complete. Imported ${imported} room keys.`);
       await refresh();
