@@ -250,7 +250,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(await second.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'recovery-key-cleared');
       await second.getByRole('button', { name: 'Close settings', exact: true }).click();
       stage = 'recovery-old-event-restored';
-      await recoveryDevice.locator('.timeline-message').filter({ hasText: marker }).waitFor({ timeout: 45000 });
+      await recoveryDevice.getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
       } catch {
         if (stage === 'recovery-setup-result') {
           if (await alice.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).count()) stage = 'recovery-setup-unsupported';
