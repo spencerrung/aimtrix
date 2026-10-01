@@ -284,21 +284,29 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }
     });
     await check('incoming-two-device-sas-verification', async () => {
-      let stage = 'verification-open-initiator';
+      let stage = 'verification-new-device';
       try {
+        const verifyPeer = await newPage();
+        await login(verifyPeer, stack.origins.app, 'alice', stack.credentials.password);
+        const verifySession = await session(verifyPeer);
+        invariant(verifySession?.deviceId && verifySession.deviceId !== aliceSession.deviceId, 'verification-distinct-device');
+        stage = 'verification-open-initiator';
         await alice.bringToFront();
         await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
         const settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
         await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
-        const device = settings.locator('.device-card').filter({ has: settings.getByRole('textbox', { name: `Name for ${secondSession.deviceId}` }) });
+        stage = 'verification-device-row';
+        const device = settings.locator('.device-card').filter({ has: settings.getByRole('textbox', { name: `Name for ${verifySession.deviceId}` }) });
+        await device.waitFor();
+        stage = 'verification-button';
         await device.getByRole('button', { name: 'Verify', exact: true }).click();
         stage = 'verification-incoming-request';
-        await aliceSecond.bringToFront();
-        const incoming = aliceSecond.getByRole('complementary', { name: 'Incoming device verification' });
+        await verifyPeer.bringToFront();
+        const incoming = verifyPeer.getByRole('complementary', { name: 'Incoming device verification' });
         await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
         stage = 'verification-emoji';
         const initiatedChallenge = alice.getByRole('dialog', { name: 'Compare verification emoji', exact: true });
-        const incomingChallenge = aliceSecond.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
+        const incomingChallenge = verifyPeer.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
         await initiatedChallenge.waitFor({ timeout: 45000 });
         await incomingChallenge.waitFor({ timeout: 45000 });
         const firstEmoji = await initiatedChallenge.locator('small').allTextContents();
