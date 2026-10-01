@@ -196,6 +196,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     await check('password-two-device-recovery-setup-and-restore', async () => {
       let stage = 'recovery-open-first-settings';
+      let recoveryDevice;
       try {
       await alice.bringToFront();
       await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
@@ -218,7 +219,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       stage = 'recovery-server-secret-storage';
       await until(async () => {
         try {
-          const data = await api(`/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/m.secret_storage.default`, { token: aliceSession.accessToken });
+          const data = await api(`/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/m.secret_storage.default_key`, { token: aliceSession.accessToken });
           return typeof data.key === 'string' && data.key.length > 0;
         } catch { return false; }
       }, 'recovery-server-secret-storage', 60000);
@@ -228,18 +229,24 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(await first.locator('.recovery-key-output code').count() === 0, 'recovery-key-dismissed');
       await first.getByRole('button', { name: 'Close settings', exact: true }).click();
 
+      stage = 'recovery-new-device-history';
+      recoveryDevice = await newPage();
+      await login(recoveryDevice, stack.origins.app, 'alice', stack.credentials.password);
+      await openRoom(recoveryDevice, roomName);
+      await recoveryDevice.locator('.timeline-message').first().waitFor({ timeout: 45000 });
+      invariant(await recoveryDevice.locator('.timeline-message').filter({ hasText: marker }).count() === 0, 'recovery-old-event-unavailable');
       stage = 'recovery-open-second-settings';
-      await aliceSecond.reload();
-      await aliceSecond.bringToFront();
-      await aliceSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
-      const second = aliceSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await recoveryDevice.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const second = recoveryDevice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await second.getByRole('button', { name: 'Matrix & security', exact: true }).click();
       await second.getByLabel('Existing recovery key', { exact: true }).fill(key);
       await second.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
       stage = 'recovery-restore-result';
-      await second.getByText(/^Recovery complete\. Imported \d+ room keys\.$/).waitFor({ timeout: 60000 });
+      await second.getByText(/^Recovery complete\. Imported [1-9]\d* room keys\.$/).waitFor({ timeout: 60000 });
       invariant(await second.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'recovery-key-cleared');
       await second.getByRole('button', { name: 'Close settings', exact: true }).click();
+      stage = 'recovery-old-event-restored';
+      await recoveryDevice.locator('.timeline-message').filter({ hasText: marker }).waitFor({ timeout: 45000 });
       } catch {
         if (stage === 'recovery-setup-result') {
           if (await alice.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).count()) stage = 'recovery-setup-unsupported';
@@ -247,7 +254,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           else if (await alice.getByRole('status').filter({ hasText: 'Working with your homeserver' }).count()) stage = 'recovery-setup-pending';
         }
         if (stage === 'recovery-restore-result') {
-          const alert = aliceSecond.getByRole('alert');
+          const alert = recoveryDevice.getByRole('alert');
           if (await alert.filter({ hasText: 'could not restore its encryption identity' }).count()) stage = 'recovery-restore-cross-signing';
           else if (await alert.filter({ hasText: 'room-key backup could not be enabled' }).count()) stage = 'recovery-restore-backup';
           else if (await alert.filter({ hasText: 'room keys could not be imported' }).count()) stage = 'recovery-restore-room-keys';
