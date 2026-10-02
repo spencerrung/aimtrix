@@ -467,7 +467,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }
         try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
         catch {
-          stage = await alice.getByText('The replacement room could not be opened yet. Try its room ID from Join room after sync.').isVisible()
+          stage = await alice.getByText('Could not open replacement. Try Join room.').isVisible()
             ? 'upgrade-join-failed' : 'upgrade-selection-stale';
           throw new Error(stage);
         }
