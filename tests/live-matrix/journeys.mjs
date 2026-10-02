@@ -407,9 +407,16 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }, stage);
         const replacement = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.create`, { token: aliceSession.accessToken });
         invariant(replacement.room_version === versions.default, 'upgrade-version-readback');
+        stage = 'upgrade-replacement-membership';
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
         stage = 'upgrade-open-replacement';
         await admin.getByRole('button', { name: 'Open replacement room' }).click();
-        await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage);
+        try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
+        catch {
+          stage = await alice.getByText('The replacement room could not be opened yet. Try its room ID from Join room after sync.').isVisible()
+            ? 'upgrade-join-failed' : 'upgrade-selection-stale';
+          throw new Error(stage);
+        }
         await alice.getByRole('main', { name }).waitFor();
       } catch { throw new Error(stage); }
     });
