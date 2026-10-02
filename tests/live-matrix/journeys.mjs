@@ -1,4 +1,4 @@
-/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob, atob, HTMLSelectElement */
+/* global localStorage, indexedDB, fetch, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -1730,9 +1730,20 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'admin-alias-complete';
         await admin.getByRole('status').filter({ hasText: 'Alias creation saved on the homeserver.' }).waitFor();
         const chooseDirectory = async (visibility) => {
-          const select = admin.getByRole('combobox', { name: 'Public directory' });
-          if (await select.count() !== 1) { stage = 'admin-directory-selector-missing'; throw new Error(stage); }
-          if (!await select.isEnabled()) {
+          const outcome = await alice.evaluate((value) => {
+            const element = document.querySelector('.room-administration__directory');
+            if (!(element instanceof HTMLSelectElement)) return 'missing';
+            if (element.getClientRects().length === 0) return 'hidden';
+            if (element.disabled) return 'disabled';
+            if (!Array.from(element.options).some((option) => option.value === value)) return 'option-missing';
+            element.value = value;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'dispatched';
+          }, visibility);
+          if (outcome === 'missing') { stage = 'admin-directory-selector-missing'; throw new Error(stage); }
+          if (outcome === 'hidden') { stage = 'admin-directory-selector-hidden'; throw new Error(stage); }
+          if (outcome === 'disabled') {
             const response = await fetch(`${stack.origins.synapse}/_matrix/client/v3/directory/list/room/${encode(roomId)}`, {
               headers: { Authorization: `Bearer ${aliceSession.accessToken}` }, signal: AbortSignal.timeout(15000),
             });
@@ -1740,16 +1751,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
               : response.status === 404 ? 'admin-directory-room-unknown' : 'admin-directory-server-unavailable';
             throw new Error(stage);
           }
-          // Dispatch the same input/change events as a browser selection;
-          // confirmation and exact server readback below prove the operation.
-          const selected = await select.evaluate((element, value) => {
-            if (!(element instanceof HTMLSelectElement) || !Array.from(element.options).some((option) => option.value === value)) return false;
-            element.value = value;
-            element.dispatchEvent(new Event('input', { bubbles: true }));
-            element.dispatchEvent(new Event('change', { bubbles: true }));
-            return true;
-          }, visibility);
-          if (!selected) { stage = 'admin-directory-option-missing'; throw new Error(stage); }
+          if (outcome !== 'dispatched') { stage = 'admin-directory-option-missing'; throw new Error(stage); }
         };
         stage = 'admin-directory';
         await chooseDirectory('public');
