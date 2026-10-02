@@ -405,10 +405,15 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await until(() => joinRule.isEnabled(), stage);
         stage = 'moderator-change-join-rule';
         await joinRule.selectOption('public');
-        await bob.getByRole('dialog').getByRole('button', { name: 'Save join rule' }).click();
+        const confirmation = bob.getByRole('dialog', { name: 'Change join rule?' });
+        await confirmation.getByRole('button', { name: 'Save join rule' }).click();
+        await confirmation.waitFor({ state: 'hidden' });
         await until(async () => (await api(path('m.room.join_rules'), { token: aliceSession.accessToken })).join_rule === 'public', stage);
+        await until(() => joinRule.isEnabled(), 'moderator-control-ready-after-write');
         stage = 'moderator-owner-only-denial';
-        await api(path('m.room.power_levels'), { token: bobSession.accessToken, method: 'PUT', body: original, status: 403 });
+        await api(path('m.room.power_levels'), { token: bobSession.accessToken, method: 'PUT', body: {
+          ...original, users: { ...original.users, [bobSession.userId]: 50, [aliceSession.userId]: 0 },
+        }, status: 403 });
         stage = 'moderator-demote';
         await api(path('m.room.power_levels'), { token: aliceSession.accessToken, method: 'PUT', body: original });
         await api(path('m.room.join_rules'), { token: aliceSession.accessToken, method: 'PUT', body: { join_rule: 'invite' } });
