@@ -1537,13 +1537,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.unroute(pattern, rejectSecond);
         await retry.click();
         await alice.getByRole('region', { name: 'Attachments', exact: true }).locator('li').filter({ hasText: files[1].name }).getByText('Sent', { exact: true }).waitFor();
+        const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.isVisible()) {
+          await latest.click();
+          await latest.waitFor({ state: 'hidden' });
+        }
         for (let index = 0; index < files.length; index++) {
           await verifyAttachment(bob, files[index], captions[index]);
-          await until(async () => {
-            const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
-            if (await latest.count()) await latest.click();
-            return await alice.locator('.timeline-message').filter({ has: alice.locator('.message-file').filter({ hasText: files[index].name }) }).count() === 1;
-          }, 'single-accepted-attachment');
+          await until(async () => await alice.locator('.timeline-message').filter({ has: alice.locator('.message-file').filter({ hasText: files[index].name }) }).count() === 1, 'single-accepted-attachment');
         }
         const attempts = wire.slice(start);
         invariant(attempts.length === 3 && attempts.every((event) => event.path.includes('/m.room.encrypted/')), 'attachment-retry-transaction');
