@@ -1727,7 +1727,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await admin.getByLabel('New local alias').fill(alias);
         await admin.getByRole('button', { name: 'Add alias' }).click();
         await until(async () => (await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken }).catch(() => ({}))).room_id === roomId, 'admin-alias-resolve');
+        stage = 'admin-alias-complete';
+        await admin.getByRole('status').filter({ hasText: 'Alias creation saved on the homeserver.' }).waitFor();
         stage = 'admin-directory';
+        await until(async () => admin.getByLabel('Public directory').isEnabled(), 'admin-directory-available', 5000);
         await admin.getByLabel('Public directory').selectOption('public');
         stage = 'admin-directory-confirm';
         const publicConfirmation = alice.getByRole('dialog');
