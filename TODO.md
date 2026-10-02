@@ -9,8 +9,8 @@ The [first-use encryption confidence pass](docs/first-use-encryption.md) impleme
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
 The [daily-client acceptance record](docs/daily-client-acceptance.md) joins the nine roadmap journeys to browser/live checks and keeps unverified core and target-specific gates visible for #164.
 
-The [large-account performance profile](docs/large-account-performance.md) records a synthetic 10k-room baseline, bounded buddy-list and Matrix-space paging, optional index/attachment operation costs, and working interaction/memory budgets for #163. Live long-running sync remains open.
-An isolated cache-enabled disposable Synapse profile now measures same-device reload after 350 synthetic messages for #163; CI results, a production resume decision, and long-running sync evidence remain open.
+The [large-account performance profile](docs/large-account-performance.md) records a synthetic 10k-room baseline, bounded buddy-list and Matrix-space paging, optional index/attachment operation costs, and working interaction/memory budgets for #163. The corrected ten-minute normal-list run kept 101 rows bounded and found 23 MiB retained heap growth; its 444 ms publication p95 was confounded by concurrent tests. A quiet two-minute run measured 212 ms p95 and 7 MiB growth. A longer uncontended repeat and plateau/bottleneck decision remain open.
+Isolated cache-enabled disposable Synapse profiles measure same-device reload after 350 synthetic messages and ten-minute incremental sync from another account. Two CI sustained-sync runs delivered all 300 events with bounded timelines, 143–186 ms p95 and 17 MiB retained growth. A production resume decision and broader account-scale evidence remain open.
 
 The [visual reference handoff](docs/design/interaction-rules.md) records the step 02 design decisions and browser evidence. These are implementation inputs for the linked roadmap slices; the reference does not mark their production behavior complete.
 

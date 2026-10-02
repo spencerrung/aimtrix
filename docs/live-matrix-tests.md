@@ -13,6 +13,7 @@ npm run build
 npm run test:matrix:privacy
 npm run test:matrix -- --repeat=2
 npm run test:matrix -- --probe-failure
+npm run test:matrix -- --profile-sustained-sync
 ```
 
 Build immediately before running so the harness exercises the intended application revision. The harness serves `dist/` through Vite preview and provides a temporary `/config.json` pointing only at its local Synapse. The normal `public/config.json` is unchanged. There are no Matrix response mocks, production controller hooks, or injected login tokens.
