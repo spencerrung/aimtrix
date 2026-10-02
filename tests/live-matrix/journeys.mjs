@@ -241,6 +241,23 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await parentManage.locator('li').filter({ hasText: roomName }).getByRole('button', { name: 'Remove' }).click();
         await alice.getByRole('dialog', { name: `Remove ${roomName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
         await until(async () => Object.keys(await api(childPath(roomId), { token: aliceSession.accessToken })).length === 0, 'space-room-removed');
+        stage = 'space-partial-write-rollback';
+        let rejectParentWrite = true;
+        const denyParentWrite = async (route) => {
+          if (rejectParentWrite && route.request().method() === 'PUT' && new URL(route.request().url()).pathname === parentPath) {
+            rejectParentWrite = false;
+            await route.fulfill({ status: 403, contentType: 'application/json', body: '{"errcode":"M_FORBIDDEN","error":"Synthetic parent-link denial"}' });
+          } else await route.continue();
+        };
+        await alice.route('**/_matrix/client/v3/rooms/*/state/m.space.parent/*', denyParentWrite);
+        try {
+          await parentManage.getByLabel('Find a joined room or subspace').fill(childName);
+          await parentManage.getByRole('button', { name: childName, exact: true }).click();
+          await parentManage.getByRole('button', { name: 'Add to space' }).click();
+          await parentManage.getByRole('alert').getByText('The subspace parent link failed. The child link was rolled back.').waitFor();
+          invariant(!rejectParentWrite, stage);
+          await until(async () => Object.keys(await api(childPath(childId), { token: aliceSession.accessToken })).length === 0, stage);
+        } finally { await alice.unroute('**/_matrix/client/v3/rooms/*/state/m.space.parent/*', denyParentWrite); }
         await parentManage.getByRole('button', { name: 'Close' }).click();
       } catch { throw new Error(stage); }
     });
