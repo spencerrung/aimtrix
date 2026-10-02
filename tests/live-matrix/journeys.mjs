@@ -365,6 +365,54 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken, status: 404 });
       } catch { throw new Error(stage); }
     });
+    await check('room-knock-and-upgrade-administration', async () => {
+      let stage = 'upgrade-capabilities';
+      try {
+        const versions = (await api('/_matrix/client/v3/capabilities', { token: aliceSession.accessToken })).capabilities?.['m.room_versions'];
+        const previous = ['10', '11', '9'].find((version) => version !== versions?.default && versions?.available?.[version] === 'stable');
+        invariant(previous, stage);
+        const name = `Upgradeable community ${randomBytes(4).toString('hex')}`;
+        stage = 'upgrade-create-room';
+        const created = await api('/_matrix/client/v3/createRoom', { token: aliceSession.accessToken, method: 'POST', body: {
+          name, room_version: previous,
+          initial_state: [{ type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } }],
+        } });
+        const upgradeRoomId = created.room_id;
+        invariant(typeof upgradeRoomId === 'string', stage);
+        const outsider = await register(api, stack, `knocker${randomBytes(3).toString('hex')}`);
+        stage = 'upgrade-open-room';
+        await alice.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await openRoom(alice, name);
+        const drawer = alice.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!(await drawer.isVisible())) await alice.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        await drawer.getByRole('tab', { name: 'Manage', exact: true }).click();
+        const admin = drawer.getByRole('region', { name: 'Advanced room administration' });
+        stage = 'upgrade-enable-knock';
+        await admin.getByLabel('Who may join').selectOption('knock');
+        await alice.getByRole('dialog').getByRole('button', { name: 'Save join rule' }).click();
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.join_rules`, { token: aliceSession.accessToken })).join_rule === 'knock', stage);
+        stage = 'upgrade-outsider-knock';
+        await api(`/_matrix/client/v3/knock/${encode(upgradeRoomId)}`, { token: outsider.access_token, method: 'POST', body: { reason: 'Synthetic request to join' } });
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.member/${encode(outsider.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'knock', stage);
+        stage = 'upgrade-control';
+        await admin.getByRole('button', { name: 'Upgrade room' }).waitFor();
+        await admin.getByRole('button', { name: 'Upgrade room' }).click();
+        await alice.getByRole('dialog', { name: 'Upgrade this room?' }).getByRole('button', { name: 'Upgrade room' }).click();
+        stage = 'upgrade-tombstone';
+        let replacementId;
+        await until(async () => {
+          const tombstone = await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.tombstone`, { token: aliceSession.accessToken }).catch(() => ({}));
+          replacementId = tombstone.replacement_room;
+          return typeof replacementId === 'string';
+        }, stage);
+        const replacement = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.create`, { token: aliceSession.accessToken });
+        invariant(replacement.room_version === versions.default, 'upgrade-version-readback');
+        stage = 'upgrade-open-replacement';
+        await admin.getByRole('button', { name: 'Open replacement room' }).click();
+        await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage);
+        await alice.getByRole('main', { name }).waitFor();
+      } catch { throw new Error(stage); }
+    });
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
       let stage = 'element-encrypted-login';
       try {
