@@ -1,4 +1,4 @@
-/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob, atob */
+/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob, atob, HTMLSelectElement */
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -1729,11 +1729,30 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await until(async () => (await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken }).catch(() => ({}))).room_id === roomId, 'admin-alias-resolve');
         stage = 'admin-alias-complete';
         await admin.getByRole('status').filter({ hasText: 'Alias creation saved on the homeserver.' }).waitFor();
+        const chooseDirectory = async (visibility) => {
+          const select = admin.getByRole('combobox', { name: 'Public directory' });
+          if (await select.count() !== 1) { stage = 'admin-directory-selector-missing'; throw new Error(stage); }
+          if (!await select.isEnabled()) {
+            const response = await fetch(`${stack.origins.synapse}/_matrix/client/v3/directory/list/room/${encode(roomId)}`, {
+              headers: { Authorization: `Bearer ${aliceSession.accessToken}` }, signal: AbortSignal.timeout(15000),
+            });
+            stage = response.status === 200 ? 'admin-directory-ui-disabled'
+              : response.status === 404 ? 'admin-directory-room-unknown' : 'admin-directory-server-unavailable';
+            throw new Error(stage);
+          }
+          // Dispatch the same input/change events as a browser selection;
+          // confirmation and exact server readback below prove the operation.
+          const selected = await select.evaluate((element, value) => {
+            if (!(element instanceof HTMLSelectElement) || !Array.from(element.options).some((option) => option.value === value)) return false;
+            element.value = value;
+            element.dispatchEvent(new Event('input', { bubbles: true }));
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return true;
+          }, visibility);
+          if (!selected) { stage = 'admin-directory-option-missing'; throw new Error(stage); }
+        };
         stage = 'admin-directory';
-        await until(async () => admin.getByLabel('Public directory').isEnabled(), 'admin-directory-available', 5000);
-        // Keyboard selection dispatches the change without requiring the
-        // controlled value to persist before the confirmation is accepted.
-        await admin.getByLabel('Public directory').press('End');
+        await chooseDirectory('public');
         stage = 'admin-directory-confirm';
         const publicConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
         await publicConfirmation.waitFor();
@@ -1752,7 +1771,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           return acl.allow?.includes('*') && acl.deny?.length === 1 && acl.deny[0] === 'blocked.invalid';
         }, 'admin-acl-readback');
         stage = 'admin-directory-private';
-        await admin.getByLabel('Public directory').press('Home');
+        await chooseDirectory('private');
         stage = 'admin-directory-private-confirm';
         const privateConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
         await privateConfirmation.waitFor();
