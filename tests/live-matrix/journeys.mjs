@@ -385,6 +385,37 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken, status: 404 });
       } catch { throw new Error(stage); }
     });
+    await check('room-moderator-permission-transition', async () => {
+      let stage = 'moderator-grant';
+      const path = (type) => `/_matrix/client/v3/rooms/${encode(roomId)}/state/${type}`;
+      try {
+        const original = await api(path('m.room.power_levels'), { token: aliceSession.accessToken });
+        invariant((original.events?.['m.room.join_rules'] ?? original.state_default ?? 50) <= 50, 'moderator-join-rule-threshold');
+        await api(path('m.room.power_levels'), { token: aliceSession.accessToken, method: 'PUT', body: {
+          ...original, users: { ...original.users, [bobSession.userId]: 50 },
+        } });
+        await until(async () => (await api(path('m.room.power_levels'), { token: bobSession.accessToken })).users?.[bobSession.userId] === 50, stage);
+        stage = 'moderator-open-controls';
+        await bob.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await openRoom(bob, roomName);
+        const drawer = bob.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!(await drawer.isVisible())) await bob.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        await drawer.getByRole('tab', { name: 'Manage', exact: true }).click();
+        const joinRule = drawer.getByRole('region', { name: 'Advanced room administration' }).getByLabel('Who may join');
+        await until(() => joinRule.isEnabled(), stage);
+        stage = 'moderator-change-join-rule';
+        await joinRule.selectOption('public');
+        await bob.getByRole('dialog').getByRole('button', { name: 'Save join rule' }).click();
+        await until(async () => (await api(path('m.room.join_rules'), { token: aliceSession.accessToken })).join_rule === 'public', stage);
+        stage = 'moderator-owner-only-denial';
+        await api(path('m.room.power_levels'), { token: bobSession.accessToken, method: 'PUT', body: original, status: 403 });
+        stage = 'moderator-demote';
+        await api(path('m.room.power_levels'), { token: aliceSession.accessToken, method: 'PUT', body: original });
+        await api(path('m.room.join_rules'), { token: aliceSession.accessToken, method: 'PUT', body: { join_rule: 'invite' } });
+        await until(async () => !(await joinRule.isEnabled()), stage);
+        invariant((await api(path('m.room.join_rules'), { token: aliceSession.accessToken })).join_rule === 'invite', stage);
+      } catch { throw new Error(stage); }
+    });
     await check('room-knock-and-upgrade-administration', async () => {
       let stage = 'upgrade-capabilities';
       try {
