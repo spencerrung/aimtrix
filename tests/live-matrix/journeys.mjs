@@ -76,7 +76,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     Object.defineProperty(window, 'MediaRecorder', { configurable: true, value: SyntheticRecorder });
     Object.defineProperty(window, 'AudioContext', { configurable: true, value: undefined });
   }, voiceBytes.toString('base64'));
-  let aliceSession, bobSession, secondSession, roomId;
+  let aliceSession, bobSession, secondSession, roomId, markerEventId;
   let navigationHistory, threadHistory, attachmentThreadRootId, formattedPeer, elementPeer;
   const roomName = 'Disposable encrypted lounge';
   const wire = [];
@@ -181,6 +181,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
       await alice.getByRole('button', { name: 'Send message', exact: true }).click();
       for (const page of [bob, aliceSecond]) await page.locator('.timeline-message').filter({ hasText: marker }).waitFor({ timeout: 45000 });
+      const sentMarker = alice.locator('.timeline-message').filter({ hasText: marker }).first();
+      await until(async () => (await sentMarker.getAttribute('data-event-id'))?.startsWith('$'), 'recovery-marker-event-id');
+      markerEventId = await sentMarker.getAttribute('data-event-id');
       metrics.sendReceiveMs = Date.now() - start;
       invariant(wire.length > 0 && wire.every((event) => event.path.includes('/m.room.encrypted/') && event.content.algorithm === 'm.megolm.v1.aes-sha2' && !JSON.stringify(event.content).includes(marker)), 'encrypted-wire');
       const events = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/messages?dir=b&limit=20`, { token: bobSession.accessToken });
@@ -233,8 +236,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       recoveryDevice = await newPage();
       await login(recoveryDevice, stack.origins.app, 'alice', stack.credentials.password);
       await openRoom(recoveryDevice, roomName);
-      await recoveryDevice.locator('.timeline-message').first().waitFor({ timeout: 45000 });
-      invariant(await recoveryDevice.locator('.timeline-message').filter({ hasText: marker }).count() === 0, 'recovery-old-event-unavailable');
+      const oldEventRow = recoveryDevice.locator(`.timeline-message[data-event-id="${markerEventId}"]`);
+      await oldEventRow.waitFor({ timeout: 45000 });
+      invariant(!await oldEventRow.getByText(marker, { exact: true }).count(), 'recovery-old-event-unavailable');
+      invariant(/key|recovery|encrypted|device identity/i.test(await oldEventRow.innerText()), 'recovery-old-event-undecryptable');
       stage = 'recovery-open-second-settings';
       await recoveryDevice.getByRole('button', { name: 'Open settings', exact: true }).click();
       const second = recoveryDevice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
@@ -250,7 +255,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(await second.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'recovery-key-cleared');
       await second.getByRole('button', { name: 'Close settings', exact: true }).click();
       stage = 'recovery-old-event-restored';
-      await recoveryDevice.getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
+      await oldEventRow.getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
       } catch {
         if (stage === 'recovery-setup-result') {
           if (await alice.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).count()) stage = 'recovery-setup-unsupported';
