@@ -313,9 +313,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const publicConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
         await publicConfirmation.waitFor();
         stage = 'admin-directory-save';
+        const directoryPath = `/_matrix/client/v3/directory/list/room/${encode(roomId)}`;
+        const publicWrite = alice.waitForResponse((response) => new URL(response.url()).pathname === directoryPath && response.request().method() === 'PUT');
         await publicConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
+        const publicResponse = await publicWrite;
+        if (!publicResponse.ok()) { stage = 'admin-directory-write-rejected'; throw new Error(stage); }
         stage = 'admin-directory-close';
-        await publicConfirmation.waitFor({ state: 'hidden' });
+        try { await publicConfirmation.waitFor({ state: 'hidden', timeout: 5000 }); }
+        catch {
+          const current = await api(directoryPath, { token: aliceSession.accessToken }).catch(() => ({}));
+          stage = current.visibility === 'public' ? 'admin-directory-refresh-failed' : 'admin-directory-write-not-retained';
+          throw new Error(stage);
+        }
         stage = 'admin-directory-readback';
         await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(roomId)}`, { token: aliceSession.accessToken })).visibility === 'public', 'admin-directory-readback');
         stage = 'admin-acl';
@@ -334,9 +343,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const privateConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
         await privateConfirmation.waitFor();
         stage = 'admin-directory-private-save';
+        const privateWrite = alice.waitForResponse((response) => new URL(response.url()).pathname === directoryPath && response.request().method() === 'PUT');
         await privateConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
+        const privateResponse = await privateWrite;
+        if (!privateResponse.ok()) { stage = 'admin-directory-private-write-rejected'; throw new Error(stage); }
         stage = 'admin-directory-private-close';
-        await privateConfirmation.waitFor({ state: 'hidden' });
+        try { await privateConfirmation.waitFor({ state: 'hidden', timeout: 5000 }); }
+        catch {
+          const current = await api(directoryPath, { token: aliceSession.accessToken }).catch(() => ({}));
+          stage = current.visibility === 'private' ? 'admin-directory-private-refresh-failed' : 'admin-directory-private-write-not-retained';
+          throw new Error(stage);
+        }
         stage = 'admin-directory-private-readback';
         await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(roomId)}`, { token: aliceSession.accessToken })).visibility === 'private', 'admin-directory-private');
         await change('Who may join', 'invite', 'Save join rule', 'm.room.join_rules', 'join_rule');
