@@ -144,7 +144,7 @@ const LocationDialog = lazy(() => import('../rooms/LocationDialog').then((module
 const PollDialog = lazy(() => import('../rooms/PollDialog').then((module) => ({ default: module.PollDialog })));
 const VoiceRecorderDialog = lazy(() => import('../rooms/VoiceRecorderDialog').then((module) => ({ default: module.VoiceRecorderDialog })));
 const upgradedSendNotice = 'Room upgraded. Send in replacement.';
-const replacementOpenError = 'Could not open replacement. Try Join room.';
+const replacementOpenError = 'Replacement unavailable. Retry or ask a moderator.';
 const roomIsUpgraded = (snapshot: WorkspaceSnapshot, roomId: string) => snapshot.mode === 'matrix' && snapshot.rooms.some((room) => room.id === roomId && room.replacementRoomId);
 
 type ComposerMention = DraftMention;

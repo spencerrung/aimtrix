@@ -450,8 +450,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'upgrade-encryption-state';
         const replacementEncryption = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.encryption`, { token: aliceSession.accessToken });
         invariant(replacementEncryption.algorithm === 'm.megolm.v1.aes-sha2', stage);
-        stage = 'upgrade-peer-invitation';
-        await until(async () => ['invite', 'join'].includes((await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(accounts.bob.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership), stage);
+        const peerReplacementMembership = (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(accounts.bob.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership;
         stage = 'upgrade-replacement-membership';
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
         stage = 'upgrade-confirmation-close';
@@ -469,7 +468,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }
         try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
         catch {
-          stage = await alice.getByText('Could not open replacement. Try Join room.').isVisible()
+          stage = await alice.getByText('Replacement unavailable. Retry or ask a moderator.').isVisible()
             ? 'upgrade-join-failed' : 'upgrade-selection-stale';
           throw new Error(stage);
         }
@@ -493,7 +492,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await oldConversation.getByRole('button', { name: 'Open replacement room' }).click();
         await until(async () => {
           if (await oldConversation.getAttribute('data-room-id') === replacementId) return true;
-          if (await bob.getByText('Could not open replacement. Try Join room.').count()) { stage = 'upgrade-peer-join-failed'; throw new Error(stage); }
+          if (await bob.getByText('Replacement unavailable. Retry or ask a moderator.').count()) {
+            if (peerReplacementMembership === 'invite' || peerReplacementMembership === 'join') { stage = 'upgrade-peer-join-failed'; throw new Error(stage); }
+            return true;
+          }
           return false;
         }, stage);
         stage = 'upgrade-restore-daily-room';
