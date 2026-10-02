@@ -126,3 +126,14 @@ test('sustained sync profile retains only bounded numeric evidence', () => {
   assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 600000 }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
+
+test('first-use encrypted chat evidence discards identities and message content', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'first-use-encrypted-direct-conversation';
+  const result = makeReport({ ...base, failureStage: name,
+    checks: [{ name, passed: false, category: 'first-use-peer-decryption', durationMs: 120,
+      roomId: privateValue, userId: privateValue, eventBody: privateValue, accessToken: privateValue }],
+  });
+  assert.deepEqual(result.checks, [{ name, passed: false, category: 'first-use-peer-decryption', durationMs: 120 }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});

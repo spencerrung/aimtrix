@@ -39,3 +39,31 @@ it.each(['knock', 'knock_restricted'])('requests entry to a %s directory room in
   expect(join).not.toHaveBeenCalled();
   expect(complete).toHaveBeenCalledWith(expect.stringContaining('Join request sent'));
 });
+
+it('opens the newly created direct conversation after the dialog closes', async () => {
+  const create = vi.fn().mockResolvedValue('!new-direct:example.test');
+  const close = vi.fn();
+  const opened = vi.fn();
+  render(<RoomDialog initialMode="direct" onCreateDirect={create} onClose={close} onConversationCreated={opened} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Matrix ID' }), { target: { value: '@friend:example.test' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Start direct chat' }));
+  await waitFor(() => expect(opened).toHaveBeenCalledWith('!new-direct:example.test'));
+  expect(create).toHaveBeenCalledOnce();
+  expect(close.mock.invocationCallOrder[0]).toBeLessThan(opened.mock.invocationCallOrder[0]);
+});
+
+it('opens a new room conversation but does not treat a new space as a conversation', async () => {
+  const create = vi.fn().mockResolvedValue('!new:example.test');
+  const opened = vi.fn();
+  const { unmount } = render(<RoomDialog initialMode="create" onCreate={create} onClose={vi.fn()} onConversationCreated={opened} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Room name' }), { target: { value: 'Synthetic lounge' } });
+  fireEvent.click(screen.getAllByRole('button', { name: 'Create room' }).at(-1)!);
+  await waitFor(() => expect(opened).toHaveBeenCalledWith('!new:example.test'));
+  unmount(); opened.mockClear();
+  render(<RoomDialog initialMode="create" onCreate={create} onClose={vi.fn()} onConversationCreated={opened} />);
+  fireEvent.change(screen.getByRole('textbox', { name: 'Room name' }), { target: { value: 'Synthetic space' } });
+  fireEvent.click(screen.getByRole('checkbox', { name: 'Create a space for organizing rooms' }));
+  fireEvent.click(screen.getAllByRole('button', { name: 'Create room' }).at(-1)!);
+  await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+  expect(opened).not.toHaveBeenCalled();
+});
