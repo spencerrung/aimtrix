@@ -1864,8 +1864,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const threadCard = home.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
         await until(async () => {
           if (await threadCard.count()) return true;
-          const refresh = home.getByRole('button', { name: 'Refresh activity', exact: true });
-          if (await refresh.isEnabled()) await refresh.click();
+          const more = home.getByRole('button', { name: 'Check more threads', exact: true });
+          if (await more.isVisible().catch(() => false) && await more.isEnabled()) await more.click();
           return false;
         }, stage, 90000);
         await threadCard.getByRole('button', { name: 'Hide from Home', exact: true }).waitFor();
@@ -1878,8 +1878,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const secondCard = secondHome.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
         await until(async () => {
           if (await secondCard.count()) return true;
-          const refresh = secondHome.getByRole('button', { name: 'Refresh activity', exact: true });
-          if (await refresh.isEnabled()) await refresh.click();
+          const more = secondHome.getByRole('button', { name: 'Check more threads', exact: true });
+          if (await more.isVisible().catch(() => false) && await more.isEnabled()) await more.click();
           return false;
         }, stage, 90000);
         await secondCard.getByRole('button', { name: 'Hide from Home', exact: true }).click();
