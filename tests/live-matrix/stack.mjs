@@ -42,7 +42,7 @@ async function freePort() {
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack({ elementUi = false } = {}) {
+export async function createStack({ elementUi = false, syncResponseCache = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
   const ports = { synapse: await freePort(), dex: await freePort(), app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
@@ -93,7 +93,7 @@ export async function createStack({ elementUi = false } = {}) {
       database: { name: 'sqlite3', args: { database: '/data/homeserver.db' } },
       // Reload journeys need a fresh initial snapshot, not replay of cached
       // incremental sync responses from this same disposable device.
-      caches: { sync_response_cache_duration: '0s' },
+      caches: { sync_response_cache_duration: syncResponseCache ? '2m' : '0s' },
       log_config: '/config/logging.json', enable_registration: false, registration_shared_secret: credentials.registration,
       macaroon_secret_key: secret(), form_secret: secret(), trusted_key_servers: [], federation_domain_whitelist: [],
       listeners: [{ port: 8008, type: 'http', tls: false, bind_addresses: ['0.0.0.0'], resources: [{ names: ['client'], compress: false }] }],
