@@ -19,8 +19,16 @@ test('unknown names and stages cannot carry room data into artifacts', () => {
   assert.throws(() => makeReport({ ...base, checks: [{ name: privateValue }] }), /report-check-name/);
 });
 test('only safe finite metrics and known metadata are retained', () => {
-  const result = makeReport({ ...base, revision: 'not a revision', platform: 'a private host', metrics: { sendReceiveMs: NaN, sharedBackdropMs: Infinity, attachmentInputCount: -1 } });
-  assert.equal(result.revision, 'unknown'); assert.equal(result.platform, 'other'); assert.deepEqual(result.metrics, {});
+  const result = makeReport({ ...base, revision: 'not a revision', platform: 'a private host', browserVersion: 'a private browser',
+    cpuCount: -1, memoryGiB: Infinity, metrics: { sendReceiveMs: NaN, sharedBackdropMs: Infinity, attachmentInputCount: -1 } });
+  assert.equal(result.revision, 'unknown'); assert.equal(result.platform, 'other');
+  assert.equal(result.browserVersion, 'unknown'); assert.equal(result.cpuCount, 0); assert.equal(result.memoryGiB, 0);
+  assert.deepEqual(result.metrics, {});
+});
+test('hardware and browser metadata retain bounded values', () => {
+  const result = makeReport({ ...base, browserVersion: '149.0.7827.55', cpuCount: 8, memoryGiB: 31 });
+  assert.equal(result.browserVersion, '149.0.7827.55');
+  assert.equal(result.cpuCount, 8); assert.equal(result.memoryGiB, 31);
 });
 test('read-tracking evidence accepts its fixed check name but discards receipt and account data', () => {
   const privateValue = randomBytes(24).toString('hex');
@@ -100,5 +108,21 @@ test('cache reload profile retains numeric evidence without session or room data
   assert.deepEqual(result.metrics, { cacheReloadSeedMs: 200, cacheReloadMessages: 350,
     cacheReloadReadyMs: 90000, cacheReloadSyncResponses: 7, cacheReloadReadyWithin90s: 0 });
   assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 12 }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});
+test('sustained sync profile retains only bounded numeric evidence', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'sustained-sync-delivery';
+  const result = makeReport({ ...base, failureStage: name,
+    checks: [{ name, passed: true, durationMs: 600000, roomId: privateValue, eventBody: privateValue }],
+    metrics: { sustainedSyncRoomCount: 1, sustainedSyncEventCount: 300, sustainedSyncDurationMs: 600001,
+      sustainedSyncP95Ms: 800, sustainedSyncMaxMs: 1200, sustainedSyncResponses: 40,
+      sustainedSyncHeapGrowthMiB: 3, roomId: privateValue, accessToken: privateValue,
+      sustainedSyncEventBodies: [privateValue] },
+  });
+  assert.deepEqual(result.metrics, { sustainedSyncRoomCount: 1, sustainedSyncEventCount: 300,
+    sustainedSyncDurationMs: 600001, sustainedSyncP95Ms: 800, sustainedSyncMaxMs: 1200,
+    sustainedSyncResponses: 40, sustainedSyncHeapGrowthMiB: 3 });
+  assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 600000 }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });

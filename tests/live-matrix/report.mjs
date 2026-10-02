@@ -17,6 +17,7 @@ export const checkNames = new Set([
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
   'diagnostic-failure-probe', 'cleanup',
   'cache-reload-first-login', 'cache-reload-seed', 'cache-reload-readiness-profile',
+  'sustained-sync-setup', 'sustained-sync-delivery',
 ]);
 export const failureCategories = ['strict mode violation', 'Timeout', 'not a file input', 'matrix-http-status', 'media-requires-authentication', 'attachment-ciphertext', 'mxc-upload', 'single-thread-reply', 'thread-retry-same-ciphertext-transaction', 'standard-thread-relation', 'single-accepted-attachment', 'attachment-filename-caption', 'attachment-retry-transaction', 'attachment-decryption', 'standard-thread-attachment', 'draft-reattach-required', 'draft-reload-no-send', 'independent-draft-contexts', 'formatted-api-peer-subset', 'formatted-outbound-roundtrip', 'element-login', 'element-timeline', 'element-formatted-send', 'element-login-ui', 'element-room-timeline', 'element-outbound-emphasis', 'element-root-format', 'element-root-quote', 'element-root-list', 'element-return-room', 'element-return-composer', 'element-return-receive', 'element-return-main-event', 'element-return-detached', 'element-return-id-mismatch', 'element-return-strong', 'element-return-emphasis', 'element-return-code', 'element-formatted-subset', 'draft-stage-room', 'draft-stage-thread', 'draft-thread-composer', 'draft-thread-file', 'draft-thread-caption', 'draft-thread-persistence', 'draft-reload-room', 'draft-reload-thread', 'draft-reattach-thread', 'draft-send-reattached', 'draft-receive-reattached', 'draft-cleanup-contexts', 'home-open-thread', 'home-mute-thread', 'home-thread-mute-saved', 'home-follow-thread', 'home-hide-before-follow', 'home-follow-click', 'home-follow-saved', 'home-open-home', 'home-send-activity', 'home-show-mention', 'home-show-thread', 'home-second-follow', 'home-hide-shared', 'home-open-exact', 'home-exact-render', 'home-exact-still-home', 'home-exact-wrong-room', 'home-exact-event-missing', 'home-exact-event-hidden', 'home-return', 'home-cleanup-rooms', 'notification-open-controls', 'notification-mode-all', 'notification-mode-mentions', 'notification-mode-nothing', 'notification-mode-default', 'notification-account-dnd', 'notification-second-device', 'notification-keyword-add-remove', 'notification-health', 'notification-thread-rule-readback', 'notification-room-rule-readback', 'notification-account-rule-readback', 'notification-own-device-sync', 'notification-keyword-readback', 'home-follow-account-data', 'home-no-passive-receipts', 'home-return-filter', 'other'];
 failureCategories.push('poll-open-control', 'poll-dialog-input', 'poll-submit', 'poll-render', 'poll-vote-control', 'poll-vote-confirm', 'poll-create-decrypted', 'poll-vote-reconciled', 'poll-end-reconciled', 'location-open-control', 'location-dialog-input', 'location-submit', 'location-render', 'location-decrypted', 'voice-no-premature-upload', 'voice-encrypted-upload', 'voice-decrypted-download');
@@ -33,14 +34,18 @@ failureCategories.push('recovery-open-first-settings', 'recovery-setup-control',
 failureCategories.push('verification-new-device', 'verification-distinct-device', 'verification-open-initiator', 'verification-device-row', 'verification-device-refresh', 'verification-button', 'verification-incoming-request', 'verification-emoji', 'verification-matching-emoji', 'verification-completion');
 failureCategories.push('sso-recovery-outcome', 'sso-recovery-passphrase-retained', 'sso-recovery-no-key-export', 'sso-recovery-key-generated', 'sso-recovery-distinct-device', 'sso-recovery-key-cleared');
 failureCategories.push('cache-reload-timeout');
+failureCategories.push('sustained-sync-room', 'sustained-sync-bounded-timeline', 'sustained-sync-duration');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-export function makeReport({ revision, platform, run, probe, elementUi, passed, failureStage, checks, metrics }) {
+export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
   invariant(failureStage === null || checkNames.has(failureStage), 'report-stage');
   return {
     schemaVersion: 1, revision: /^[a-f0-9]{40}$/.test(revision) ? revision : 'unknown', images: elementUi === true ? images : { synapse: images.synapse, dex: images.dex },
     platform: ['linux/x64', 'linux/arm64', 'darwin/x64', 'darwin/arm64', 'win32/x64'].includes(platform) ? platform : 'other',
-    browser: 'Chromium', run: Number.isInteger(run) && run > 0 && run <= 2 ? run : 1,
+    browser: 'Chromium', browserVersion: /^\d+(?:\.\d+){1,4}$/.test(browserVersion ?? '') ? browserVersion : 'unknown',
+    cpuCount: Number.isInteger(cpuCount) && cpuCount > 0 && cpuCount <= 1024 ? cpuCount : 0,
+    memoryGiB: Number.isInteger(memoryGiB) && memoryGiB > 0 && memoryGiB <= 65536 ? memoryGiB : 0,
+    run: Number.isInteger(run) && run > 0 && run <= 2 ? run : 1,
     probe: probe === true, passed: passed === true, failureStage,
     checks: checks.map(({ name, passed, durationMs, category }) => ({ name, passed: passed === true,
       ...(finite(durationMs) ? { durationMs: Math.round(durationMs) } : {}),
@@ -48,6 +53,7 @@ export function makeReport({ revision, platform, run, probe, elementUi, passed, 
     })),
     metrics: Object.fromEntries(['sendReceiveMs', 'sharedBackdropMs', 'attachmentInputCount',
       'cacheReloadSeedMs', 'cacheReloadMessages', 'cacheReloadReadyMs', 'cacheReloadSyncResponses', 'cacheReloadReadyWithin90s',
+      'sustainedSyncRoomCount', 'sustainedSyncEventCount', 'sustainedSyncDurationMs', 'sustainedSyncP95Ms', 'sustainedSyncMaxMs', 'sustainedSyncResponses', 'sustainedSyncHeapGrowthMiB',
     ].filter((key) => finite(metrics[key])).map((key) => [key, Math.round(metrics[key])])),
   };
 }

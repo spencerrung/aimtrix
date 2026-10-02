@@ -9,8 +9,8 @@ The [first-use encryption confidence pass](docs/first-use-encryption.md) impleme
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
 The [daily-client acceptance record](docs/daily-client-acceptance.md) joins the nine roadmap journeys to browser/live checks and keeps unverified core and target-specific gates visible for #164.
 
-The [large-account performance profile](docs/large-account-performance.md) records a synthetic 10k-room baseline, bounded buddy-list and Matrix-space paging, optional index/attachment operation costs, and working interaction/memory budgets for #163. Live long-running sync remains open.
-An isolated cache-enabled disposable Synapse profile now measures same-device reload after 350 synthetic messages for #163; CI results, a production resume decision, and long-running sync evidence remain open.
+The [large-account performance profile](docs/large-account-performance.md) records a synthetic 10k-room baseline, bounded buddy-list and Matrix-space paging, optional index/attachment operation costs, and working interaction/memory budgets for #163. A ten-minute synthetic 10k-room run found 23 MiB retained heap growth and 210 ms publication p95; a longer repeat is needed to distinguish warm-up from continued growth.
+Isolated cache-enabled disposable Synapse profiles measure same-device reload after 350 synthetic messages and ten-minute incremental sync from another account. CI results for the sustained mode, a production resume decision, and broader account-scale evidence remain open.
 
 The [visual reference handoff](docs/design/interaction-rules.md) records the step 02 design decisions and browser evidence. These are implementation inputs for the linked roadmap slices; the reference does not mark their production behavior complete.
 

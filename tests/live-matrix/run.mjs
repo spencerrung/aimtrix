@@ -3,21 +3,24 @@ import { URL } from 'node:url';
 import console from 'node:console';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
+import { cpus, totalmem } from 'node:os';
 import { chromium } from '@playwright/test';
 import { preview } from 'vite';
 import { createStack, command, invariant } from './stack.mjs';
 import { runJourneys } from './journeys.mjs';
 import { runCacheReloadProfile } from './cache-reload-profile.mjs';
+import { runSustainedSyncProfile } from './sustained-sync-profile.mjs';
 import { checkNames, failureCategories, makeReport } from './report.mjs';
 
 // No Playwright reporter, traces, HAR, videos, storage snapshots, or screenshots.
 // All exceptions are discarded at this boundary; only a fixed check ID is reported.
 const args = process.argv.slice(2);
-invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui', '--profile-cache-reload'].includes(arg)), 'unsupported-option');
+invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui', '--profile-cache-reload', '--profile-sustained-sync'].includes(arg)), 'unsupported-option');
 const probe = args.includes('--probe-failure');
 const elementUi = args.includes('--element-ui');
 const profileCacheReload = args.includes('--profile-cache-reload');
-invariant(!profileCacheReload || (!probe && !elementUi && !args.includes('--repeat=2')), 'incompatible-option');
+const profileSustainedSync = args.includes('--profile-sustained-sync');
+invariant(!(profileCacheReload && profileSustainedSync) && (!(profileCacheReload || profileSustainedSync) || (!probe && !elementUi && !args.includes('--repeat=2'))), 'incompatible-option');
 const repeats = args.includes('--repeat=2') ? 2 : 1;
 const output = resolve('matrix-test-results');
 await mkdir(output, { recursive: true });
@@ -45,7 +48,7 @@ for (let run = 1; run <= repeats; run++) {
     }
   };
   try {
-    stack = await createStack({ elementUi, syncResponseCache: profileCacheReload });
+    stack = await createStack({ elementUi, syncResponseCache: profileCacheReload || profileSustainedSync });
     await check('disposable-stack', () => stack.start());
     await check('application-server', async () => {
       const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: false,
@@ -61,6 +64,7 @@ for (let run = 1; run <= repeats; run++) {
       browser = await chromium.launch(); activeBrowser = browser;
     });
     if (profileCacheReload) await runCacheReloadProfile({ browser, stack, check, metrics });
+    else if (profileSustainedSync) await runSustainedSyncProfile({ browser, stack, check, metrics });
     else await runJourneys({ browser, stack, check, forceFailure: probe, metrics });
     invariant(!probe, 'probe-must-fail');
   } catch {
@@ -78,13 +82,14 @@ for (let run = 1; run <= repeats; run++) {
     activeBrowser = undefined;
   }
   const expectedFailure = probe && stage === 'diagnostic-failure-probe' && checks.at(-1)?.passed;
-  const report = makeReport({ revision, platform: `${process.platform}/${process.arch}`, browser: 'Chromium', run, probe, elementUi,
+  const report = makeReport({ revision, platform: `${process.platform}/${process.arch}`, browserVersion: browser?.version(),
+    cpuCount: cpus().length, memoryGiB: Math.round(totalmem() / 2 ** 30), run, probe, elementUi,
     passed: !interrupted && (expectedFailure || !failed), failureStage: failed ? stage : null, checks, metrics });
   const serialized = JSON.stringify(report, null, 2);
   // Belt-and-braces check in addition to the allowlisted report fields.
   invariant(!stack || Object.values(stack.credentials).every((value) => !serialized.includes(value)), 'diagnostic-secret-leak');
   invariant(!serialized.includes('private-room-canary'), 'diagnostic-content-leak');
-  const destination = resolve(output, `${profileCacheReload ? 'cache-reload' : probe ? 'failure-probe' : 'run'}-${run}.json`);
+  const destination = resolve(output, `${profileCacheReload ? 'cache-reload' : profileSustainedSync ? 'sustained-sync' : probe ? 'failure-probe' : 'run'}-${run}.json`);
   await writeFile(destination, `${serialized}\n`, { mode: 0o600 });
   invariant(await readFile(destination, 'utf8') === `${serialized}\n`, 'report-write');
   console.log(`Matrix live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks; cleanup ${checks.at(-1)?.passed ? 'complete' : 'failed'})`);
