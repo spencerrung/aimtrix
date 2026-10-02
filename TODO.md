@@ -7,6 +7,7 @@ The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the order
 The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. Disposable Synapse now exercises password-account fresh-device backup restore and incoming Aimtrix-to-Aimtrix SAS. SSO authorization variants, cross-client QR/SAS, and withheld-key/secret-sharing interoperability remain open.
 
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
+The [daily-client acceptance record](docs/daily-client-acceptance.md) joins the nine roadmap journeys to browser/live checks and keeps unverified core and target-specific gates visible for #164.
 
 The [large-account performance profile](docs/large-account-performance.md) records a synthetic 10k-room baseline, bounded buddy-list and Matrix-space paging, optional index/attachment operation costs, and working interaction/memory budgets for #163. Live long-running sync remains open.
 An isolated cache-enabled disposable Synapse profile now measures same-device reload after 350 synthetic messages for #163; CI results, a production resume decision, and long-running sync evidence remain open.

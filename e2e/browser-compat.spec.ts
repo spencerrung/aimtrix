@@ -63,6 +63,23 @@ test('long thread composition stays reachable across themes', async ({ page }, i
   }
 });
 
+test('active conversation remains legible and reachable across themes', async ({ page }, info) => {
+  await page.goto('/?demo=1');
+  const room = page.getByRole('button', { name: /Welcome Lounge/ });
+  await expect(room).toBeVisible({ timeout: 15_000 });
+  if (info.project.name.includes('mobile')) await room.click();
+  const timeline = page.getByRole('main', { name: 'Welcome Lounge' });
+  await expect(timeline.locator('.timeline-message')).toHaveCount(5);
+  const composer = page.getByRole('textbox', { name: 'Message Welcome Lounge', exact: true });
+  for (const theme of ['aqua', 'graphite', 'midnight']) {
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    await expect(composer).toBeVisible();
+    await expect(composer).toBeInViewport();
+    expect((await new AxeBuilder({ page }).include('main').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([]);
+    await page.screenshot({ path: info.outputPath(`conversation-${theme}.png`) });
+  }
+});
+
 test('error feedback and shared media viewer remain accessible across themes', async ({ page }, info) => {
   await page.goto('/?demo=1');
   const settings = page.getByRole('button', { name: 'Open settings' });
