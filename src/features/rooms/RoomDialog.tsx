@@ -26,9 +26,10 @@ interface RoomDialogProps {
   }) => Promise<string>;
   onClose: () => void;
   onComplete?: (message: string) => void;
+  onConversationCreated?: (roomId: string) => void;
 }
 
-export function RoomDialog({ initialMode = 'join', onJoin, onKnock, onSearch, onCreateDirect, onCreate, onClose, onComplete }: RoomDialogProps) {
+export function RoomDialog({ initialMode = 'join', onJoin, onKnock, onSearch, onCreateDirect, onCreate, onClose, onComplete, onConversationCreated }: RoomDialogProps) {
   const pending = useRef(false);
   const [mode, setMode] = useState<'join' | 'direct' | 'create'>(initialMode);
   const [address, setAddress] = useState('');
@@ -51,19 +52,22 @@ export function RoomDialog({ initialMode = 'join', onJoin, onKnock, onSearch, on
     setBusy(true);
     setError(undefined);
     try {
+      let createdConversationId: string | undefined;
       if (mode === 'join') {
         if (!address.trim() || !(requesting ? onKnock : onJoin)) return;
         if (requesting) await onKnock?.(address.trim());
         else await onJoin?.(address.trim());
       } else if (mode === 'direct') {
         if (!address.trim() || !onCreateDirect) return;
-        await onCreateDirect(address.trim());
+        createdConversationId = await onCreateDirect(address.trim());
       } else {
         if (!name.trim() || !onCreate) return;
-        await onCreate({ name, topic, public: isPublic, encrypted: space ? false : encrypted, space });
+        const roomId = await onCreate({ name, topic, public: isPublic, encrypted: space ? false : encrypted, space });
+        if (!space) createdConversationId = roomId;
       }
       onComplete?.(mode === 'join' ? requesting ? 'Join request sent. A room moderator must accept it.' : 'Room joined.' : mode === 'direct' ? 'Direct chat ready.' : 'Room created.');
       onClose();
+      if (createdConversationId) onConversationCreated?.(createdConversationId);
     } catch {
       setError(mode === 'join' ? requesting ? 'Aimtrix could not request to join that room.' : 'Aimtrix could not join that room.' : mode === 'direct' ? 'Aimtrix could not create that direct chat.' : 'Aimtrix could not create the room.');
     } finally {

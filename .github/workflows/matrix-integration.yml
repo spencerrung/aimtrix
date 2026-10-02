@@ -12,7 +12,7 @@ permissions:
 jobs:
   live-matrix:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 35
     env:
       AIMTRIX_LIVE_OWNER: ci-${{ github.run_id }}-${{ github.run_attempt }}
     steps:

@@ -4418,6 +4418,7 @@ export function Workspace({
             onCreate={onCreateRoom}
             onComplete={setNotice}
             onClose={() => setRoomDialogOpen(false)}
+            onConversationCreated={(roomId) => selectRoom(roomId, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace)}
           />
         ) : null}
 

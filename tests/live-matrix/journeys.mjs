@@ -111,6 +111,52 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       // This deliberately sensitive exception must never be printed or serialized.
       throw new Error(`diagnostic-canary ${aliceSession.accessToken} ${stack.credentials.password} private-room-canary`);
     }
+    await check('first-use-encrypted-direct-conversation', async () => {
+      let stage = 'first-use-guide';
+      try {
+        await alice.getByRole('heading', { name: 'Your buddy list starts here' }).waitFor({ timeout: 45000 });
+        await alice.getByRole('button', { name: 'Start an encrypted chat' }).click();
+        const dialog = alice.getByRole('dialog', { name: 'Add a conversation' });
+        await dialog.getByRole('textbox', { name: 'Matrix ID' }).fill(accounts.bob.user_id);
+        stage = 'first-use-create-direct';
+        const created = alice.waitForResponse((response) => new URL(response.url()).pathname.endsWith('/createRoom') && response.request().method() === 'POST');
+        await dialog.getByRole('button', { name: 'Start direct chat' }).click();
+        const response = await created;
+        invariant(response.ok(), stage);
+        const room = (await response.json()).room_id;
+        const options = response.request().postDataJSON();
+        stage = 'first-use-standard-direct';
+        invariant(options.is_direct === true && options.invite?.includes(accounts.bob.user_id) && options.initial_state?.some((event) =>
+          event.type === 'm.room.encryption' && event.state_key === '' && event.content?.algorithm === 'm.megolm.v1.aes-sha2'), stage);
+        await dialog.waitFor({ state: 'hidden' });
+        const direct = await api(`/_matrix/client/v3/user/${encode(accounts.alice.user_id)}/account_data/m.direct`, { token: aliceSession.accessToken });
+        invariant(direct[accounts.bob.user_id]?.includes(room), stage);
+        stage = 'first-use-encryption-state';
+        const encryption = await api(`/_matrix/client/v3/rooms/${encode(room)}/state/m.room.encryption`, { token: aliceSession.accessToken });
+        invariant(encryption.algorithm === 'm.megolm.v1.aes-sha2', stage);
+        await api(`/_matrix/client/v3/rooms/${encode(room)}/join`, { token: accounts.bob.access_token, method: 'POST', body: {} });
+        await bob.locator(`.buddy-row[data-room-id="${room}"]:not(.buddy-row--invite)`).click({ timeout: 45000 });
+        stage = 'first-use-opened-room';
+        const conversation = alice.getByRole('main', { name: /Conversation with/ });
+        await conversation.waitFor({ timeout: 45000 });
+        const composer = conversation.getByRole('textbox', { name: /^Message / });
+        await composer.waitFor();
+        stage = 'first-use-peer-membership';
+        await conversation.getByRole('button', { name: 'Toggle room details' }).click();
+        await alice.getByRole('tab', { name: 'People' }).click();
+        await alice.locator('.member-row').filter({ hasText: /bob/i, hasNotText: /Invited/i }).waitFor({ timeout: 45000 });
+        await conversation.getByRole('button', { name: 'Toggle room details' }).click();
+        const marker = `Synthetic first encrypted chat ${randomBytes(8).toString('hex')}`;
+        await composer.fill(marker);
+        stage = 'first-use-encrypted-wire';
+        const sent = alice.waitForResponse((result) => result.request().method() === 'PUT' && new URL(result.url()).pathname.includes(`/rooms/${encode(room)}/send/m.room.encrypted/`), { timeout: 45000 });
+        await conversation.getByRole('button', { name: 'Send message', exact: true }).click();
+        const delivery = await sent;
+        invariant(delivery.ok() && !JSON.stringify(delivery.request().postDataJSON()).includes(marker), stage);
+        stage = 'first-use-peer-decryption';
+        await bob.locator('.timeline-message').filter({ has: bob.getByText(marker, { exact: true }) }).waitFor({ timeout: 45000 });
+      } catch { throw new Error(stage); }
+    });
     await check('encrypted-room-create-and-join', async () => {
       await alice.getByRole('button', { name: 'Join or create room' }).click();
       const dialog = alice.getByRole('dialog', { name: 'Add a conversation' });
