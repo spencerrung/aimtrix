@@ -13,6 +13,8 @@ export const checkNames = new Set([
   'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'element-ui-formatted-interoperability',
   'saved-reference-own-device-and-context', 'shared-pins-and-member-permission', 'old-cross-room-server-search-and-context',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
+  'room-access-and-discovery-administration',
+  'space-child-parent-and-recommendation-administration',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback', 'standard-sso-recovery-guidance',
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
@@ -37,6 +39,8 @@ failureCategories.push('sso-recovery-outcome', 'sso-recovery-passphrase-retained
 failureCategories.push('cache-reload-timeout');
 failureCategories.push('sustained-sync-room', 'sustained-sync-bounded-timeline', 'sustained-sync-duration');
 failureCategories.push('first-use-guide', 'first-use-create-direct', 'first-use-standard-direct', 'first-use-encryption-state', 'first-use-opened-room', 'first-use-open-details', 'first-use-peer-membership', 'first-use-encrypted-wire', 'first-use-peer-decryption');
+failureCategories.push('admin-open-drawer', 'admin-Who may join', 'admin-Who may see history', 'admin-Guest access', 'admin-member-denied', 'admin-alias-create', 'admin-alias-complete', 'admin-page-health', 'admin-directory-probe', 'admin-directory-selector-missing', 'admin-directory-selector-hidden', 'admin-directory-ui-disabled', 'admin-directory-room-unknown', 'admin-directory-server-unavailable', 'admin-directory-option-missing', 'admin-directory-already-selected', 'admin-directory-modal-open', 'admin-directory-save', 'admin-directory-write-forbidden', 'admin-directory-write-invalid', 'admin-directory-write-rejected', 'admin-directory-close', 'admin-directory-refresh-failed', 'admin-directory-write-not-retained', 'admin-directory-readback', 'admin-directory-private', 'admin-directory-private-modal-open', 'admin-directory-private-save', 'admin-directory-private-write-rejected', 'admin-directory-private-close', 'admin-directory-private-refresh-failed', 'admin-directory-private-write-not-retained', 'admin-directory-private-readback', 'admin-acl', 'admin-alias-remove');
+failureCategories.push('space-create-parent', 'space-create-child', 'space-open-parent', 'space-add-room', 'space-add-subspace', 'space-canonical-parent', 'space-remove-subspace', 'space-remove-room');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
@@ -56,6 +60,7 @@ export function makeReport({ revision, platform, browserVersion, cpuCount, memor
     metrics: Object.fromEntries(['sendReceiveMs', 'sharedBackdropMs', 'attachmentInputCount',
       'cacheReloadSeedMs', 'cacheReloadMessages', 'cacheReloadReadyMs', 'cacheReloadSyncResponses', 'cacheReloadReadyWithin90s',
       'sustainedSyncRoomCount', 'sustainedSyncEventCount', 'sustainedSyncDurationMs', 'sustainedSyncP95Ms', 'sustainedSyncMaxMs', 'sustainedSyncResponses', 'sustainedSyncHeapGrowthMiB',
+      'communityBeforeDirectoryMs',
     ].filter((key) => finite(metrics[key])).map((key) => [key, Math.round(metrics[key])])),
   };
 }

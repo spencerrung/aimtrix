@@ -1,4 +1,4 @@
-/* global localStorage, indexedDB, fetch, AbortSignal, window, Event, navigator, Blob, atob */
+/* global localStorage, indexedDB, fetch, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -175,6 +175,195 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const state = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/state/m.room.encryption`, { token: aliceSession.accessToken });
       invariant(state.algorithm === 'm.megolm.v1.aes-sha2', 'room-encryption-state');
       for (const page of [alice, bob, aliceSecond]) await openRoom(page, roomName);
+    });
+    await check('space-child-parent-and-recommendation-administration', async () => {
+      let stage = 'space-create-parent';
+      try {
+        const createSpace = async (name) => {
+          await alice.getByRole('button', { name: 'Join or create room' }).click();
+          const dialog = alice.getByRole('dialog', { name: 'Add a conversation' });
+          await dialog.getByRole('button', { name: 'Create room', exact: true }).first().click();
+          await dialog.getByLabel('Room name', { exact: true }).fill(name);
+          await dialog.getByLabel('Create a space for organizing rooms').check();
+          const created = alice.waitForResponse((response) => new URL(response.url()).pathname.endsWith('/createRoom') && response.request().method() === 'POST');
+          await dialog.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
+          const response = await created;
+          invariant(response.ok(), 'space-created');
+          await dialog.waitFor({ state: 'hidden' });
+          await alice.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name, exact: true }).waitFor();
+          return (await response.json()).room_id;
+        };
+        const parentName = `Community ${randomBytes(4).toString('hex')}`;
+        const childName = `Subspace ${randomBytes(4).toString('hex')}`;
+        const parentId = await createSpace(parentName);
+        stage = 'space-create-child';
+        const childId = await createSpace(childName);
+        stage = 'space-open-parent';
+        const rail = alice.getByRole('navigation', { name: 'Spaces' });
+        await rail.getByRole('button', { name: parentName, exact: true }).click();
+        await alice.getByRole('button', { name: `Manage ${parentName} space` }).click();
+        const manage = alice.getByRole('dialog', { name: `Manage ${parentName}` });
+        stage = 'space-add-room';
+        await manage.getByLabel('Find a joined room or subspace').fill(roomName);
+        await manage.getByRole('button', { name: roomName, exact: true }).click();
+        await manage.getByLabel('Recommend to new members').check();
+        await manage.getByRole('button', { name: 'Add to space' }).click();
+        const childPath = (id) => `/_matrix/client/v3/rooms/${encode(parentId)}/state/m.space.child/${encode(id)}`;
+        await until(async () => (await manage.getByLabel('Find a joined room or subspace').inputValue()) === '', 'space-room-added-ui');
+        await until(async () => (await api(childPath(roomId), { token: aliceSession.accessToken }).catch(() => ({}))).suggested === true, 'space-room-suggested');
+        stage = 'space-add-subspace';
+        await manage.getByLabel('Find a joined room or subspace').fill(childName);
+        await manage.getByRole('button', { name: childName, exact: true }).click();
+        await manage.getByLabel('Recommend to new members').uncheck();
+        await manage.getByRole('button', { name: 'Add to space' }).click();
+        await until(async () => (await manage.getByLabel('Find a joined room or subspace').inputValue()) === '', 'space-subspace-added-ui');
+        const parentPath = `/_matrix/client/v3/rooms/${encode(childId)}/state/m.space.parent/${encode(parentId)}`;
+        await until(async () => (await api(childPath(childId), { token: aliceSession.accessToken }).catch(() => ({}))).via?.includes('aimtrix.test'), 'space-child-link');
+        await until(async () => (await api(parentPath, { token: aliceSession.accessToken }).catch(() => ({}))).via?.includes('aimtrix.test'), 'space-parent-link');
+        stage = 'space-canonical-parent';
+        await manage.getByRole('button', { name: 'Close' }).click();
+        await alice.getByRole('button', { name: `Open ${childName} space` }).click();
+        await alice.getByRole('button', { name: `Manage ${childName} space` }).click();
+        const childManage = alice.getByRole('dialog', { name: `Manage ${childName}` });
+        await childManage.getByRole('button', { name: `Make ${parentName} canonical` }).click();
+        await until(async () => (await api(parentPath, { token: aliceSession.accessToken })).canonical === true, 'space-canonical-readback');
+        await childManage.getByRole('button', { name: 'Close' }).click();
+        stage = 'space-remove-subspace';
+        await rail.getByRole('button', { name: parentName, exact: true }).click();
+        await alice.getByRole('button', { name: `Manage ${parentName} space` }).click();
+        const parentManage = alice.getByRole('dialog', { name: `Manage ${parentName}` });
+        await parentManage.locator('li').filter({ hasText: childName }).waitFor();
+        await parentManage.locator('li').filter({ hasText: childName }).getByRole('button', { name: 'Remove' }).click();
+        await alice.getByRole('dialog', { name: `Remove ${childName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
+        await until(async () => Object.keys(await api(childPath(childId), { token: aliceSession.accessToken })).length === 0, 'space-child-removed');
+        await until(async () => Object.keys(await api(parentPath, { token: aliceSession.accessToken })).length === 0, 'space-parent-removed');
+        stage = 'space-remove-room';
+        await parentManage.locator('li').filter({ hasText: roomName }).getByRole('button', { name: 'Remove' }).click();
+        await alice.getByRole('dialog', { name: `Remove ${roomName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
+        await until(async () => Object.keys(await api(childPath(roomId), { token: aliceSession.accessToken })).length === 0, 'space-room-removed');
+        await parentManage.getByRole('button', { name: 'Close' }).click();
+      } catch { throw new Error(stage); }
+    });
+    await check('room-access-and-discovery-administration', async () => {
+      let stage = 'admin-open-drawer';
+      const startedAt = Date.now();
+      try {
+        await alice.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await openRoom(alice, roomName);
+        const drawer = alice.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!(await drawer.isVisible())) await alice.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        await drawer.getByRole('tab', { name: 'Manage', exact: true }).click();
+        const admin = drawer.getByRole('region', { name: 'Advanced room administration' });
+        await admin.getByLabel('Who may join').waitFor();
+        const statePath = (type) => `/_matrix/client/v3/rooms/${encode(roomId)}/state/${type}`;
+        const change = async (label, value, action, type, field) => {
+          stage = `admin-${label}`;
+          await admin.getByLabel(label).selectOption(value);
+          const confirmation = alice.getByRole('dialog');
+          await confirmation.getByRole('button', { name: action, exact: true }).click();
+          await confirmation.waitFor({ state: 'hidden' });
+          await until(async () => (await api(statePath(type), { token: aliceSession.accessToken }))[field] === value, `admin-${label}-readback`);
+          await until(async () => (await admin.getByLabel(label).inputValue()) === value, `admin-${label}-ui-refresh`);
+        };
+        await change('Who may join', 'public', 'Save join rule', 'm.room.join_rules', 'join_rule');
+        stage = 'admin-member-denied';
+        await api(statePath('m.room.join_rules'), { token: bobSession.accessToken, method: 'PUT', body: { join_rule: 'invite' }, status: 403 });
+        await change('Who may see history', 'invited', 'Save history visibility', 'm.room.history_visibility', 'history_visibility');
+        await change('Guest access', 'can_join', 'Save guest access', 'm.room.guest_access', 'guest_access');
+        stage = 'admin-alias-create';
+        const alias = `#community-${randomBytes(6).toString('hex')}:aimtrix.test`;
+        await admin.getByLabel('New local alias').fill(alias);
+        await admin.getByRole('button', { name: 'Add alias' }).click();
+        await until(async () => (await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken }).catch(() => ({}))).room_id === roomId, 'admin-alias-resolve');
+        stage = 'admin-alias-complete';
+        await admin.getByRole('status').filter({ hasText: 'Alias creation saved on the homeserver.' }).waitFor();
+        metrics.communityBeforeDirectoryMs = Date.now() - startedAt;
+        stage = 'admin-page-health';
+        await alice.waitForFunction(() => true, null, { timeout: 3000 });
+        const chooseDirectory = async (visibility) => {
+          const outcome = await alice.evaluate((value) => {
+            const element = document.querySelector('.room-administration__directory');
+            if (!(element instanceof HTMLSelectElement)) return 'missing';
+            if (element.getClientRects().length === 0) return 'hidden';
+            if (element.disabled) return 'disabled';
+            if (!Array.from(element.options).some((option) => option.value === value)) return 'option-missing';
+            if (element.value === value) return 'already-selected';
+            const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+            if (!nativeSetter) return 'missing';
+            nativeSetter.call(element, value);
+            element.dispatchEvent(new Event('change', { bubbles: true }));
+            return 'dispatched';
+          }, visibility);
+          if (outcome === 'missing') { stage = 'admin-directory-selector-missing'; throw new Error(stage); }
+          if (outcome === 'hidden') { stage = 'admin-directory-selector-hidden'; throw new Error(stage); }
+          if (outcome === 'disabled') {
+            const response = await fetch(`${stack.origins.synapse}/_matrix/client/v3/directory/list/room/${encode(roomId)}`, {
+              headers: { Authorization: `Bearer ${aliceSession.accessToken}` }, signal: AbortSignal.timeout(15000),
+            });
+            stage = response.status === 200 ? 'admin-directory-ui-disabled'
+              : response.status === 404 ? 'admin-directory-room-unknown' : 'admin-directory-server-unavailable';
+            throw new Error(stage);
+          }
+          if (outcome === 'already-selected') { stage = 'admin-directory-already-selected'; throw new Error(stage); }
+          if (outcome !== 'dispatched') { stage = 'admin-directory-option-missing'; throw new Error(stage); }
+        };
+        stage = 'admin-directory-probe';
+        await chooseDirectory('public');
+        stage = 'admin-directory-modal-open';
+        const publicConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
+        await publicConfirmation.waitFor();
+        stage = 'admin-directory-save';
+        const directoryPath = `/_matrix/client/v3/directory/list/room/${encode(roomId)}`;
+        const publicWrite = alice.waitForResponse((response) => new URL(response.url()).pathname === directoryPath && response.request().method() === 'PUT');
+        await publicConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
+        const publicResponse = await publicWrite;
+        if (!publicResponse.ok()) { stage = publicResponse.status() === 403 ? 'admin-directory-write-forbidden' : publicResponse.status() === 400 ? 'admin-directory-write-invalid' : 'admin-directory-write-rejected'; throw new Error(stage); }
+        stage = 'admin-directory-close';
+        try { await publicConfirmation.waitFor({ state: 'hidden', timeout: 5000 }); }
+        catch {
+          const current = await api(directoryPath, { token: aliceSession.accessToken }).catch(() => ({}));
+          stage = current.visibility === 'public' ? 'admin-directory-refresh-failed' : 'admin-directory-write-not-retained';
+          throw new Error(stage);
+        }
+        stage = 'admin-directory-readback';
+        await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(roomId)}`, { token: aliceSession.accessToken })).visibility === 'public', 'admin-directory-readback');
+        stage = 'admin-acl';
+        await admin.getByLabel('Denied servers').fill('blocked.invalid');
+        await admin.getByRole('button', { name: 'Save server access' }).click();
+        const aclConfirmation = alice.getByRole('dialog');
+        await aclConfirmation.getByRole('button', { name: 'Save server access' }).click();
+        await aclConfirmation.waitFor({ state: 'hidden' });
+        await until(async () => {
+          const acl = await api(statePath('m.room.server_acl'), { token: aliceSession.accessToken }).catch(() => ({}));
+          return acl.allow?.includes('*') && acl.deny?.length === 1 && acl.deny[0] === 'blocked.invalid';
+        }, 'admin-acl-readback');
+        stage = 'admin-directory-private';
+        await chooseDirectory('private');
+        stage = 'admin-directory-private-modal-open';
+        const privateConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
+        await privateConfirmation.waitFor();
+        stage = 'admin-directory-private-save';
+        const privateWrite = alice.waitForResponse((response) => new URL(response.url()).pathname === directoryPath && response.request().method() === 'PUT');
+        await privateConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
+        const privateResponse = await privateWrite;
+        if (!privateResponse.ok()) { stage = 'admin-directory-private-write-rejected'; throw new Error(stage); }
+        stage = 'admin-directory-private-close';
+        try { await privateConfirmation.waitFor({ state: 'hidden', timeout: 5000 }); }
+        catch {
+          const current = await api(directoryPath, { token: aliceSession.accessToken }).catch(() => ({}));
+          stage = current.visibility === 'private' ? 'admin-directory-private-refresh-failed' : 'admin-directory-private-write-not-retained';
+          throw new Error(stage);
+        }
+        stage = 'admin-directory-private-readback';
+        await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(roomId)}`, { token: aliceSession.accessToken })).visibility === 'private', 'admin-directory-private');
+        await change('Who may join', 'invite', 'Save join rule', 'm.room.join_rules', 'join_rule');
+        stage = 'admin-alias-remove';
+        await admin.locator('li').filter({ hasText: alias }).getByRole('button', { name: 'Remove' }).click();
+        const removeConfirmation = alice.getByRole('dialog');
+        await removeConfirmation.getByRole('button', { name: 'Remove alias' }).click();
+        await removeConfirmation.waitFor({ state: 'hidden' });
+        await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken, status: 404 });
+      } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
       let stage = 'element-encrypted-login';

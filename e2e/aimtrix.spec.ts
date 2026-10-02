@@ -23,7 +23,7 @@ test('workspace navigation, drawer, and personalization are functional', async (
   await expect(page.getByRole('button', { name: /Welcome Lounge/ })).toHaveCount(0);
 
   await page.getByRole('button', { name: 'Friends' }).click();
-  const gameSubspace = page.getByRole('button', { name: /Vidja Gamez/ });
+  const gameSubspace = page.getByRole('button', { name: /Vidja Gamez/, expanded: true });
   await expect(gameSubspace).toBeVisible();
   await expect(page.getByRole('button', { name: /GIF Club/ })).toBeVisible();
   await gameSubspace.click();

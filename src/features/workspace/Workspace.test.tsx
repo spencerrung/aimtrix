@@ -13,6 +13,7 @@ import {
 import { Workspace } from './Workspace';
 import type { PushRoute } from '../../pwa/pushRouting';
 import { MessageSendError } from '../../matrix/messageDelivery';
+import type { SpaceAdministrationActions } from '../rooms/SpaceAdministration';
 function installResizeObserver() {
   const observers = new Set<ResizeObserverCallback>();
   class ResizeObserverMock {
@@ -110,6 +111,7 @@ function renderWorkspace(
     ) => Promise<void>;
     onSendSticker?: (roomId: string, sticker: { id: string; name: string; src: string }) => Promise<void>;
     onReorderRootSpaces?: (spaceIds: string[]) => Promise<void>;
+    spaceAdministration?: SpaceAdministrationActions;
     onCancelUpload?: () => void;
     onUploadAttachment?: (roomId: string, file: File, onProgress?: (loaded: number, total: number) => void, threadRootId?: string) => Promise<void>;
     onLoadLinkPreview?: (url: string) => Promise<{ title?: string; description?: string; imageUrl?: string; siteName?: string } | undefined>;
@@ -147,6 +149,7 @@ function renderWorkspace(
       onEditMessage={overrides.onEditMessage}
       onSendSticker={overrides.onSendSticker}
       onReorderRootSpaces={overrides.onReorderRootSpaces}
+      spaceAdministration={overrides.spaceAdministration}
       onUploadAttachment={overrides.onUploadAttachment}
       onCancelUpload={overrides.onCancelUpload}
       onLoadLinkPreview={overrides.onLoadLinkPreview}
@@ -1408,7 +1411,7 @@ describe('Workspace demo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Friends' }));
 
-    const subspace = screen.getByRole('button', { name: /Vidja Gamez/ });
+    const subspace = screen.getByRole('button', { name: /Vidja Gamez/, expanded: true });
     expect(subspace).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: /GIF Club/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Dev Shack/ })).toBeInTheDocument();
@@ -1416,6 +1419,41 @@ describe('Workspace demo', () => {
     fireEvent.click(subspace);
     expect(subspace).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: /GIF Club/ })).not.toBeInTheDocument();
+  });
+
+  it('opens a nested subspace as the active scope', () => {
+    renderWorkspace();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Friends' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Vidja Gamez space' }));
+
+    expect(screen.getByRole('heading', { name: 'Vidja Gamez' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /GIF Club/ })).toBeInTheDocument();
+  });
+
+  it('offers joined rooms outside the active space for space administration', async () => {
+    const addChild = vi.fn().mockResolvedValue(undefined);
+    const workspace = structuredClone(demoWorkspace);
+    workspace.mode = 'matrix';
+    workspace.rooms.push({ ...workspace.rooms.find((room) => room.id === 'mara')!, id: 'outside-direct', name: 'Outside Direct' });
+    renderWorkspace({
+      workspace,
+      spaceAdministration: {
+        addChild,
+        setSuggested: vi.fn().mockResolvedValue(undefined),
+        removeChild: vi.fn().mockResolvedValue(undefined),
+        setCanonicalParent: vi.fn().mockResolvedValue(undefined),
+      },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Friends' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage Friends space' }));
+    const dialog = screen.getByRole('dialog', { name: 'Manage Friends' });
+    expect(within(dialog).queryByRole('button', { name: 'Outside Direct' })).not.toBeInTheDocument();
+    fireEvent.change(within(dialog).getByRole('searchbox', { name: 'Find a joined room or subspace' }), { target: { value: 'Late Night' } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Late Night Radio' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add to space' }));
+    await waitFor(() => expect(addChild).toHaveBeenCalledWith('friends', 'late-night', false));
   });
 
   it('drags a top-level space downward without adding drag badges to its icon', () => {

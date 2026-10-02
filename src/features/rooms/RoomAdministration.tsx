@@ -105,16 +105,17 @@ export function RoomAdministration({ room, actions, onOpenReplacement }: {
         </label>;
       })}
       <label>Public directory
-        <select value={details.directoryVisibility} disabled={busy || !details.directoryAvailable} onChange={(event) => {
+        <select className="room-administration__directory" value={details.directoryVisibility} disabled={busy || !details.directoryAvailable} onChange={(event) => {
           const visibility = event.target.value as 'public' | 'private';
           setConfirmation({ title: 'Change public directory listing?', description: visibility === 'public' ? 'This room will appear in the homeserver’s public directory. Join and history rules are separate.' : 'This room will be removed from the homeserver’s public directory.', label: 'Save directory listing', action: () => run('Directory listing', () => actions.setDirectoryVisibility(room.id, visibility)) });
         }}><option value="private">Not listed</option><option value="public">Listed publicly</option></select>
       </label>
-      {!details.directoryAvailable ? <p className="settings-hint">The homeserver did not provide directory visibility for this room.</p> : null}
+      {!details.directoryAvailable ? <p className="settings-hint">Directory visibility could not be read from the homeserver.</p> : null}
+      {!details.directoryAvailable || !details.aliasesAvailable ? <button className="aqua-button" type="button" disabled={busy || loading} onClick={() => void refresh().catch(() => undefined)}>Retry room administration state</button> : null}
       <div className="room-administration__aliases">
         <h4>Room aliases</h4>
         <p className="settings-hint">Local aliases end in :{details.localServerName}. Server policy may restrict who can create or remove them.</p>
-        {!details.aliasesAvailable ? <p className="settings-hint">The homeserver did not provide local aliases for this room.</p> : null}
+        {!details.aliasesAvailable ? <p className="settings-hint">Local aliases could not be read from the homeserver.</p> : null}
         <ul>{details.localAliases.map((item) => <li key={item}><code>{item}</code>
           {access.canChangeCanonicalAlias ? <button type="button" className="aqua-button" disabled={busy || item === details.canonicalAlias} onClick={() => void run('Canonical alias', () => actions.setCanonicalAlias(room.id, item)).catch(() => undefined)}>{item === details.canonicalAlias ? 'Canonical' : 'Make canonical'}</button> : null}
           <button type="button" className="aqua-button" disabled={busy || item === details.canonicalAlias} onClick={() => setConfirmation({ title: `Remove ${item}?`, description: 'Existing links using this alias may stop resolving. Choose another canonical alias first if needed.', label: 'Remove alias', action: () => run('Alias removal', () => actions.deleteAlias(room.id, item)) })}>Remove</button>
