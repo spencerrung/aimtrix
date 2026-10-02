@@ -287,6 +287,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
             if (element.getClientRects().length === 0) return 'hidden';
             if (element.disabled) return 'disabled';
             if (!Array.from(element.options).some((option) => option.value === value)) return 'option-missing';
+            if (element.value === value) return 'already-selected';
             const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
             if (!nativeSetter) return 'missing';
             nativeSetter.call(element, value);
@@ -303,14 +304,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
               : response.status === 404 ? 'admin-directory-room-unknown' : 'admin-directory-server-unavailable';
             throw new Error(stage);
           }
+          if (outcome === 'already-selected') { stage = 'admin-directory-already-selected'; throw new Error(stage); }
           if (outcome !== 'dispatched') { stage = 'admin-directory-option-missing'; throw new Error(stage); }
         };
         stage = 'admin-directory-probe';
         await chooseDirectory('public');
-        stage = 'admin-directory-confirm';
+        stage = 'admin-directory-modal-open';
         const publicConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
         await publicConfirmation.waitFor();
+        stage = 'admin-directory-save';
         await publicConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
+        stage = 'admin-directory-close';
         await publicConfirmation.waitFor({ state: 'hidden' });
         stage = 'admin-directory-readback';
         await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(roomId)}`, { token: aliceSession.accessToken })).visibility === 'public', 'admin-directory-readback');
@@ -326,10 +330,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }, 'admin-acl-readback');
         stage = 'admin-directory-private';
         await chooseDirectory('private');
-        stage = 'admin-directory-private-confirm';
+        stage = 'admin-directory-private-modal-open';
         const privateConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
         await privateConfirmation.waitFor();
+        stage = 'admin-directory-private-save';
         await privateConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
+        stage = 'admin-directory-private-close';
         await privateConfirmation.waitFor({ state: 'hidden' });
         stage = 'admin-directory-private-readback';
         await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(roomId)}`, { token: aliceSession.accessToken })).visibility === 'private', 'admin-directory-private');
