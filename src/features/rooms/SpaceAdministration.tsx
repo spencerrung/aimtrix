@@ -31,7 +31,7 @@ export function SpaceAdministration({ space, workspace, actions, onClose }: {
   const labelFor = (id: string) => roomById.get(id)?.name || spaceById.get(id)?.name || workspace.spaceRoomPreviews[id]?.name || id;
   const visibleChildren = space.childIds.filter((id) => `${labelFor(id)} ${id}`.toLowerCase().includes(childSearch.trim().toLowerCase())).slice(0, 100);
   const candidates = [
-    ...workspace.rooms.filter((room) => room.membership === 'join'),
+    ...workspace.rooms.filter((room) => room.membership === 'join' && room.kind !== 'direct'),
     ...workspace.spaces.filter((item) => item.kind === 'matrix' && item.membership === 'join' && item.id !== space.id),
   ].filter((item) => !childIds.has(item.id) && `${item.name} ${item.id}`.toLowerCase().includes(search.trim().toLowerCase())).slice(0, 20);
   const selectedChild = candidates.find((item) => item.id === selectedChildId) ?? roomById.get(selectedChildId) ?? spaceById.get(selectedChildId);

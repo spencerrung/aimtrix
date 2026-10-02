@@ -954,6 +954,7 @@ function SpaceBranch({
 
 function BuddyPanel({
   workspace,
+  administrationWorkspace,
   draftRoomIds,
   selectedRoomId,
   query,
@@ -974,6 +975,7 @@ function BuddyPanel({
   onFilterChange,
 }: {
   workspace: WorkspaceSnapshot;
+  administrationWorkspace?: WorkspaceSnapshot;
   draftRoomIds?: ReadonlySet<string>;
   selectedRoomId?: string;
   filter: 'all' | 'unread' | 'favorites';
@@ -1449,7 +1451,7 @@ function BuddyPanel({
           <Settings size={17} />
         </button>
       </div>
-      {spaceAdministrationOpen && scopeSpace?.kind === 'matrix' && spaceAdministration ? <SpaceAdministration space={scopeSpace} workspace={workspace} actions={spaceAdministration} onClose={() => setSpaceAdministrationOpen(false)} /> : null}
+      {spaceAdministrationOpen && scopeSpace?.kind === 'matrix' && spaceAdministration ? <SpaceAdministration space={scopeSpace} workspace={administrationWorkspace ?? workspace} actions={spaceAdministration} onClose={() => setSpaceAdministrationOpen(false)} /> : null}
     </aside></DraftRoomsContext.Provider>
   );
 }
@@ -4221,6 +4223,7 @@ export function Workspace({
           />
           {collapsedPanels.buddies ? <button className="workspace-collapsed-panel workspace-collapsed-panel--buddies" type="button" aria-label="Expand rooms" title="Expand rooms" onClick={() => setPanelCollapsed('buddies', false)}><Users size={18} /></button> : <BuddyPanel
             workspace={scopedWorkspace}
+            administrationWorkspace={workspace}
             draftRoomIds={new Set(draftsState.list.map((record) => record.context.roomId))}
             selectedRoomId={effectiveRoomId}
             scopeName={activeSpaceSummary?.name ?? 'Conversations'}
