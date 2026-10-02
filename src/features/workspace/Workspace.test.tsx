@@ -1408,7 +1408,7 @@ describe('Workspace demo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Friends' }));
 
-    const subspace = screen.getByRole('button', { name: /Vidja Gamez/ });
+    const subspace = screen.getByRole('button', { name: /Vidja Gamez/, expanded: true });
     expect(subspace).toHaveAttribute('aria-expanded', 'true');
     expect(screen.getByRole('button', { name: /GIF Club/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Dev Shack/ })).toBeInTheDocument();
@@ -1416,6 +1416,16 @@ describe('Workspace demo', () => {
     fireEvent.click(subspace);
     expect(subspace).toHaveAttribute('aria-expanded', 'false');
     expect(screen.queryByRole('button', { name: /GIF Club/ })).not.toBeInTheDocument();
+  });
+
+  it('opens a nested subspace as the active scope', () => {
+    renderWorkspace();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Friends' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open Vidja Gamez space' }));
+
+    expect(screen.getByRole('heading', { name: 'Vidja Gamez' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /GIF Club/ })).toBeInTheDocument();
   });
 
   it('drags a top-level space downward without adding drag badges to its icon', () => {

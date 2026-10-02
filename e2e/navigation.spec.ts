@@ -23,6 +23,18 @@ async function openLink(page: Page, link: string) {
   await expect(page.getByRole('dialog', { name: 'Open Matrix link' })).toBeHidden();
 }
 
+test('nested spaces can be opened from their parent map', async ({ page }, info) => {
+  await page.setViewportSize(info.project.name === 'mobile' ? { width: 412, height: 915 } : { width: 1280, height: 800 });
+  await page.goto('/?demo=1');
+  await page.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'Friends' }).click();
+  const open = page.getByRole('button', { name: 'Open Vidja Gamez space' });
+  await expect(open).toBeVisible();
+  await open.click();
+  await expect(page.getByRole('complementary', { name: 'Buddy list' }).getByRole('heading', { name: 'Vidja Gamez' })).toBeVisible();
+  await expect(page.getByRole('button', { name: /GIF Club/ })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('nested-space-open.png') });
+});
+
 test('quick switching preserves drafts and real favorites filter independently of unread', async ({ page }, info) => {
   await page.setViewportSize(info.project.name === 'mobile' ? { width: 412, height: 915 } : { width: 1280, height: 800 });
   await page.goto('/?demo=1');

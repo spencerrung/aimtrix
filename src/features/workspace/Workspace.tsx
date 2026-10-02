@@ -789,6 +789,7 @@ function SpaceBranch({
   hasOrderOverrides,
   onDropInto,
   onToggle,
+  onSelectSpace,
   onSelectRoom,
   onJoin,
   onRejectInvite,
@@ -813,6 +814,7 @@ function SpaceBranch({
   hasOrderOverrides: boolean;
   onDropInto: (spaceId: string) => void;
   onToggle: (spaceId: string) => void;
+  onSelectSpace: (spaceId: string) => void;
   onSelectRoom: (roomId: string) => void;
   onJoin: (roomId: string) => void;
   onRejectInvite?: (roomId: string) => void;
@@ -866,6 +868,7 @@ function SpaceBranch({
           {space.unreadCount > 0 ? <b className={space.highlighted ? 'is-highlighted' : ''}>{space.unreadCount}</b> : null}
         </button>
         {arrangement ? <ArrangeControls label={space.name} arrangement={arrangement} /> : null}
+        {!arrangement && space.membership === 'join' ? <button className="space-branch__join" type="button" aria-label={`Open ${space.name} space`} onClick={() => onSelectSpace(space.id)}>Open</button> : null}
         {!arrangement && space.membership === 'leave' ? <button className="space-branch__join" type="button" onClick={() => onJoin(space.id)}>Join</button> : null}
       </div>
       {!isCollapsed ? (
@@ -897,6 +900,7 @@ function SpaceBranch({
                   hasOrderOverrides={hasOrderOverrides}
                   onDropInto={onDropInto}
                   onToggle={onToggle}
+                  onSelectSpace={onSelectSpace}
                   onSelectRoom={onSelectRoom}
                   onJoin={onJoin}
                   onRejectInvite={onRejectInvite}
@@ -955,6 +959,7 @@ function BuddyPanel({
   query,
   onQueryChange,
   onSelectRoom,
+  onSelectSpace,
   onOpenProfile,
   onOpenSettings,
   onAddRoom,
@@ -978,6 +983,7 @@ function BuddyPanel({
   query: string;
   onQueryChange: (query: string) => void;
   onSelectRoom: (roomId: string) => void;
+  onSelectSpace: (spaceId: string) => void;
   onOpenProfile: () => void;
   onOpenSettings: () => void;
   onAddRoom: () => void;
@@ -1306,6 +1312,7 @@ function BuddyPanel({
                       ...current,
                       [`space:${spaceId}`]: !(current[`space:${spaceId}`] ?? false),
                     }))}
+                    onSelectSpace={onSelectSpace}
                     onSelectRoom={onSelectRoom}
                     onJoin={(roomId) => void joinFromSpace(roomId)}
                     onRejectInvite={(roomId) => void onRejectInvite?.(roomId)}
@@ -4223,6 +4230,7 @@ export function Workspace({
             filter={conversationFilter}
             onFilterChange={setConversationFilter}
             onSelectRoom={selectRoom}
+            onSelectSpace={selectSpace}
             onOpenProfile={() => setProfileOpen((open) => !open)}
             onOpenSettings={() => {
               setProfileOpen(false);
