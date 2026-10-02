@@ -60,6 +60,7 @@ export interface RoomSummary {
   avatarUrl?: string;
   favorite?: boolean;
   canonicalAlias?: string;
+  replacementRoomId?: string;
   access?: RoomAccessSummary;
   directUserId?: string;
   kind: RoomKind;

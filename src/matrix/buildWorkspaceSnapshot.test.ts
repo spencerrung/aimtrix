@@ -41,6 +41,7 @@ function fakeClient(
     readUpToEventId?: string;
     tags?: Record<string, Record<string, unknown>>;
     canonicalAlias?: string;
+    replacementRoomId?: string;
     directUserId?: string;
     threads?: Array<{
       id: string; length: number; events: MatrixEvent[]; rootEvent?: MatrixEvent;
@@ -73,7 +74,8 @@ function fakeClient(
     hasEncryptionStateEvent: () => true,
     currentState: {
       getStateEvents: (type: string) => type === 'm.room.canonical_alias' && options.canonicalAlias
-        ? fakeEvent(type, { alias: options.canonicalAlias }) : undefined,
+        ? fakeEvent(type, { alias: options.canonicalAlias }) : type === 'm.room.tombstone' && options.replacementRoomId
+          ? fakeEvent(type, { replacement_room: options.replacementRoomId }) : undefined,
       maySendStateEvent: () => false,
     },
   } as unknown as Room;
@@ -130,6 +132,13 @@ describe('favorite and navigation room summaries', () => {
       .toMatchObject({ canonicalAlias: '#team lounge:test', directUserId: '@legacy person:test', kind: 'direct' });
     expect(buildWorkspaceSnapshot(fakeClient([], { canonicalAlias: '#missing-server', directUserId: 'not-a-user' }), 'online').rooms[0])
       .toMatchObject({ canonicalAlias: undefined, directUserId: undefined, kind: 'room' });
+  });
+
+  it('exposes only valid replacement room IDs from a tombstone', () => {
+    expect(buildWorkspaceSnapshot(fakeClient([], { replacementRoomId: '!replacement:test' }), 'online').rooms[0].replacementRoomId)
+      .toBe('!replacement:test');
+    expect(buildWorkspaceSnapshot(fakeClient([], { replacementRoomId: 'not a room' }), 'online').rooms[0].replacementRoomId)
+      .toBeUndefined();
   });
 });
 

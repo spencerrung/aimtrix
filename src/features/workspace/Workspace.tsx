@@ -143,6 +143,9 @@ const HomeActivity = lazy(() => import('./HomeActivity'));
 const LocationDialog = lazy(() => import('../rooms/LocationDialog').then((module) => ({ default: module.LocationDialog })));
 const PollDialog = lazy(() => import('../rooms/PollDialog').then((module) => ({ default: module.PollDialog })));
 const VoiceRecorderDialog = lazy(() => import('../rooms/VoiceRecorderDialog').then((module) => ({ default: module.VoiceRecorderDialog })));
+const upgradedSendNotice = 'Room upgraded. Send in replacement.';
+const replacementOpenError = 'Replacement unavailable. Retry or ask a moderator.';
+const roomIsUpgraded = (snapshot: WorkspaceSnapshot, roomId: string) => snapshot.mode === 'matrix' && snapshot.rooms.some((room) => room.id === roomId && room.replacementRoomId);
 
 type ComposerMention = DraftMention;
 type ComposerInlineEmoji = DraftInlineEmoji;
@@ -1524,6 +1527,7 @@ function Conversation({
   editingMessage,
   editingThreadMessage,
   onBack,
+  onOpenReplacement,
   onSubmit,
   onThreadSubmit,
   onToggleDetails,
@@ -1613,6 +1617,7 @@ function Conversation({
   editingMessage?: MessageSummary;
   editingThreadMessage?: MessageSummary;
   onBack: () => void;
+  onOpenReplacement?: (roomId: string) => void;
   onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
   onThreadSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
   onToggleDetails: () => void;
@@ -2330,6 +2335,7 @@ function Conversation({
         {readAction?.roomId === room.id ? readAction.pending ? <p role="status">Saving read status…</p> : readAction.error ? <p role="alert">{readAction.error}</p> : readAction.status ? <p role="status">{readAction.status}</p> : null : null}
       </Popover>, document.body) : null}
       <div className="conversation-history-controls">
+      {room.replacementRoomId ? <div className="history-context" role="status"><p>This room was upgraded. History is here; send in its replacement.</p>{onOpenReplacement ? <button type="button" className="aqua-button" onClick={() => onOpenReplacement(room.replacementRoomId!)}>Open replacement room</button> : null}</div> : null}
       {room.markedUnread ? <div className="history-context"><p>Marked unread for later.</p>{room.unreadEventId ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void openContext(room.unreadEventId!)}>Return to saved message</button> : null}</div> : null}
 
 
@@ -2516,6 +2522,7 @@ function Conversation({
           {notice ? <p className="history-feedback" role="status">{notice}</p> : null}
           {!threadComposition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id, threadRootId: activeThread.rootId }} /> : null}
           <SharedComposer ref={threadComposer} key={`${room.id}:${activeThread.rootId}`} contextKey={JSON.stringify([room.id, activeThread.rootId])}
+            disabled={Boolean(room.replacementRoomId)}
             value={threadComposition} onChange={onThreadCompositionChange} onSubmit={onThreadSubmit}
             thread active={contextPanel === 'thread' && !threadCollapsed} sending={threadSending}
             members={members} roomName={room.name} emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl}
@@ -2546,6 +2553,7 @@ function Conversation({
       <div className="conversation-composition">
       {!composition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id }} /> : null}
       <SharedComposer ref={mainComposer} key={room.id} contextKey={JSON.stringify([room.id, null])}
+        disabled={Boolean(room.replacementRoomId)}
         value={composition} onChange={onCompositionChange} onSubmit={onSubmit}
         active={conversationVisible} sending={sending} members={members} roomName={room.name}
         emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl} stickerPacks={stickerPacks}
@@ -3589,6 +3597,32 @@ export function Workspace({
     setActiveThreadRootId(undefined);
   }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
+  const [pendingReplacementRoom, setPendingReplacementRoom] = useState<{ roomId: string; intent: number; startedAt: number }>();
+  const openReplacementRoom = useCallback((roomId: string) => {
+    const open = () => selectRoom(roomId, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace);
+    if (workspace.rooms.some((room) => room.id === roomId && room.membership === 'join')) { open(); return; }
+    if (!onJoinRoom) { setNotice(replacementOpenError); return; }
+    const intent = navigationIntent.current;
+    setNotice('Opening replacement…');
+    void onJoinRoom(roomId).then(() => {
+      if (navigationIntent.current === intent) setPendingReplacementRoom({ roomId, intent, startedAt: Date.now() });
+    }).catch(() => {
+      if (navigationIntent.current === intent) setNotice(replacementOpenError);
+    });
+  }, [activeSpace, onJoinRoom, selectRoom, workspace.rooms, workspace.spaces]);
+
+  useEffect(() => {
+    if (!pendingReplacementRoom) return;
+    const cancelled = navigationIntent.current !== pendingReplacementRoom.intent;
+    const joined = workspace.rooms.some((room) => room.id === pendingReplacementRoom.roomId && room.membership === 'join');
+    const timeout = window.setTimeout(() => {
+      if (!cancelled && joined) selectRoom(pendingReplacementRoom.roomId, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace);
+      else if (!cancelled) setNotice(replacementOpenError);
+      setPendingReplacementRoom(undefined);
+    }, cancelled || joined ? 0 : Math.max(0, pendingReplacementRoom.startedAt + 15000 - Date.now()));
+    return () => window.clearTimeout(timeout);
+  }, [activeSpace, pendingReplacementRoom, selectRoom, workspace.rooms, workspace.spaces]);
+
 
   useEffect(() => {
     try {
@@ -3765,6 +3799,7 @@ export function Workspace({
       const actions = attachmentActions.get('current')!;
       if (!actions.draftsState.isActive()) throw new Error('This draft account is no longer active.');
       if (actions.workspace.mode === 'matrix') {
+        if (roomIsUpgraded(actions.workspace, context.roomId)) throw new Error(upgradedSendNotice);
         if (!actions.onUploadAttachment) throw new Error('Attachment sending is unavailable.');
         await actions.onUploadAttachment(context.roomId, file, progress, context.threadRootId, codeLanguage, options);
       } else {
@@ -3803,11 +3838,13 @@ export function Workspace({
   useEffect(() => { onDraftStateChange?.({ hasDrafts: hasSavedDrafts, volatile: draftsVolatile, hasAttachments: hasStagedFiles, sending: anySending }); }, [onDraftStateChange, hasSavedDrafts, draftsVolatile, hasStagedFiles, anySending]);
   const stageFiles = (files: File[], threadRootId?: string, codeLanguage?: string) => {
     if (!effectiveRoomId || !draftsState.isActive()) return;
+    if (roomIsUpgraded(workspace, effectiveRoomId)) { setNotice(upgradedSendNotice); return; }
     const errors = attachmentQueue.stage({ roomId: effectiveRoomId, ...(threadRootId ? { threadRootId } : {}) }, files, codeLanguage);
     if (errors.length) setNotice(errors.join(' '));
   };
   const sendRecordedVoice = async (target: { roomId: string; threadRootId?: string }, file: File, durationMs: number, waveform?: number[]) => {
     if (!draftsState.isActive()) throw new Error('This account is no longer active.');
+    if (roomIsUpgraded(workspace, target.roomId)) throw new Error(upgradedSendNotice);
     const context = { roomId: target.roomId, ...(target.threadRootId ? { threadRootId: target.threadRootId } : {}) };
     const before = new Set(attachmentQueue.list(context).map((item) => item.id));
     const errors = attachmentQueue.stage(context, [file], undefined, { durationMs, waveform });
@@ -3819,6 +3856,7 @@ export function Workspace({
 
   const sendGif = async (gif: GifChoice, threadRootId?: string) => {
     if (!effectiveRoomId || !draftsState.isActive()) throw new Error('This conversation is unavailable.');
+    if (roomIsUpgraded(workspace, effectiveRoomId)) throw new Error(upgradedSendNotice);
     const mediaKey = JSON.stringify({ roomId: effectiveRoomId, threadRootId });
     setMediaSends((current) => ({ ...current, [mediaKey]: (current[mediaKey] ?? 0) + 1 }));
     try {
@@ -3849,6 +3887,7 @@ export function Workspace({
 
   const sendSticker = async (sticker: { id: string; name: string; src: string }, threadRootId?: string) => {
     if (!effectiveRoomId || !draftsState.isActive()) throw new Error('This conversation is unavailable.');
+    if (roomIsUpgraded(workspace, effectiveRoomId)) throw new Error(upgradedSendNotice);
     const mediaKey = JSON.stringify({ roomId: effectiveRoomId, threadRootId });
     setMediaSends((current) => ({ ...current, [mediaKey]: (current[mediaKey] ?? 0) + 1 }));
     try {
@@ -4014,6 +4053,10 @@ export function Workspace({
   };
 
   const submitComposition = async (context: DraftContext, bodyOverride?: string, mentions: ComposerMention[] = [], inlineEmojis: ComposerInlineEmoji[] = []): Promise<ComposerSubmitResult> => {
+    if (roomIsUpgraded(workspace, context.roomId)) {
+      setNotice(upgradedSendNotice);
+      return false;
+    }
     const submitted = draftsState.capture(context);
     const body = (bodyOverride ?? submitted.value.body).trim();
     const key = JSON.stringify(context);
@@ -4266,6 +4309,7 @@ export function Workspace({
             onCloseContext={closePanel}
             onRevealConversation={() => { suppressContextReturnFocus.current = true; closePanel(); }}
             room={selectedRoom}
+            onOpenReplacement={workspace.mode === 'matrix' ? openReplacementRoom : undefined}
             history={selectedHistory}
             navigationEntry={restoration.entryId}
             navigationReading={restoration.reading}
@@ -4348,6 +4392,7 @@ export function Workspace({
             onMarkRead={workspace.mode === 'matrix' && onMarkRoomRead && effectiveRoomId ? (eventId) => onMarkRoomRead(effectiveRoomId, { eventId, explicit: true }) : undefined}
             onSendNudge={onSendNudge ? () => {
               if (!effectiveRoomId || !onSendNudge) return;
+              if (roomIsUpgraded(workspace, effectiveRoomId)) { setNotice(upgradedSendNotice); return; }
               if (Date.now() - lastNudgeSentAt.current < 5_000) {
                 setNotice('Please wait a few seconds before sending another nudge.');
                 return;
@@ -4383,10 +4428,7 @@ export function Workspace({
               dataSaver={preferences.dataSaver}
               onUpdateRoom={onUpdateRoom}
               roomAdministration={workspace.mode === 'matrix' ? roomAdministration : undefined}
-              onOpenReplacement={(replacementId) => {
-                if (!onJoinRoom) return;
-                void onJoinRoom(replacementId).then(() => selectRoom(replacementId)).catch(() => setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.'));
-              }}
+              onOpenReplacement={openReplacementRoom}
               onUpdateAvatar={onUpdateRoomAvatar}
               onUploadBackground={workspace.mode === 'matrix' ? onUploadRoomBackground : undefined}
               onSetBackground={setConversationBackground}
@@ -4433,8 +4475,14 @@ export function Workspace({
           />
         ) : null}
 
-        {locationTarget && onSendLocation ? <Suspense fallback={null}><LocationDialog roomName={locationTarget.roomName} onClose={() => setLocationTarget(undefined)} onSend={(latitude, longitude, description) => onSendLocation(locationTarget.roomId, latitude, longitude, description, locationTarget.threadRootId)} /></Suspense> : null}
-        {pollTarget && onSendPoll ? <Suspense fallback={null}><PollDialog roomName={pollTarget.roomName} onClose={() => setPollTarget(undefined)} onSend={(question, answers, disclosed) => onSendPoll(pollTarget.roomId, question, answers, disclosed, pollTarget.threadRootId)} /></Suspense> : null}
+        {locationTarget && onSendLocation ? <Suspense fallback={null}><LocationDialog roomName={locationTarget.roomName} onClose={() => setLocationTarget(undefined)} onSend={(latitude, longitude, description) => {
+          if (roomIsUpgraded(workspace, locationTarget.roomId)) throw new Error(upgradedSendNotice);
+          return onSendLocation(locationTarget.roomId, latitude, longitude, description, locationTarget.threadRootId);
+        }} /></Suspense> : null}
+        {pollTarget && onSendPoll ? <Suspense fallback={null}><PollDialog roomName={pollTarget.roomName} onClose={() => setPollTarget(undefined)} onSend={(question, answers, disclosed) => {
+          if (roomIsUpgraded(workspace, pollTarget.roomId)) throw new Error(upgradedSendNotice);
+          return onSendPoll(pollTarget.roomId, question, answers, disclosed, pollTarget.threadRootId);
+        }} /></Suspense> : null}
         {voiceTarget ? <Suspense fallback={null}><VoiceRecorderDialog roomName={voiceTarget.roomName} maxBytes={config.media.maxUploadBytes} microphoneId={preferences.microphoneId} onClose={() => setVoiceTarget(undefined)} onSend={(file, durationMs, waveform) => sendRecordedVoice(voiceTarget, file, durationMs, waveform)} /></Suspense> : null}
 
         {backgroundDialogOpen && selectedRoomConfigured ? (

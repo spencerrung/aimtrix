@@ -237,10 +237,30 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.getByRole('dialog', { name: `Remove ${childName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
         await until(async () => Object.keys(await api(childPath(childId), { token: aliceSession.accessToken })).length === 0, 'space-child-removed');
         await until(async () => Object.keys(await api(parentPath, { token: aliceSession.accessToken })).length === 0, 'space-parent-removed');
+        await parentManage.locator('li').filter({ hasText: childName }).waitFor({ state: 'detached' });
         stage = 'space-remove-room';
         await parentManage.locator('li').filter({ hasText: roomName }).getByRole('button', { name: 'Remove' }).click();
         await alice.getByRole('dialog', { name: `Remove ${roomName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
         await until(async () => Object.keys(await api(childPath(roomId), { token: aliceSession.accessToken })).length === 0, 'space-room-removed');
+        stage = 'space-partial-write-candidate';
+        await parentManage.getByLabel('Find a joined room or subspace').fill(childName);
+        await parentManage.getByRole('button', { name: childName, exact: true }).waitFor();
+        stage = 'space-partial-write-rollback';
+        let rejectParentWrite = true;
+        const denyParentWrite = async (route) => {
+          if (rejectParentWrite && route.request().method() === 'PUT' && new URL(route.request().url()).pathname === parentPath) {
+            rejectParentWrite = false;
+            await route.fulfill({ status: 403, contentType: 'application/json', body: '{"errcode":"M_FORBIDDEN","error":"Synthetic parent-link denial"}' });
+          } else await route.continue();
+        };
+        await alice.route('**/_matrix/client/v3/rooms/*/state/m.space.parent/*', denyParentWrite);
+        try {
+          await parentManage.getByRole('button', { name: childName, exact: true }).click();
+          await parentManage.getByRole('button', { name: 'Add to space' }).click();
+          await parentManage.getByRole('alert').getByText('The subspace parent link failed. The child link was rolled back.').waitFor();
+          invariant(!rejectParentWrite, stage);
+          await until(async () => Object.keys(await api(childPath(childId), { token: aliceSession.accessToken })).length === 0, stage);
+        } finally { await alice.unroute('**/_matrix/client/v3/rooms/*/state/m.space.parent/*', denyParentWrite); }
         await parentManage.getByRole('button', { name: 'Close' }).click();
       } catch { throw new Error(stage); }
     });
@@ -363,6 +383,125 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await removeConfirmation.getByRole('button', { name: 'Remove alias' }).click();
         await removeConfirmation.waitFor({ state: 'hidden' });
         await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken, status: 404 });
+      } catch { throw new Error(stage); }
+    });
+    await check('room-knock-and-upgrade-administration', async () => {
+      let stage = 'upgrade-capabilities';
+      try {
+        const versions = (await api('/_matrix/client/v3/capabilities', { token: aliceSession.accessToken })).capabilities?.['m.room_versions'];
+        const previous = ['10', '11', '9'].find((version) => version !== versions?.default && versions?.available?.[version] === 'stable');
+        invariant(previous, stage);
+        const name = `Upgradeable community ${randomBytes(4).toString('hex')}`;
+        stage = 'upgrade-create-room';
+        const created = await api('/_matrix/client/v3/createRoom', { token: aliceSession.accessToken, method: 'POST', body: {
+          name, room_version: previous,
+          initial_state: [{ type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } }],
+        } });
+        const upgradeRoomId = created.room_id;
+        invariant(typeof upgradeRoomId === 'string', stage);
+        await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/invite`, { token: aliceSession.accessToken, method: 'POST', body: { user_id: accounts.bob.user_id } });
+        await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/join`, { token: bobSession.accessToken, method: 'POST', body: {} });
+        const outsiderName = `knocker${randomBytes(3).toString('hex')}`;
+        const outsider = await register(api, stack, outsiderName);
+        stage = 'upgrade-open-room';
+        await alice.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await openRoom(alice, name);
+        const drawer = alice.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!(await drawer.isVisible())) await alice.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        await drawer.getByRole('tab', { name: 'Manage', exact: true }).click();
+        const admin = drawer.getByRole('region', { name: 'Advanced room administration' });
+        stage = 'upgrade-enable-knock';
+        await admin.getByLabel('Who may join').selectOption('knock');
+        await alice.getByRole('dialog').getByRole('button', { name: 'Save join rule' }).click();
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.join_rules`, { token: aliceSession.accessToken })).join_rule === 'knock', stage);
+        stage = 'upgrade-publish-knock';
+        await api(`/_matrix/client/v3/directory/list/room/${encode(upgradeRoomId)}`, { token: aliceSession.accessToken, method: 'PUT', body: { visibility: 'public' } });
+        await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(upgradeRoomId)}`, { token: aliceSession.accessToken })).visibility === 'public', stage);
+        stage = 'upgrade-outsider-knock';
+        const outsiderPage = await newPage();
+        await login(outsiderPage, stack.origins.app, outsiderName, stack.credentials.password);
+        await outsiderPage.getByRole('button', { name: 'Join or create room' }).click();
+        const joinDialog = outsiderPage.getByRole('dialog', { name: 'Add a conversation' });
+        await joinDialog.getByLabel('Room address, ID, or directory search').fill(name);
+        const result = joinDialog.locator('.room-directory-results button').filter({ hasText: name });
+        await until(async () => {
+          if (await result.count()) return true;
+          const search = joinDialog.getByRole('button', { name: 'Search public rooms' });
+          if (await search.isEnabled()) await search.click();
+          return false;
+        }, stage);
+        await result.click();
+        await joinDialog.getByRole('button', { name: 'Request to join' }).click();
+        await joinDialog.waitFor({ state: 'hidden' });
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.member/${encode(outsider.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'knock', stage);
+        stage = 'upgrade-control';
+        await admin.getByRole('button', { name: 'Upgrade room' }).waitFor();
+        await admin.getByRole('button', { name: 'Upgrade room' }).click();
+        await alice.getByRole('dialog', { name: 'Upgrade this room?' }).getByRole('button', { name: 'Upgrade room' }).click();
+        stage = 'upgrade-tombstone';
+        let replacementId;
+        await until(async () => {
+          const tombstone = await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.tombstone`, { token: aliceSession.accessToken }).catch(() => ({}));
+          replacementId = tombstone.replacement_room;
+          return typeof replacementId === 'string';
+        }, stage);
+        const replacement = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.create`, { token: aliceSession.accessToken });
+        invariant(replacement.room_version === versions.default, 'upgrade-version-readback');
+        stage = 'upgrade-encryption-state';
+        const replacementEncryption = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.encryption`, { token: aliceSession.accessToken });
+        invariant(replacementEncryption.algorithm === 'm.megolm.v1.aes-sha2', stage);
+        const peerReplacementMembership = (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(accounts.bob.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership;
+        stage = 'upgrade-replacement-membership';
+        await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
+        stage = 'upgrade-confirmation-close';
+        await alice.getByRole('dialog', { name: 'Upgrade this room?' }).waitFor({ state: 'hidden', timeout: 45000 });
+        stage = 'upgrade-replacement-control';
+        if (await alice.locator('main.conversation').getAttribute('data-room-id') !== replacementId) {
+          try { await admin.getByRole('button', { name: 'Open replacement room' }).waitFor({ timeout: 10000 }); }
+          catch {
+            stage = await admin.getByText('Room upgrade saved on the homeserver.').isVisible().catch(() => false)
+              ? 'upgrade-control-lost-after-save' : 'upgrade-control-lost-before-save';
+            throw new Error(stage);
+          }
+          stage = 'upgrade-open-replacement';
+          await admin.getByRole('button', { name: 'Open replacement room' }).click();
+        }
+        try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
+        catch {
+          stage = await alice.getByText('Replacement unavailable. Retry or ask a moderator.').isVisible()
+            ? 'upgrade-join-failed' : 'upgrade-selection-stale';
+          throw new Error(stage);
+        }
+        await alice.getByRole('main', { name }).waitFor();
+        stage = 'upgrade-encrypted-send';
+        const marker = `Synthetic upgraded-room send ${randomBytes(6).toString('hex')}`;
+        await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).fill(marker);
+        const encryptedSend = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes(`/rooms/${encode(replacementId)}/send/m.room.encrypted/`));
+        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+        const delivery = await encryptedSend;
+        invariant(delivery.ok() && !JSON.stringify(delivery.request().postDataJSON()).includes(marker), stage);
+        stage = 'upgrade-peer-old-room-list';
+        await bob.reload();
+        await bob.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await bob.locator(`.buddy-row[data-room-id="${upgradeRoomId}"]`).click();
+        const oldConversation = bob.locator('main.conversation');
+        stage = 'upgrade-old-room-guidance';
+        await oldConversation.getByText('This room was upgraded.', { exact: false }).waitFor();
+        invariant(await oldConversation.getByRole('textbox', { name: /^Message / }).getAttribute('contenteditable') === 'false', stage);
+        stage = 'upgrade-peer-open-replacement';
+        await oldConversation.getByRole('button', { name: 'Open replacement room' }).click();
+        await until(async () => {
+          if (await oldConversation.getAttribute('data-room-id') === replacementId) return true;
+          if (await bob.getByText('Replacement unavailable. Retry or ask a moderator.').count()) {
+            if (peerReplacementMembership === 'invite' || peerReplacementMembership === 'join') { stage = 'upgrade-peer-join-failed'; throw new Error(stage); }
+            return true;
+          }
+          return false;
+        }, stage);
+        stage = 'upgrade-restore-daily-room';
+        await openRoom(alice, roomName);
+        invariant(await alice.locator('main.conversation').getAttribute('data-room-id') === roomId, stage);
+        await openRoom(bob, roomName);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
@@ -1744,6 +1883,13 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'home-show-thread';
         await home.getByRole('button', { name: 'My threads', exact: true }).click();
         const threadCard = home.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
+        await until(async () => {
+          if (await threadCard.count()) return true;
+          invariant(await home.getByRole('alert').count() === 0, stage);
+          const more = home.getByRole('button', { name: 'Check more threads', exact: true });
+          if (await more.isVisible().catch(() => false) && await more.isEnabled()) await more.click();
+          return false;
+        }, stage, 90000);
         await threadCard.getByRole('button', { name: 'Hide from Home', exact: true }).waitFor();
         invariant((await api(followPath, { token: secondSession.accessToken })).threads?.[formattedPeer.rootId] === true, 'home-follow-account-data');
         await aliceSecond.bringToFront();
@@ -1752,6 +1898,13 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await secondHome.getByRole('button', { name: 'Refresh activity', exact: true }).click();
         await secondHome.getByRole('button', { name: 'My threads', exact: true }).click();
         const secondCard = secondHome.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
+        await until(async () => {
+          if (await secondCard.count()) return true;
+          invariant(await secondHome.getByRole('alert').count() === 0, stage);
+          const more = secondHome.getByRole('button', { name: 'Check more threads', exact: true });
+          if (await more.isVisible().catch(() => false) && await more.isEnabled()) await more.click();
+          return false;
+        }, stage, 90000);
         await secondCard.getByRole('button', { name: 'Hide from Home', exact: true }).click();
         await secondCard.waitFor({ state: 'hidden' });
         invariant((await api(followPath, { token: aliceSession.accessToken })).threads?.[formattedPeer.rootId] === false, 'home-follow-account-data');

@@ -72,6 +72,7 @@ function pendingSend() {
 function renderWorkspace(
   overrides: {
     onInviteToRoom?: (roomId: string, userId: string) => Promise<void>;
+    onJoinRoom?: (roomId: string) => Promise<void>;
     onPreferencesChange?: (preferences: UserPreferences) => void;
     preferences?: UserPreferences;
     onProfilePersonalizationChange?: (profile: ProfilePersonalization) => void;
@@ -131,6 +132,7 @@ function renderWorkspace(
       onPreferencesChange={onPreferencesChange}
       onProfilePersonalizationChange={overrides.onProfilePersonalizationChange}
       onInviteToRoom={overrides.onInviteToRoom}
+      onJoinRoom={overrides.onJoinRoom}
       pushRoute={overrides.pushRoute}
       onRoomSelected={overrides.onRoomSelected}
       onThreadSelected={overrides.onThreadSelected}
@@ -184,6 +186,33 @@ describe('Workspace demo', () => {
 
     expect(screen.getByText('A shiny new demo message')).toBeInTheDocument();
     expect(composer).toBeEmptyDOMElement();
+  });
+
+  it('redirects an upgraded room while preserving its old draft and history', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(undefined);
+    const workspace = {
+      ...demoWorkspace,
+      mode: 'matrix' as const,
+      rooms: demoWorkspace.rooms.map((room) => room.id === 'welcome' ? { ...room, replacementRoomId: 'dev-shack' } : room),
+    };
+    renderWorkspace({ workspace, onSendMessage });
+    expect(screen.getByText(/This room was upgraded/)).toBeInTheDocument();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    expect(composer).toHaveAttribute('contenteditable', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Open replacement room' }));
+    await waitFor(() => expect(screen.getByLabelText('Message Dev Shack')).toBeInTheDocument());
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
+  it('waits for joined replacement room state before navigating', async () => {
+    const onJoinRoom = vi.fn().mockResolvedValue(undefined);
+    const rooms = demoWorkspace.rooms.map((room) => room.id === 'welcome' ? { ...room, replacementRoomId: 'dev-shack' } : room.id === 'dev-shack' ? { ...room, membership: 'invite' as const } : room);
+    const { rerenderWorkspace } = renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix', rooms }, onJoinRoom });
+    fireEvent.click(screen.getByRole('button', { name: 'Open replacement room' }));
+    await waitFor(() => expect(onJoinRoom).toHaveBeenCalledWith('dev-shack'));
+    expect(screen.getByLabelText('Message Welcome Lounge')).toBeInTheDocument();
+    rerenderWorkspace({ ...demoWorkspace, mode: 'matrix', rooms: rooms.map((room) => room.id === 'dev-shack' ? { ...room, membership: 'join' as const } : room) });
+    await waitFor(() => expect(screen.getByLabelText('Message Dev Shack')).toBeInTheDocument());
   });
 
   it('keeps one contextual surface while preserving room and thread drafts, search, and details tabs', async () => {

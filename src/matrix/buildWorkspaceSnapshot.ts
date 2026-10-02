@@ -929,6 +929,8 @@ export function buildWorkspaceSnapshot(
     const favorite = Object.hasOwn(room.tags ?? {}, 'm.favourite');
     const canonicalAlias = room.currentState.getStateEvents('m.room.canonical_alias', '')
       ?.getContent<{ alias?: unknown }>().alias;
+    const replacementRoom = room.currentState.getStateEvents('m.room.tombstone', '')
+      ?.getContent<{ replacement_room?: unknown }>().replacement_room;
     const accessValue = (type: string, field: string, fallback: string): string => {
       const value = room.currentState.getStateEvents(type, '')?.getContent<Record<string, unknown>>()[field];
       return typeof value === 'string' ? value : fallback;
@@ -1011,6 +1013,7 @@ export function buildWorkspaceSnapshot(
       avatarUrl: mediaSource(room.getMxcAvatarUrl()) ?? memberAvatar(directMember),
       favorite,
       canonicalAlias: typeof canonicalAlias === 'string' && isMatrixNavigationTarget({ roomAlias: canonicalAlias }) ? canonicalAlias : undefined,
+      replacementRoomId: typeof replacementRoom === 'string' && isMatrixNavigationTarget({ roomId: replacementRoom }) ? replacementRoom : undefined,
       access: {
         joinRule: accessValue('m.room.join_rules', 'join_rule', 'invite'),
         historyVisibility: accessValue('m.room.history_visibility', 'history_visibility', 'shared'),
