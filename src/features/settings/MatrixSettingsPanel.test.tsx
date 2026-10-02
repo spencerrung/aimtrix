@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { MatrixSettingsPanel, type MatrixSettingsActions } from './MatrixSettingsPanel';
 import { defaultUserPreferences } from '../../settings/preferences';
@@ -69,4 +69,53 @@ it('loads notification rules only when the controls are opened', async () => {
   await screen.findByText('Join a room to set its notification rules.');
   expect(loadAttention).toHaveBeenCalledTimes(1);
   expect(screen.getByRole('button', { name: 'Test local notification' })).toBeDisabled();
+});
+
+it('gives SSO users a supported recovery path when setup needs unsupported authorization', async () => {
+  setup({
+    load: vi.fn().mockResolvedValue({ ...snapshot, security: { ...snapshot.security, secretStorageConfigured: false, keyBackupEnabled: false } }),
+    setupRecovery: vi.fn().mockRejectedValue(new Error('This homeserver requires interactive authentication that Aimtrix cannot complete here.')),
+  });
+  fireEvent.change(await screen.findByLabelText('New recovery passphrase'), { target: { value: 'synthetic passphrase only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Set up new recovery' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('trusted Matrix client');
+  expect(screen.getByLabelText('New recovery passphrase')).toHaveValue('synthetic passphrase only');
+});
+
+it('keeps recovery-reset failure visible after refreshing account health', async () => {
+  const load = vi.fn().mockResolvedValue(snapshot);
+  setup({ load, resetRecovery: vi.fn().mockRejectedValue(new Error('synthetic network failure')) });
+  fireEvent.change(await screen.findByLabelText('New recovery passphrase'), { target: { value: 'synthetic passphrase only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Reset recovery and backup' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Reset encryption recovery?' })).getByRole('button', { name: 'Reset recovery and backup' }));
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+  expect(await screen.findByRole('alert')).toHaveTextContent('previous backup may already have changed');
+});
+
+it('distinguishes an unlocked recovery key from a failed backup operation', async () => {
+  setup({ restoreRecovery: vi.fn().mockRejectedValue(new Error('Recovery restore failed at backup-key.')) });
+  fireEvent.change(await screen.findByLabelText('Existing recovery key'), { target: { value: 'synthetic-key-only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore existing room keys' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('key unlocked recovery storage');
+  expect(screen.getByLabelText('Existing recovery key')).toHaveValue('synthetic-key-only');
+});
+
+it('shows the active recovery step while a restore is pending', async () => {
+  let finish!: (count: number) => void;
+  setup({ restoreRecovery: vi.fn().mockImplementation((_, onStage: (stage: 'importing-room-keys') => void) => {
+    onStage('importing-room-keys');
+    return new Promise<number>((resolve) => { finish = resolve; });
+  }) });
+  fireEvent.change(await screen.findByLabelText('Existing recovery key'), { target: { value: 'synthetic-key-only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Restore existing room keys' }));
+  expect(await screen.findByText('Importing encrypted room keys…')).toBeInTheDocument();
+  await act(async () => finish(1));
+  expect(await screen.findByText('Recovery complete. Imported 1 room keys.')).toBeInTheDocument();
+});
+
+it('does not offer new recovery setup when a server backup exists but is inactive on this device', async () => {
+  setup({ load: vi.fn().mockResolvedValue({ ...snapshot, security: { ...snapshot.security, secretStorageConfigured: false, keyBackupConfigured: true, keyBackupEnabled: false } }) });
+  expect(await screen.findByText('On server; inactive here')).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Set up new recovery' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Restore existing room keys' })).toBeInTheDocument();
 });

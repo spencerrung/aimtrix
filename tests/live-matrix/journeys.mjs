@@ -194,6 +194,139 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
     });
+    await check('password-two-device-recovery-setup-and-restore', async () => {
+      let stage = 'recovery-open-first-settings';
+      let recoveryDevice;
+      try {
+      await alice.bringToFront();
+      await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const first = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await first.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      stage = 'recovery-setup-control';
+      await first.getByRole('button', { name: 'Set up new recovery', exact: true }).waitFor();
+      await first.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic recovery ${randomBytes(12).toString('hex')}`);
+      await first.getByLabel('Matrix password, if this account has one', { exact: true }).fill(stack.credentials.password);
+      await first.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
+      stage = 'recovery-setup-result';
+      await first.getByText('Encryption recovery and key backup are ready.', { exact: false }).waitFor({ timeout: 60000 });
+      stage = 'recovery-server-backup';
+      await until(async () => {
+        try {
+          const info = await api('/_matrix/client/v3/room_keys/version', { token: aliceSession.accessToken });
+          return Boolean(info.version && info.count > 0);
+        } catch { return false; }
+      }, 'recovery-server-backup', 60000);
+      stage = 'recovery-server-secret-storage';
+      await until(async () => {
+        try {
+          const data = await api(`/_matrix/client/v3/user/${encode(aliceSession.userId)}/account_data/m.secret_storage.default_key`, { token: aliceSession.accessToken });
+          return typeof data.key === 'string' && data.key.length > 0;
+        } catch { return false; }
+      }, 'recovery-server-secret-storage', 60000);
+      const key = await first.locator('.recovery-key-output code').textContent();
+      invariant(Boolean(key), 'recovery-key-generated');
+      await first.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
+      invariant(await first.locator('.recovery-key-output code').count() === 0, 'recovery-key-dismissed');
+      await first.getByRole('button', { name: 'Close settings', exact: true }).click();
+
+      stage = 'recovery-new-device-history';
+      recoveryDevice = await newPage();
+      await login(recoveryDevice, stack.origins.app, 'alice', stack.credentials.password);
+      await openRoom(recoveryDevice, roomName);
+      await recoveryDevice.locator('.timeline-message').first().waitFor({ timeout: 45000 });
+      invariant(await recoveryDevice.locator('.timeline-message').filter({ hasText: marker }).count() === 0, 'recovery-old-event-unavailable');
+      stage = 'recovery-open-second-settings';
+      await recoveryDevice.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const second = recoveryDevice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await second.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await second.getByLabel('Existing recovery key', { exact: true }).fill(key);
+      await second.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
+      stage = 'recovery-restore-result';
+      const result = second.locator('.settings-success').filter({ hasText: 'Recovery complete.' });
+      await result.waitFor({ timeout: 60000 });
+      stage = 'recovery-imported-keys';
+      const imported = Number((await result.textContent())?.match(/Imported (\d+) room keys/)?.[1] ?? 0);
+      invariant(imported > 0, 'recovery-imported-keys');
+      invariant(await second.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'recovery-key-cleared');
+      await second.getByRole('button', { name: 'Close settings', exact: true }).click();
+      stage = 'recovery-old-event-restored';
+      await recoveryDevice.getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
+      } catch {
+        if (stage === 'recovery-setup-result') {
+          if (await alice.getByRole('alert').filter({ hasText: 'trusted Matrix client' }).count()) stage = 'recovery-setup-unsupported';
+          else if (await alice.getByRole('alert').filter({ hasText: 'Recovery setup failed' }).count()) stage = 'recovery-setup-failed';
+          else if (await alice.getByRole('status').filter({ hasText: 'Working with your homeserver' }).count()) stage = 'recovery-setup-pending';
+        }
+        if (stage === 'recovery-restore-result') {
+          const alert = recoveryDevice.getByRole('alert');
+          if (await alert.filter({ hasText: 'could not restore its encryption identity' }).count()) stage = 'recovery-restore-cross-signing';
+          else if (await alert.filter({ hasText: 'room-key backup could not be enabled' }).count()) stage = 'recovery-restore-backup';
+          else if (await alert.filter({ hasText: 'room keys could not be imported' }).count()) stage = 'recovery-restore-room-keys';
+          else if (await alert.filter({ hasText: 'does not match this account' }).count()) stage = 'recovery-restore-key-mismatch';
+          else if (await alert.filter({ hasText: 'no compatible recovery backup' }).count()) stage = 'recovery-restore-no-backup';
+          else if (await alert.count()) stage = 'recovery-restore-failed';
+          else if (await recoveryDevice.getByText('Recovery complete. Imported 0 room keys.', { exact: true }).count()) stage = 'recovery-restore-zero-import';
+          else if (await recoveryDevice.locator('.matrix-settings-panel fieldset:disabled').count()) {
+            const notice = recoveryDevice.locator('.settings-success');
+            if (await notice.filter({ hasText: 'Restoring the encryption identity' }).count()) stage = 'recovery-restore-pending-identity';
+            else if (await notice.filter({ hasText: 'Unlocking the room-key backup' }).count()) stage = 'recovery-restore-pending-backup-key';
+            else if (await notice.filter({ hasText: 'Checking backup trust' }).count()) stage = 'recovery-restore-pending-backup-trust';
+            else if (await notice.filter({ hasText: 'Importing encrypted room keys' }).count()) stage = 'recovery-restore-pending-import';
+            else stage = 'recovery-restore-pending';
+          }
+          else if (await recoveryDevice.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).count()) stage = 'recovery-restore-unmatched-count';
+          else if (await recoveryDevice.locator('.settings-success').count()) stage = 'recovery-restore-unmatched-success';
+          else if (await recoveryDevice.locator('.settings-error').count()) stage = 'recovery-restore-unmatched-error';
+          else if (await recoveryDevice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true }).count() === 0) stage = 'recovery-restore-dialog-gone';
+          else stage = 'recovery-restore-idle';
+        }
+        throw new Error(stage);
+      }
+    });
+    await check('incoming-two-device-sas-verification', async () => {
+      let stage = 'verification-new-device';
+      try {
+        const verifyPeer = await newPage();
+        await login(verifyPeer, stack.origins.app, 'alice', stack.credentials.password);
+        const verifySession = await session(verifyPeer);
+        invariant(verifySession?.deviceId && verifySession.deviceId !== aliceSession.deviceId, 'verification-distinct-device');
+        stage = 'verification-open-initiator';
+        await alice.bringToFront();
+        await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
+        const settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+        stage = 'verification-device-row';
+        const deviceInput = settings.getByRole('textbox', { name: `Name for ${verifySession.deviceId}` });
+        for (let attempt = 0; attempt < 5 && !await deviceInput.count(); attempt++) {
+          const refresh = settings.getByRole('button', { name: 'Refresh', exact: true });
+          await refresh.click();
+          await until(() => refresh.isEnabled(), 'verification-device-refresh', 10000);
+        }
+        await deviceInput.waitFor();
+        const device = deviceInput.locator('xpath=ancestor::div[contains(concat(" ", normalize-space(@class), " "), " device-card ")]');
+        stage = 'verification-button';
+        await device.getByRole('button', { name: 'Verify', exact: true }).click();
+        stage = 'verification-incoming-request';
+        await verifyPeer.bringToFront();
+        const incoming = verifyPeer.getByRole('complementary', { name: 'Incoming device verification' });
+        await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
+        stage = 'verification-emoji';
+        const initiatedChallenge = alice.getByRole('dialog', { name: 'Compare verification emoji', exact: true });
+        const incomingChallenge = verifyPeer.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
+        await initiatedChallenge.waitFor({ timeout: 45000 });
+        await incomingChallenge.waitFor({ timeout: 45000 });
+        const firstEmoji = await initiatedChallenge.locator('small').allTextContents();
+        const secondEmoji = await incomingChallenge.locator('small').allTextContents();
+        invariant(firstEmoji.length === 7 && JSON.stringify(firstEmoji) === JSON.stringify(secondEmoji), 'verification-matching-emoji');
+        await initiatedChallenge.getByRole('button', { name: 'They match', exact: true }).click();
+        await incomingChallenge.getByRole('button', { name: 'They match', exact: true }).click();
+        stage = 'verification-completion';
+        await initiatedChallenge.waitFor({ state: 'hidden', timeout: 45000 });
+        await incomingChallenge.waitFor({ state: 'hidden', timeout: 45000 });
+        await settings.getByText('Device verified.', { exact: true }).waitFor({ timeout: 45000 });
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
+    });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
       await until(async () => {
@@ -1551,8 +1684,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await api(path, { token: bobSession.accessToken, status: 403 });
       await profile.getByRole('button', { name: 'Close profile page' }).click();
     });
+    let sso;
     await check('standard-sso-token-callback', async () => {
-      const sso = await newPage();
+      sso = await newPage();
       await sso.goto(stack.origins.app);
       await sso.getByRole('button', { name: 'Sign in with homeserver SSO', exact: true }).click();
       // Dex is a real OIDC provider; no callback route or login response is mocked.
@@ -1564,6 +1698,42 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(saved?.userId === '@sso:aimtrix.test', 'sso-identity');
       invariant(!new URL(sso.url()).searchParams.has('loginToken'), 'sso-token-cleanup');
       invariant((await api('/_matrix/client/v3/account/whoami', { token: saved.accessToken })).user_id === saved.userId, 'sso-valid-session');
+    });
+    await check('standard-sso-recovery-guidance', async () => {
+      await sso.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const settings = sso.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic SSO recovery ${randomBytes(12).toString('hex')}`);
+      await settings.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
+      const unsupported = settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' });
+      const output = settings.locator('.recovery-key-output code');
+      await until(async () => Boolean(await unsupported.count() || await output.count()), 'sso-recovery-outcome', 60000);
+      if (await unsupported.count()) {
+        invariant(await settings.getByLabel('New recovery passphrase', { exact: true }).inputValue() !== '', 'sso-recovery-passphrase-retained');
+        invariant(await output.count() === 0, 'sso-recovery-no-key-export');
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+        return;
+      }
+      const key = await output.textContent();
+      invariant(Boolean(key), 'sso-recovery-key-generated');
+      await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
+      await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      const ssoSecond = await newPage();
+      await ssoSecond.goto(stack.origins.app);
+      await ssoSecond.getByRole('button', { name: 'Sign in with homeserver SSO', exact: true }).click();
+      await ssoSecond.getByLabel(/^Email address$/i).fill('sso@aimtrix.test');
+      await ssoSecond.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
+      await ssoSecond.getByRole('button', { name: 'Login', exact: true }).click();
+      await ssoSecond.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
+      invariant((await session(ssoSecond))?.deviceId !== (await session(sso))?.deviceId, 'sso-recovery-distinct-device');
+      await ssoSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
+      const secondSettings = ssoSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await secondSettings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await secondSettings.getByLabel('Existing recovery key', { exact: true }).fill(key);
+      await secondSettings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
+      await secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 60000 });
+      invariant(await secondSettings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'sso-recovery-key-cleared');
+      await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
     });
     const assertExpired = async (page) => {
       await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });

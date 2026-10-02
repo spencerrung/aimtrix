@@ -24,6 +24,7 @@ import type {
   DeviceRemovalResult,
   DeviceVerificationChallenge,
   MatrixSettingsSnapshot,
+  RecoveryRestoreStage,
 } from '../../matrix/settingsTypes';
 import type { PushRegistrationResult } from '../../matrix/MatrixController';
 import type { UserPreferences } from '../../settings/preferences';
@@ -38,7 +39,7 @@ export interface MatrixSettingsActions {
   uploadAvatar: (file: File) => Promise<void>;
   setupRecovery: (passphrase: string, accountPassword: string) => Promise<string>;
   resetRecovery?: (passphrase: string, accountPassword: string) => Promise<string>;
-  restoreRecovery: (recoveryKey: string) => Promise<number>;
+  restoreRecovery: (recoveryKey: string, onStage?: (stage: RecoveryRestoreStage) => void) => Promise<number>;
   changePassword: (currentPassword: string, newPassword: string, logoutOtherDevices: boolean) => Promise<void>;
   deactivateAccount: (password: string, erase: boolean) => Promise<void>;
   previewMessageSound?: () => void;
@@ -59,6 +60,34 @@ function formatLastSeen(timestamp?: number): string {
     timeStyle: 'short',
   }).format(timestamp);
 }
+
+function recoverySetupError(error: unknown): string {
+  if (error instanceof Error && error.message.startsWith('This homeserver requires interactive authentication')) {
+    return 'This homeserver requires an authorization step Aimtrix cannot complete here. Set up recovery in a trusted Matrix client, then return with its recovery key.';
+  }
+  if (error instanceof Error && (error.message.startsWith('Recovery or key backup already exists') || error.message.startsWith('This account already has an encryption identity'))) {
+    return 'This account already has recovery or an encryption identity. Restore its existing key or use a trusted device before considering a confirmed reset.';
+  }
+  return 'Recovery setup failed. Confirm your account password and try again.';
+}
+
+function recoveryRestoreError(error: unknown): string {
+  if (!(error instanceof Error)) return 'Recovery could not finish. Check the key and retry.';
+  if (error.message.startsWith('This recovery key does not match')) return 'This key does not match this account’s recovery storage. Check the key before retrying.';
+  if (error.message.startsWith('This account has no existing recovery storage') || error.message.startsWith('This account has no encrypted room-key backup')) return 'This account has no compatible recovery backup to restore. Check account health or use a trusted device.';
+  if (error.message === 'Recovery restore failed at cross-signing.') return 'The key unlocked recovery storage, but this device could not restore its encryption identity. Retry or use another trusted device.';
+  if (error.message === 'Recovery restore failed at backup-key.' || error.message === 'Recovery restore failed at backup-enable.') return 'The key unlocked recovery storage, but its room-key backup could not be enabled. Refresh account health before retrying.';
+  if (error.message === 'Recovery restore failed at room-keys.') return 'The backup was unlocked, but its room keys could not be imported. Refresh account health before retrying.';
+  return 'Recovery could not finish. Check the key and retry.';
+}
+
+const recoveryRestoreProgress: Record<RecoveryRestoreStage, string> = {
+  'checking-key': 'Checking the recovery key…',
+  'restoring-identity': 'Restoring the encryption identity…',
+  'loading-backup-key': 'Unlocking the room-key backup…',
+  'enabling-backup': 'Checking backup trust on this device…',
+  'importing-room-keys': 'Importing encrypted room keys…',
+};
 
 export function MatrixSettingsPanel({
   preferences,
@@ -289,12 +318,12 @@ export function MatrixSettingsPanel({
     setError(undefined);
     setNotice('Restoring encrypted room keys…');
     try {
-      const imported = await actions.restoreRecovery(existingRecoveryKey);
+      const imported = await actions.restoreRecovery(existingRecoveryKey, (stage) => setNotice(recoveryRestoreProgress[stage]));
       setExistingRecoveryKey('');
       setNotice(`Recovery complete. Imported ${imported} room keys.`);
       await refresh();
-    } catch {
-      setError('That recovery key could not unlock this account’s encrypted backup.');
+    } catch (error) {
+      setError(recoveryRestoreError(error));
     }
   });
 
@@ -308,8 +337,8 @@ export function MatrixSettingsPanel({
       setRecoveryPassword('');
       setNotice('Encryption recovery and key backup are ready. Store this key safely.');
       await refresh();
-    } catch {
-      setError('Recovery setup failed. Confirm your account password and try again.');
+    } catch (error) {
+      setError(recoverySetupError(error));
     }
   });
 
@@ -324,8 +353,8 @@ export function MatrixSettingsPanel({
       setNotice('Recovery was reset. Older backup versions may no longer be available. Save the new key now.');
       await refresh();
     } catch {
-      setError('Recovery reset did not finish. Refresh account health before retrying; the previous backup may already have changed.');
       await refresh();
+      setError('Recovery reset did not finish. Check the refreshed account health before retrying; the previous backup may already have changed.');
     }
   });
 
@@ -403,7 +432,7 @@ export function MatrixSettingsPanel({
               <span className={snapshot.security.encryptionReady ? 'is-ready' : ''}>E2EE <b>{snapshot.security.encryptionReady ? 'Ready' : 'Unavailable'}</b></span>
               <span className={snapshot.security.crossSigningReady ? 'is-ready' : ''}>Cross-signing <b>{snapshot.security.crossSigningReady ? 'Ready' : 'Needs setup'}</b></span>
               <span className={snapshot.security.secretStorageReady ? 'is-ready' : ''}>Secret storage <b>{snapshot.security.secretStorageReady ? 'Ready' : 'Needs setup'}</b></span>
-              <span className={snapshot.security.keyBackupEnabled ? 'is-ready' : ''}>Key backup <b>{snapshot.security.keyBackupEnabled ? `v${snapshot.security.keyBackupVersion}` : 'Needs setup'}</b></span>
+              <span className={snapshot.security.keyBackupEnabled ? 'is-ready' : ''}>Key backup <b>{snapshot.security.keyBackupEnabled ? `v${snapshot.security.keyBackupVersion}` : snapshot.security.keyBackupConfigured ? 'On server; inactive here' : 'Needs setup'}</b></span>
             </div>
             <div className="recovery-setup">
               <strong>Restore existing recovery</strong>
@@ -411,7 +440,7 @@ export function MatrixSettingsPanel({
               <label>Existing recovery key<input type="password" value={existingRecoveryKey} autoComplete="off" onChange={(event) => setExistingRecoveryKey(event.target.value)} /></label>
               <button className="aqua-button" type="button" onClick={() => void restoreRecovery()} disabled={!existingRecoveryKey.trim()}>Restore existing room keys</button>
             </div>
-            {!snapshot.security.secretStorageConfigured && !snapshot.security.keyBackupEnabled ? (
+            {!snapshot.security.secretStorageConfigured && !snapshot.security.keyBackupConfigured && !snapshot.security.keyBackupEnabled ? (
               <div className="recovery-setup">
                 <strong>Set up new recovery</strong>
                 <p>Choose this only for an account without existing recovery. Save the generated key before closing this page. Some servers ask for your account password to authorize setup; SSO-only authorization is not supported here when they do.</p>

@@ -13,6 +13,7 @@ export interface MatrixSecuritySummary {
   crossSigningReady: boolean;
   secretStorageReady: boolean;
   secretStorageConfigured?: boolean;
+  keyBackupConfigured?: boolean;
   keyBackupEnabled: boolean;
   keyBackupVersion?: string;
 }
@@ -32,6 +33,8 @@ export interface MatrixSettingsSnapshot {
   devices: MatrixDeviceSummary[];
   ignoredUsers: string[];
 }
+
+export type RecoveryRestoreStage = 'checking-key' | 'restoring-identity' | 'loading-backup-key' | 'enabling-backup' | 'importing-room-keys';
 
 export interface DeviceVerificationChallenge {
   emoji: Array<[symbol: string, name: string]>;

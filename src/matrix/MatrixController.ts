@@ -92,6 +92,7 @@ import type {
   DeviceVerificationChallenge,
   IncomingVerificationSummary,
   MatrixSettingsSnapshot,
+  RecoveryRestoreStage,
 } from './settingsTypes';
 import type {
   CallSummary,
@@ -975,13 +976,14 @@ export class MatrixController {
     const session = this.activeSession;
     if (!client || !session) throw new Error('Matrix is not connected.');
     const crypto = client.getCrypto();
-    const [deviceResponse, versions, crossSigningReady, secretStorageReady, backupInfo, defaultSecretKeyId] =
+    const [deviceResponse, versions, crossSigningReady, secretStorageReady, backupInfo, activeBackupVersion, defaultSecretKeyId] =
       await Promise.all([
         client.getDevices(),
         client.getVersions(),
         crypto?.isCrossSigningReady() ?? Promise.resolve(false),
         crypto?.isSecretStorageReady() ?? Promise.resolve(false),
         crypto?.getKeyBackupInfo() ?? Promise.resolve(null),
+        crypto?.getActiveSessionBackupVersion() ?? Promise.resolve(null),
         client.secretStorage.getDefaultKeyId(),
       ]);
     const devices = await Promise.all(
@@ -1036,7 +1038,8 @@ export class MatrixController {
         crossSigningReady,
         secretStorageReady,
         secretStorageConfigured: Boolean(defaultSecretKeyId),
-        keyBackupEnabled: Boolean(backupInfo),
+        keyBackupConfigured: Boolean(backupInfo),
+        keyBackupEnabled: Boolean(activeBackupVersion && activeBackupVersion === backupInfo?.version),
         keyBackupVersion: backupInfo?.version,
       },
       devices: devices.sort((left, right) => {
@@ -1346,13 +1349,14 @@ export class MatrixController {
     return uploaded.content_uri;
   }
 
-  public async restoreRecovery(recoveryKey: string): Promise<number> {
+  public async restoreRecovery(recoveryKey: string, onStage?: (stage: RecoveryRestoreStage) => void): Promise<number> {
     const client = this.client;
     const crypto = client?.getCrypto();
     if (!client || !crypto) throw new Error('Encryption is not ready.');
     const { decodeRecoveryKey } = await import(
       'matrix-js-sdk/lib/crypto-api/recovery-key.js'
     );
+    onStage?.('checking-key');
     const decoded = decodeRecoveryKey(recoveryKey.trim());
     const defaultKey = await client.secretStorage.getKey();
     if (!defaultKey) throw new Error('This account has no existing recovery storage. Set up new recovery instead.');
@@ -1364,12 +1368,26 @@ export class MatrixController {
     const crossSigning = await crypto.getCrossSigningStatus();
     if (this.client !== client) throw new Error('The Matrix session changed.');
     this.inMemoryRecoveryKey = decoded;
+    let stage = 'cross-signing';
     try {
+      onStage?.('restoring-identity');
       if (crossSigning.privateKeysInSecretStorage) await crypto.bootstrapCrossSigning({});
+      stage = 'backup-key';
+      onStage?.('loading-backup-key');
       await crypto.loadSessionBackupPrivateKeyFromSecretStorage();
-      await crypto.checkKeyBackupAndEnable();
+      stage = 'backup-enable';
+      onStage?.('enabling-backup');
+      const checkedBackup = await crypto.checkKeyBackupAndEnable();
+      if (!checkedBackup?.trustInfo.trusted || checkedBackup.backupInfo.version !== backup.version ||
+          await crypto.getActiveSessionBackupVersion() !== backup.version) {
+        throw new Error('Backup is not active on this device.');
+      }
+      stage = 'room-keys';
+      onStage?.('importing-room-keys');
       const restored = await crypto.restoreKeyBackup();
       return restored.imported;
+    } catch {
+      throw new Error(`Recovery restore failed at ${stage}.`);
     } finally {
       this.inMemoryRecoveryKey = undefined;
     }
