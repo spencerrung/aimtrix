@@ -88,3 +88,17 @@ test('attention evidence discards notification policies, patterns, routes, activ
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
+
+test('cache reload profile retains numeric evidence without session or room data', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'cache-reload-readiness-profile';
+  const result = makeReport({ ...base, failureStage: name,
+    checks: [{ name, passed: true, durationMs: 12, roomId: privateValue, syncResponse: privateValue }],
+    metrics: { cacheReloadSeedMs: 200, cacheReloadMessages: 350, cacheReloadReadyMs: 90000,
+      cacheReloadSyncResponses: 7, cacheReloadReadyWithin90s: 0, debug: privateValue },
+  });
+  assert.deepEqual(result.metrics, { cacheReloadSeedMs: 200, cacheReloadMessages: 350,
+    cacheReloadReadyMs: 90000, cacheReloadSyncResponses: 7, cacheReloadReadyWithin90s: 0 });
+  assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 12 }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});
