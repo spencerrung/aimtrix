@@ -399,6 +399,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         } });
         const upgradeRoomId = created.room_id;
         invariant(typeof upgradeRoomId === 'string', stage);
+        await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/invite`, { token: aliceSession.accessToken, method: 'POST', body: { user_id: accounts.bob.user_id } });
+        await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/join`, { token: bobSession.accessToken, method: 'POST', body: {} });
         const outsiderName = `knocker${randomBytes(3).toString('hex')}`;
         const outsider = await register(api, stack, outsiderName);
         stage = 'upgrade-open-room';
@@ -421,8 +423,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await outsiderPage.getByRole('button', { name: 'Join or create room' }).click();
         const joinDialog = outsiderPage.getByRole('dialog', { name: 'Add a conversation' });
         await joinDialog.getByLabel('Room address, ID, or directory search').fill(name);
-        await joinDialog.getByRole('button', { name: 'Search public rooms' }).click();
-        await joinDialog.locator('.room-directory-results button').filter({ hasText: name }).click();
+        const result = joinDialog.locator('.room-directory-results button').filter({ hasText: name });
+        await until(async () => {
+          if (await result.count()) return true;
+          const search = joinDialog.getByRole('button', { name: 'Search public rooms' });
+          if (await search.isEnabled()) await search.click();
+          return false;
+        }, stage);
+        await result.click();
         await joinDialog.getByRole('button', { name: 'Request to join' }).click();
         await joinDialog.waitFor({ state: 'hidden' });
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.member/${encode(outsider.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'knock', stage);
@@ -471,16 +479,21 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.getByRole('button', { name: 'Send message', exact: true }).click();
         const delivery = await encryptedSend;
         invariant(delivery.ok() && !JSON.stringify(delivery.request().postDataJSON()).includes(marker), stage);
+        stage = 'upgrade-peer-old-room-list';
+        await bob.reload();
+        await bob.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await bob.locator(`.buddy-row[data-room-id="${upgradeRoomId}"]`).click();
+        const oldConversation = bob.locator('main.conversation');
         stage = 'upgrade-old-room-guidance';
-        await alice.reload();
-        await alice.locator(`.buddy-row[data-room-id="${upgradeRoomId}"]`).click();
-        await alice.getByText('This room was upgraded.', { exact: false }).waitFor();
-        invariant(await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).getAttribute('contenteditable') === 'false', stage);
-        await alice.locator('main.conversation').getByRole('button', { name: 'Open replacement room' }).click();
-        await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage);
+        await oldConversation.getByText('This room was upgraded.', { exact: false }).waitFor();
+        invariant(await oldConversation.getByRole('textbox', { name: /^Message / }).getAttribute('contenteditable') === 'false', stage);
+        stage = 'upgrade-peer-open-replacement';
+        await oldConversation.getByRole('button', { name: 'Open replacement room' }).click();
+        await until(async () => await oldConversation.getAttribute('data-room-id') === replacementId, stage);
         stage = 'upgrade-restore-daily-room';
         await openRoom(alice, roomName);
         invariant(await alice.locator('main.conversation').getAttribute('data-room-id') === roomId, stage);
+        await openRoom(bob, roomName);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
@@ -1864,6 +1877,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const threadCard = home.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
         await until(async () => {
           if (await threadCard.count()) return true;
+          invariant(await home.getByRole('alert').count() === 0, stage);
           const more = home.getByRole('button', { name: 'Check more threads', exact: true });
           if (await more.isVisible().catch(() => false) && await more.isEnabled()) await more.click();
           return false;
@@ -1878,6 +1892,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const secondCard = secondHome.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
         await until(async () => {
           if (await secondCard.count()) return true;
+          invariant(await secondHome.getByRole('alert').count() === 0, stage);
           const more = secondHome.getByRole('button', { name: 'Check more threads', exact: true });
           if (await more.isVisible().catch(() => false) && await more.isEnabled()) await more.click();
           return false;

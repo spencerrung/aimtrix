@@ -3594,12 +3594,41 @@ export function Workspace({
     setActiveThreadRootId(undefined);
   }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
+  const [pendingReplacementRoom, setPendingReplacementRoom] = useState<{ roomId: string; intent: number; startedAt: number }>();
   const openReplacementRoom = useCallback((roomId: string) => {
     const open = () => selectRoom(roomId, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace);
     if (workspace.rooms.some((room) => room.id === roomId && room.membership === 'join')) { open(); return; }
     if (!onJoinRoom) { setNotice('The replacement room is unavailable. Try its room ID from Join room after sync.'); return; }
-    void onJoinRoom(roomId).then(open).catch(() => setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.'));
+    const intent = navigationIntent.current;
+    setNotice('Opening replacement room…');
+    void onJoinRoom(roomId).then(() => {
+      if (navigationIntent.current === intent) setPendingReplacementRoom({ roomId, intent, startedAt: Date.now() });
+    }).catch(() => {
+      if (navigationIntent.current === intent) setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.');
+    });
   }, [activeSpace, onJoinRoom, selectRoom, workspace.rooms, workspace.spaces]);
+
+  useEffect(() => {
+    if (!pendingReplacementRoom) return;
+    let active = true;
+    if (navigationIntent.current !== pendingReplacementRoom.intent) {
+      queueMicrotask(() => { if (active) setPendingReplacementRoom(undefined); });
+      return () => { active = false; };
+    }
+    if (workspace.rooms.some((room) => room.id === pendingReplacementRoom.roomId && room.membership === 'join')) {
+      queueMicrotask(() => {
+        if (!active) return;
+        selectRoom(pendingReplacementRoom.roomId, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace);
+        setPendingReplacementRoom(undefined);
+      });
+      return () => { active = false; };
+    }
+    const timeout = window.setTimeout(() => {
+      setPendingReplacementRoom(undefined);
+      setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.');
+    }, Math.max(0, pendingReplacementRoom.startedAt + 15000 - Date.now()));
+    return () => { active = false; window.clearTimeout(timeout); };
+  }, [activeSpace, pendingReplacementRoom, selectRoom, workspace.rooms, workspace.spaces]);
 
 
   useEffect(() => {
@@ -3777,6 +3806,7 @@ export function Workspace({
       const actions = attachmentActions.get('current')!;
       if (!actions.draftsState.isActive()) throw new Error('This draft account is no longer active.');
       if (actions.workspace.mode === 'matrix') {
+        if (actions.workspace.rooms.some((room) => room.id === context.roomId && room.replacementRoomId)) throw new Error('This room was upgraded. Open the replacement room to send an attachment.');
         if (!actions.onUploadAttachment) throw new Error('Attachment sending is unavailable.');
         await actions.onUploadAttachment(context.roomId, file, progress, context.threadRootId, codeLanguage, options);
       } else {
@@ -3815,11 +3845,13 @@ export function Workspace({
   useEffect(() => { onDraftStateChange?.({ hasDrafts: hasSavedDrafts, volatile: draftsVolatile, hasAttachments: hasStagedFiles, sending: anySending }); }, [onDraftStateChange, hasSavedDrafts, draftsVolatile, hasStagedFiles, anySending]);
   const stageFiles = (files: File[], threadRootId?: string, codeLanguage?: string) => {
     if (!effectiveRoomId || !draftsState.isActive()) return;
+    if (workspace.mode === 'matrix' && workspace.rooms.some((room) => room.id === effectiveRoomId && room.replacementRoomId)) { setNotice('This room was upgraded. Open the replacement room to send an attachment.'); return; }
     const errors = attachmentQueue.stage({ roomId: effectiveRoomId, ...(threadRootId ? { threadRootId } : {}) }, files, codeLanguage);
     if (errors.length) setNotice(errors.join(' '));
   };
   const sendRecordedVoice = async (target: { roomId: string; threadRootId?: string }, file: File, durationMs: number, waveform?: number[]) => {
     if (!draftsState.isActive()) throw new Error('This account is no longer active.');
+    if (workspace.mode === 'matrix' && workspace.rooms.some((room) => room.id === target.roomId && room.replacementRoomId)) throw new Error('This room was upgraded. Open the replacement room to send a voice message.');
     const context = { roomId: target.roomId, ...(target.threadRootId ? { threadRootId: target.threadRootId } : {}) };
     const before = new Set(attachmentQueue.list(context).map((item) => item.id));
     const errors = attachmentQueue.stage(context, [file], undefined, { durationMs, waveform });
@@ -3831,6 +3863,7 @@ export function Workspace({
 
   const sendGif = async (gif: GifChoice, threadRootId?: string) => {
     if (!effectiveRoomId || !draftsState.isActive()) throw new Error('This conversation is unavailable.');
+    if (workspace.mode === 'matrix' && workspace.rooms.some((room) => room.id === effectiveRoomId && room.replacementRoomId)) throw new Error('This room was upgraded. Open the replacement room to send a GIF.');
     const mediaKey = JSON.stringify({ roomId: effectiveRoomId, threadRootId });
     setMediaSends((current) => ({ ...current, [mediaKey]: (current[mediaKey] ?? 0) + 1 }));
     try {
@@ -3861,6 +3894,7 @@ export function Workspace({
 
   const sendSticker = async (sticker: { id: string; name: string; src: string }, threadRootId?: string) => {
     if (!effectiveRoomId || !draftsState.isActive()) throw new Error('This conversation is unavailable.');
+    if (workspace.mode === 'matrix' && workspace.rooms.some((room) => room.id === effectiveRoomId && room.replacementRoomId)) throw new Error('This room was upgraded. Open the replacement room to send a sticker.');
     const mediaKey = JSON.stringify({ roomId: effectiveRoomId, threadRootId });
     setMediaSends((current) => ({ ...current, [mediaKey]: (current[mediaKey] ?? 0) + 1 }));
     try {
@@ -4365,6 +4399,7 @@ export function Workspace({
             onMarkRead={workspace.mode === 'matrix' && onMarkRoomRead && effectiveRoomId ? (eventId) => onMarkRoomRead(effectiveRoomId, { eventId, explicit: true }) : undefined}
             onSendNudge={onSendNudge ? () => {
               if (!effectiveRoomId || !onSendNudge) return;
+              if (workspace.mode === 'matrix' && workspace.rooms.some((room) => room.id === effectiveRoomId && room.replacementRoomId)) { setNotice('This room was upgraded. Open the replacement room to send a nudge.'); return; }
               if (Date.now() - lastNudgeSentAt.current < 5_000) {
                 setNotice('Please wait a few seconds before sending another nudge.');
                 return;
@@ -4447,8 +4482,14 @@ export function Workspace({
           />
         ) : null}
 
-        {locationTarget && onSendLocation ? <Suspense fallback={null}><LocationDialog roomName={locationTarget.roomName} onClose={() => setLocationTarget(undefined)} onSend={(latitude, longitude, description) => onSendLocation(locationTarget.roomId, latitude, longitude, description, locationTarget.threadRootId)} /></Suspense> : null}
-        {pollTarget && onSendPoll ? <Suspense fallback={null}><PollDialog roomName={pollTarget.roomName} onClose={() => setPollTarget(undefined)} onSend={(question, answers, disclosed) => onSendPoll(pollTarget.roomId, question, answers, disclosed, pollTarget.threadRootId)} /></Suspense> : null}
+        {locationTarget && onSendLocation ? <Suspense fallback={null}><LocationDialog roomName={locationTarget.roomName} onClose={() => setLocationTarget(undefined)} onSend={(latitude, longitude, description) => {
+          if (workspace.rooms.some((room) => room.id === locationTarget.roomId && room.replacementRoomId)) throw new Error('This room was upgraded. Open the replacement room to share a location.');
+          return onSendLocation(locationTarget.roomId, latitude, longitude, description, locationTarget.threadRootId);
+        }} /></Suspense> : null}
+        {pollTarget && onSendPoll ? <Suspense fallback={null}><PollDialog roomName={pollTarget.roomName} onClose={() => setPollTarget(undefined)} onSend={(question, answers, disclosed) => {
+          if (workspace.rooms.some((room) => room.id === pollTarget.roomId && room.replacementRoomId)) throw new Error('This room was upgraded. Open the replacement room to create a poll.');
+          return onSendPoll(pollTarget.roomId, question, answers, disclosed, pollTarget.threadRootId);
+        }} /></Suspense> : null}
         {voiceTarget ? <Suspense fallback={null}><VoiceRecorderDialog roomName={voiceTarget.roomName} maxBytes={config.media.maxUploadBytes} microphoneId={preferences.microphoneId} onClose={() => setVoiceTarget(undefined)} onSend={(file, durationMs, waveform) => sendRecordedVoice(voiceTarget, file, durationMs, waveform)} /></Suspense> : null}
 
         {backgroundDialogOpen && selectedRoomConfigured ? (
