@@ -2,8 +2,12 @@ import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 
 test.beforeEach(async ({ page }) => {
+  // Vite can compile the first demo module graph while two browser workers
+  // start together. Keep a finite startup bound without mistaking that cold
+  // compilation for a broken workspace.
+  test.setTimeout(60_000);
   await page.goto('/?demo=1');
-  await expect(page.getByText('Welcome Lounge', { exact: true }).first()).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Welcome Lounge', { exact: true }).first()).toBeVisible({ timeout: 45_000 });
 });
 
 test('workspace navigation, drawer, and personalization are functional', async ({ page }, testInfo) => {
