@@ -13,6 +13,8 @@ export const checkNames = new Set([
   'durable-room-thread-drafts-and-reattach', 'formatted-api-peer-interoperability', 'element-ui-formatted-interoperability',
   'saved-reference-own-device-and-context', 'shared-pins-and-member-permission', 'old-cross-room-server-search-and-context',
   'shared-backdrop-and-permissions', 'moderation-role-kick-ban-unban',
+  'room-access-and-discovery-administration',
+  'space-child-parent-and-recommendation-administration',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback', 'standard-sso-recovery-guidance',
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
@@ -37,6 +39,8 @@ failureCategories.push('sso-recovery-outcome', 'sso-recovery-passphrase-retained
 failureCategories.push('cache-reload-timeout');
 failureCategories.push('sustained-sync-room', 'sustained-sync-bounded-timeline', 'sustained-sync-duration');
 failureCategories.push('first-use-guide', 'first-use-create-direct', 'first-use-standard-direct', 'first-use-encryption-state', 'first-use-opened-room', 'first-use-open-details', 'first-use-peer-membership', 'first-use-encrypted-wire', 'first-use-peer-decryption');
+failureCategories.push('admin-open-drawer', 'admin-Who may join', 'admin-Who may see history', 'admin-Guest access', 'admin-member-denied', 'admin-alias-create', 'admin-directory', 'admin-acl', 'admin-alias-remove');
+failureCategories.push('space-create-parent', 'space-create-child', 'space-open-parent', 'space-add-room', 'space-add-subspace', 'space-remove-subspace', 'space-remove-room');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
