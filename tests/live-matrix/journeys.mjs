@@ -317,7 +317,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const publicWrite = alice.waitForResponse((response) => new URL(response.url()).pathname === directoryPath && response.request().method() === 'PUT');
         await publicConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
         const publicResponse = await publicWrite;
-        if (!publicResponse.ok()) { stage = 'admin-directory-write-rejected'; throw new Error(stage); }
+        if (!publicResponse.ok()) { stage = publicResponse.status() === 403 ? 'admin-directory-write-forbidden' : publicResponse.status() === 400 ? 'admin-directory-write-invalid' : 'admin-directory-write-rejected'; throw new Error(stage); }
         stage = 'admin-directory-close';
         try { await publicConfirmation.waitFor({ state: 'hidden', timeout: 5000 }); }
         catch {
