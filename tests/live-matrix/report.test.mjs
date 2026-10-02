@@ -144,8 +144,10 @@ test('community administration evidence keeps only fixed stages', () => {
     const result = makeReport({ ...base, failureStage: name,
       checks: [{ name, passed: false, category: 'space-add-subspace', durationMs: 120,
         roomId: privateValue, alias: privateValue, serverAcl: privateValue, state: privateValue }],
+      metrics: { communityBeforeDirectoryMs: 1200, roomId: privateValue },
     });
     assert.deepEqual(result.checks, [{ name, passed: false, category: 'space-add-subspace', durationMs: 120 }]);
+    assert.deepEqual(result.metrics, { communityBeforeDirectoryMs: 1200 });
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
