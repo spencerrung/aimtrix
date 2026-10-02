@@ -97,7 +97,9 @@ test('error feedback and shared media viewer remain accessible across themes', a
   if (info.project.name.includes('mobile')) {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
     await page.getByRole('button', { name: 'Back to previous view' }).click();
-    await page.getByRole('button', { name: 'Direct Messages', exact: true }).click();
+    const directs = page.getByRole('button', { name: 'Direct Messages', exact: true });
+    await directs.focus();
+    await directs.press('Enter');
   }
   await page.getByRole('button', { name: /Mara Chen/ }).click();
   await page.getByRole('button', { name: 'View aimtrix-mark.svg full size' }).click();
