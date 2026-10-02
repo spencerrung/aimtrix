@@ -44,7 +44,9 @@ try {
   await page.getByRole('searchbox', { name: 'Search conversations' }).fill(lastRoom);
   await page.getByRole('button', { name: new RegExp(lastRoom) }).click();
   await page.getByRole('main', { name: `Conversation with ${lastRoom}` }).waitFor();
+  await page.getByRole('searchbox', { name: 'Search conversations' }).fill('');
   const initialRows = await page.locator('.buddy-row').count();
+  if (rooms >= 100 && (initialRows < 100 || initialRows > 101)) throw new Error('normal paged room list is not visible');
 
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Performance.enable');
@@ -61,7 +63,7 @@ try {
   let revision = 0;
   while (performance.now() - started < seconds * 1000) {
     const cycleStarted = performance.now();
-    await page.evaluate((target) => window.largeAccountFixture.publish(target), revision % 2 ? 'hidden' : 'visible');
+    await page.evaluate((target) => window.largeAccountFixture.publish(target), revision % 2 ? 'offpage' : 'visible');
     revision += 1;
     await page.waitForFunction((expected) => window.largeAccountFixture.revision === expected, revision, { timeout: 30_000 });
     latencies.push(performance.now() - cycleStarted);

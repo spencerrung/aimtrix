@@ -14,7 +14,7 @@ declare global {
     largeAccountFixture: {
       readyAt: number;
       revision: number;
-      publish: (target?: 'hidden' | 'visible') => void;
+      publish: (target?: 'hidden' | 'visible' | 'offpage') => void;
     };
   }
 }
@@ -74,7 +74,7 @@ function Fixture() {
     window.largeAccountFixture.readyAt ||= performance.now();
     window.largeAccountFixture.revision = revision;
     window.largeAccountFixture.publish = (target = 'hidden') => {
-      const roomId = target === 'visible' ? lastRoomId : firstRoomId;
+      const roomId = target === 'visible' ? lastRoomId : target === 'offpage' ? rooms[Math.floor(count / 2)].id : firstRoomId;
       setWorkspace((current) => ({
         ...current,
         rooms: current.rooms.map((room) => room.id === roomId
