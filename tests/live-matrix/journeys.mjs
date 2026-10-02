@@ -409,8 +409,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(replacement.room_version === versions.default, 'upgrade-version-readback');
         stage = 'upgrade-replacement-membership';
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
-        stage = 'upgrade-open-replacement';
-        await admin.getByRole('button', { name: 'Open replacement room' }).click();
+        stage = 'upgrade-replacement-control';
+        if (await alice.locator('main.conversation').getAttribute('data-room-id') !== replacementId) {
+          try { await admin.getByRole('button', { name: 'Open replacement room' }).waitFor({ timeout: 10000 }); }
+          catch {
+            stage = await admin.getByText('Room upgrade saved on the homeserver.').isVisible().catch(() => false)
+              ? 'upgrade-control-lost-after-save' : 'upgrade-control-lost-before-save';
+            throw new Error(stage);
+          }
+          stage = 'upgrade-open-replacement';
+          await admin.getByRole('button', { name: 'Open replacement room' }).click();
+        }
         try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
         catch {
           stage = await alice.getByText('The replacement room could not be opened yet. Try its room ID from Join room after sync.').isVisible()
