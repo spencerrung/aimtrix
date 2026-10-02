@@ -141,11 +141,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await conversation.waitFor({ timeout: 45000 });
         const composer = conversation.getByRole('textbox', { name: /^Message / });
         await composer.waitFor();
+        stage = 'first-use-open-details';
+        const people = alice.getByRole('tab', { name: 'People' });
+        if (!await people.isVisible()) await conversation.getByRole('button', { name: 'Toggle room details' }).click();
+        await people.click();
         stage = 'first-use-peer-membership';
-        await conversation.getByRole('button', { name: 'Toggle room details' }).click();
-        await alice.getByRole('tab', { name: 'People' }).click();
         await alice.locator('.member-row').filter({ hasText: /bob/i, hasNotText: /Invited/i }).waitFor({ timeout: 45000 });
-        await conversation.getByRole('button', { name: 'Toggle room details' }).click();
         const marker = `Synthetic first encrypted chat ${randomBytes(8).toString('hex')}`;
         await composer.fill(marker);
         stage = 'first-use-encrypted-wire';

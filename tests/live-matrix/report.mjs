@@ -36,7 +36,7 @@ failureCategories.push('verification-new-device', 'verification-distinct-device'
 failureCategories.push('sso-recovery-outcome', 'sso-recovery-passphrase-retained', 'sso-recovery-no-key-export', 'sso-recovery-key-generated', 'sso-recovery-distinct-device', 'sso-recovery-key-cleared');
 failureCategories.push('cache-reload-timeout');
 failureCategories.push('sustained-sync-room', 'sustained-sync-bounded-timeline', 'sustained-sync-duration');
-failureCategories.push('first-use-guide', 'first-use-create-direct', 'first-use-standard-direct', 'first-use-encryption-state', 'first-use-opened-room', 'first-use-peer-membership', 'first-use-encrypted-wire', 'first-use-peer-decryption');
+failureCategories.push('first-use-guide', 'first-use-create-direct', 'first-use-standard-direct', 'first-use-encryption-state', 'first-use-opened-room', 'first-use-open-details', 'first-use-peer-membership', 'first-use-encrypted-wire', 'first-use-peer-decryption');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
