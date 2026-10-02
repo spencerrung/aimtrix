@@ -427,6 +427,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           throw new Error(stage);
         }
         await alice.getByRole('main', { name }).waitFor();
+        stage = 'upgrade-restore-daily-room';
+        await openRoom(alice, roomName);
+        invariant(await alice.locator('main.conversation').getAttribute('data-room-id') === roomId, stage);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
