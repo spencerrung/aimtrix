@@ -287,8 +287,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
             if (element.getClientRects().length === 0) return 'hidden';
             if (element.disabled) return 'disabled';
             if (!Array.from(element.options).some((option) => option.value === value)) return 'option-missing';
-            element.value = value;
-            element.dispatchEvent(new Event('input', { bubbles: true }));
+            const nativeSetter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set;
+            if (!nativeSetter) return 'missing';
+            nativeSetter.call(element, value);
             element.dispatchEvent(new Event('change', { bubbles: true }));
             return 'dispatched';
           }, visibility);
