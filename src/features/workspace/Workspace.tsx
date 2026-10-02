@@ -1524,6 +1524,7 @@ function Conversation({
   editingMessage,
   editingThreadMessage,
   onBack,
+  onOpenReplacement,
   onSubmit,
   onThreadSubmit,
   onToggleDetails,
@@ -1613,6 +1614,7 @@ function Conversation({
   editingMessage?: MessageSummary;
   editingThreadMessage?: MessageSummary;
   onBack: () => void;
+  onOpenReplacement?: (roomId: string) => void;
   onSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
   onThreadSubmit: (body?: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<ComposerSubmitResult>;
   onToggleDetails: () => void;
@@ -2330,6 +2332,7 @@ function Conversation({
         {readAction?.roomId === room.id ? readAction.pending ? <p role="status">Saving read status…</p> : readAction.error ? <p role="alert">{readAction.error}</p> : readAction.status ? <p role="status">{readAction.status}</p> : null : null}
       </Popover>, document.body) : null}
       <div className="conversation-history-controls">
+      {room.replacementRoomId ? <div className="history-context" role="status"><p>This room was upgraded. Its history remains here; send new messages in the replacement room.</p>{onOpenReplacement ? <button type="button" className="aqua-button" onClick={() => onOpenReplacement(room.replacementRoomId!)}>Open replacement room</button> : null}</div> : null}
       {room.markedUnread ? <div className="history-context"><p>Marked unread for later.</p>{room.unreadEventId ? <button type="button" className="aqua-button" disabled={Boolean(historyLoading)} onClick={() => void openContext(room.unreadEventId!)}>Return to saved message</button> : null}</div> : null}
 
 
@@ -2514,8 +2517,9 @@ function Conversation({
             {onLatestThread && activeThread.history?.mode !== 'live' ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><button type="button" disabled={threadHistoryBusy} onClick={latestThread}>Jump to latest replies</button></div> : null}
             {threadReadError?.roomId === room.id && threadReadError.rootId === activeThread.rootId ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" disabled={threadHistoryBusy || Boolean(activeThread.history && activeThread.history.mode !== 'live')} title={activeThread.history && activeThread.history.mode !== 'live' ? 'Jump to latest replies to retry this observed read status' : undefined} onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
           {notice ? <p className="history-feedback" role="status">{notice}</p> : null}
-          {!threadComposition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id, threadRootId: activeThread.rootId }} /> : null}
+          {!room.replacementRoomId && !threadComposition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id, threadRootId: activeThread.rootId }} /> : null}
           <SharedComposer ref={threadComposer} key={`${room.id}:${activeThread.rootId}`} contextKey={JSON.stringify([room.id, activeThread.rootId])}
+            disabled={Boolean(room.replacementRoomId)}
             value={threadComposition} onChange={onThreadCompositionChange} onSubmit={onThreadSubmit}
             thread active={contextPanel === 'thread' && !threadCollapsed} sending={threadSending}
             members={members} roomName={room.name} emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl}
@@ -2544,8 +2548,9 @@ function Conversation({
         {notice ? <>{notice}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
       </div>
       <div className="conversation-composition">
-      {!composition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id }} /> : null}
+      {!room.replacementRoomId && !composition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id }} /> : null}
       <SharedComposer ref={mainComposer} key={room.id} contextKey={JSON.stringify([room.id, null])}
+        disabled={Boolean(room.replacementRoomId)}
         value={composition} onChange={onCompositionChange} onSubmit={onSubmit}
         active={conversationVisible} sending={sending} members={members} roomName={room.name}
         emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl} stickerPacks={stickerPacks}
@@ -3589,6 +3594,13 @@ export function Workspace({
     setActiveThreadRootId(undefined);
   }, [activeSpace, contextDocked, navigateShell, shellRoute.panel]);
 
+  const openReplacementRoom = useCallback((roomId: string) => {
+    const open = () => selectRoom(roomId, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace);
+    if (workspace.rooms.some((room) => room.id === roomId && room.membership === 'join')) { open(); return; }
+    if (!onJoinRoom) { setNotice('The replacement room is unavailable. Try its room ID from Join room after sync.'); return; }
+    void onJoinRoom(roomId).then(open).catch(() => setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.'));
+  }, [activeSpace, onJoinRoom, selectRoom, workspace.rooms, workspace.spaces]);
+
 
   useEffect(() => {
     try {
@@ -4014,6 +4026,10 @@ export function Workspace({
   };
 
   const submitComposition = async (context: DraftContext, bodyOverride?: string, mentions: ComposerMention[] = [], inlineEmojis: ComposerInlineEmoji[] = []): Promise<ComposerSubmitResult> => {
+    if (workspace.mode === 'matrix' && workspace.rooms.some((room) => room.id === context.roomId && room.replacementRoomId)) {
+      setNotice('This room was upgraded. Open the replacement room to send a new message.');
+      return false;
+    }
     const submitted = draftsState.capture(context);
     const body = (bodyOverride ?? submitted.value.body).trim();
     const key = JSON.stringify(context);
@@ -4266,6 +4282,7 @@ export function Workspace({
             onCloseContext={closePanel}
             onRevealConversation={() => { suppressContextReturnFocus.current = true; closePanel(); }}
             room={selectedRoom}
+            onOpenReplacement={workspace.mode === 'matrix' ? openReplacementRoom : undefined}
             history={selectedHistory}
             navigationEntry={restoration.entryId}
             navigationReading={restoration.reading}
@@ -4383,10 +4400,7 @@ export function Workspace({
               dataSaver={preferences.dataSaver}
               onUpdateRoom={onUpdateRoom}
               roomAdministration={workspace.mode === 'matrix' ? roomAdministration : undefined}
-              onOpenReplacement={(replacementId) => {
-                if (!onJoinRoom) return;
-                void onJoinRoom(replacementId).then(() => selectRoom(replacementId)).catch(() => setNotice('The replacement room could not be opened yet. Try its room ID from Join room after sync.'));
-              }}
+              onOpenReplacement={openReplacementRoom}
               onUpdateAvatar={onUpdateRoomAvatar}
               onUploadBackground={workspace.mode === 'matrix' ? onUploadRoomBackground : undefined}
               onSetBackground={setConversationBackground}

@@ -237,10 +237,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.getByRole('dialog', { name: `Remove ${childName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
         await until(async () => Object.keys(await api(childPath(childId), { token: aliceSession.accessToken })).length === 0, 'space-child-removed');
         await until(async () => Object.keys(await api(parentPath, { token: aliceSession.accessToken })).length === 0, 'space-parent-removed');
+        await parentManage.locator('li').filter({ hasText: childName }).waitFor({ state: 'detached' });
         stage = 'space-remove-room';
         await parentManage.locator('li').filter({ hasText: roomName }).getByRole('button', { name: 'Remove' }).click();
         await alice.getByRole('dialog', { name: `Remove ${roomName} from ${parentName}?` }).getByRole('button', { name: 'Remove from space' }).click();
         await until(async () => Object.keys(await api(childPath(roomId), { token: aliceSession.accessToken })).length === 0, 'space-room-removed');
+        stage = 'space-partial-write-candidate';
+        await parentManage.getByLabel('Find a joined room or subspace').fill(childName);
+        await parentManage.getByRole('button', { name: childName, exact: true }).waitFor();
         stage = 'space-partial-write-rollback';
         let rejectParentWrite = true;
         const denyParentWrite = async (route) => {
@@ -251,7 +255,6 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         };
         await alice.route('**/_matrix/client/v3/rooms/*/state/m.space.parent/*', denyParentWrite);
         try {
-          await parentManage.getByLabel('Find a joined room or subspace').fill(childName);
           await parentManage.getByRole('button', { name: childName, exact: true }).click();
           await parentManage.getByRole('button', { name: 'Add to space' }).click();
           await parentManage.getByRole('alert').getByText('The subspace parent link failed. The child link was rolled back.').waitFor();
@@ -396,7 +399,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         } });
         const upgradeRoomId = created.room_id;
         invariant(typeof upgradeRoomId === 'string', stage);
-        const outsider = await register(api, stack, `knocker${randomBytes(3).toString('hex')}`);
+        const outsiderName = `knocker${randomBytes(3).toString('hex')}`;
+        const outsider = await register(api, stack, outsiderName);
         stage = 'upgrade-open-room';
         await alice.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
         await openRoom(alice, name);
@@ -408,8 +412,19 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await admin.getByLabel('Who may join').selectOption('knock');
         await alice.getByRole('dialog').getByRole('button', { name: 'Save join rule' }).click();
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.join_rules`, { token: aliceSession.accessToken })).join_rule === 'knock', stage);
+        stage = 'upgrade-publish-knock';
+        await api(`/_matrix/client/v3/directory/list/room/${encode(upgradeRoomId)}`, { token: aliceSession.accessToken, method: 'PUT', body: { visibility: 'public' } });
+        await until(async () => (await api(`/_matrix/client/v3/directory/list/room/${encode(upgradeRoomId)}`, { token: aliceSession.accessToken })).visibility === 'public', stage);
         stage = 'upgrade-outsider-knock';
-        await api(`/_matrix/client/v3/knock/${encode(upgradeRoomId)}`, { token: outsider.access_token, method: 'POST', body: { reason: 'Synthetic request to join' } });
+        const outsiderPage = await newPage();
+        await login(outsiderPage, stack.origins.app, outsiderName, stack.credentials.password);
+        await outsiderPage.getByRole('button', { name: 'Join or create room' }).click();
+        const joinDialog = outsiderPage.getByRole('dialog', { name: 'Add a conversation' });
+        await joinDialog.getByLabel('Room address, ID, or directory search').fill(name);
+        await joinDialog.getByRole('button', { name: 'Search public rooms' }).click();
+        await joinDialog.locator('.room-directory-results button').filter({ hasText: name }).click();
+        await joinDialog.getByRole('button', { name: 'Request to join' }).click();
+        await joinDialog.waitFor({ state: 'hidden' });
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(upgradeRoomId)}/state/m.room.member/${encode(outsider.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'knock', stage);
         stage = 'upgrade-control';
         await admin.getByRole('button', { name: 'Upgrade room' }).waitFor();
@@ -424,6 +439,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }, stage);
         const replacement = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.create`, { token: aliceSession.accessToken });
         invariant(replacement.room_version === versions.default, 'upgrade-version-readback');
+        stage = 'upgrade-encryption-state';
+        const replacementEncryption = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.encryption`, { token: aliceSession.accessToken });
+        invariant(replacementEncryption.algorithm === 'm.megolm.v1.aes-sha2', stage);
         stage = 'upgrade-replacement-membership';
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
         stage = 'upgrade-confirmation-close';
@@ -446,6 +464,20 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           throw new Error(stage);
         }
         await alice.getByRole('main', { name }).waitFor();
+        stage = 'upgrade-encrypted-send';
+        const marker = `Synthetic upgraded-room send ${randomBytes(6).toString('hex')}`;
+        await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).fill(marker);
+        const encryptedSend = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes(`/rooms/${encode(replacementId)}/send/m.room.encrypted/`));
+        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+        const delivery = await encryptedSend;
+        invariant(delivery.ok() && !JSON.stringify(delivery.request().postDataJSON()).includes(marker), stage);
+        stage = 'upgrade-old-room-guidance';
+        await alice.reload();
+        await alice.locator(`.buddy-row[data-room-id="${upgradeRoomId}"]`).click();
+        await alice.getByText('This room was upgraded.', { exact: false }).waitFor();
+        invariant(await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).getAttribute('contenteditable') === 'false', stage);
+        await alice.locator('main.conversation').getByRole('button', { name: 'Open replacement room' }).click();
+        await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage);
         stage = 'upgrade-restore-daily-room';
         await openRoom(alice, roomName);
         invariant(await alice.locator('main.conversation').getAttribute('data-room-id') === roomId, stage);
@@ -1830,6 +1862,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'home-show-thread';
         await home.getByRole('button', { name: 'My threads', exact: true }).click();
         const threadCard = home.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
+        await until(async () => {
+          if (await threadCard.count()) return true;
+          const refresh = home.getByRole('button', { name: 'Refresh activity', exact: true });
+          if (await refresh.isEnabled()) await refresh.click();
+          return false;
+        }, stage, 90000);
         await threadCard.getByRole('button', { name: 'Hide from Home', exact: true }).waitFor();
         invariant((await api(followPath, { token: secondSession.accessToken })).threads?.[formattedPeer.rootId] === true, 'home-follow-account-data');
         await aliceSecond.bringToFront();
@@ -1838,6 +1876,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await secondHome.getByRole('button', { name: 'Refresh activity', exact: true }).click();
         await secondHome.getByRole('button', { name: 'My threads', exact: true }).click();
         const secondCard = secondHome.locator('article').filter({ hasText: 'Synthetic Home followed reply' });
+        await until(async () => {
+          if (await secondCard.count()) return true;
+          const refresh = secondHome.getByRole('button', { name: 'Refresh activity', exact: true });
+          if (await refresh.isEnabled()) await refresh.click();
+          return false;
+        }, stage, 90000);
         await secondCard.getByRole('button', { name: 'Hide from Home', exact: true }).click();
         await secondCard.waitFor({ state: 'hidden' });
         invariant((await api(followPath, { token: aliceSession.accessToken })).threads?.[formattedPeer.rootId] === false, 'home-follow-account-data');

@@ -186,6 +186,22 @@ describe('Workspace demo', () => {
     expect(composer).toBeEmptyDOMElement();
   });
 
+  it('redirects an upgraded room while preserving its old draft and history', async () => {
+    const onSendMessage = vi.fn().mockResolvedValue(undefined);
+    const workspace = {
+      ...demoWorkspace,
+      mode: 'matrix' as const,
+      rooms: demoWorkspace.rooms.map((room) => room.id === 'welcome' ? { ...room, replacementRoomId: 'dev-shack' } : room),
+    };
+    renderWorkspace({ workspace, onSendMessage });
+    expect(screen.getByText(/This room was upgraded/)).toBeInTheDocument();
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    expect(composer).toHaveAttribute('contenteditable', 'false');
+    fireEvent.click(screen.getByRole('button', { name: 'Open replacement room' }));
+    await waitFor(() => expect(screen.getByLabelText('Message Dev Shack')).toBeInTheDocument());
+    expect(onSendMessage).not.toHaveBeenCalled();
+  });
+
   it('keeps one contextual surface while preserving room and thread drafts, search, and details tabs', async () => {
     const { container } = renderWorkspace();
     const assertSinglePanel = () => expect(container.querySelectorAll('.context-panel > :not([hidden])')).toHaveLength(1);
