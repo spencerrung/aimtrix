@@ -450,6 +450,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'upgrade-encryption-state';
         const replacementEncryption = await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.encryption`, { token: aliceSession.accessToken });
         invariant(replacementEncryption.algorithm === 'm.megolm.v1.aes-sha2', stage);
+        stage = 'upgrade-peer-invitation';
+        await until(async () => ['invite', 'join'].includes((await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(accounts.bob.user_id)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership), stage);
         stage = 'upgrade-replacement-membership';
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
         stage = 'upgrade-confirmation-close';
@@ -489,7 +491,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(await oldConversation.getByRole('textbox', { name: /^Message / }).getAttribute('contenteditable') === 'false', stage);
         stage = 'upgrade-peer-open-replacement';
         await oldConversation.getByRole('button', { name: 'Open replacement room' }).click();
-        await until(async () => await oldConversation.getAttribute('data-room-id') === replacementId, stage);
+        await until(async () => {
+          if (await oldConversation.getAttribute('data-room-id') === replacementId) return true;
+          if (await bob.getByText('Could not open replacement. Try Join room.').count()) { stage = 'upgrade-peer-join-failed'; throw new Error(stage); }
+          return false;
+        }, stage);
         stage = 'upgrade-restore-daily-room';
         await openRoom(alice, roomName);
         invariant(await alice.locator('main.conversation').getAttribute('data-room-id') === roomId, stage);
