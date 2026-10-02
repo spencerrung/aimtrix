@@ -409,6 +409,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(replacement.room_version === versions.default, 'upgrade-version-readback');
         stage = 'upgrade-replacement-membership';
         await until(async () => (await api(`/_matrix/client/v3/rooms/${encode(replacementId)}/state/m.room.member/${encode(aliceSession.userId)}`, { token: aliceSession.accessToken }).catch(() => ({}))).membership === 'join', stage);
+        stage = 'upgrade-confirmation-close';
+        await alice.getByRole('dialog', { name: 'Upgrade this room?' }).waitFor({ state: 'hidden', timeout: 45000 });
         stage = 'upgrade-replacement-control';
         if (await alice.locator('main.conversation').getAttribute('data-room-id') !== replacementId) {
           try { await admin.getByRole('button', { name: 'Open replacement room' }).waitFor({ timeout: 10000 }); }
