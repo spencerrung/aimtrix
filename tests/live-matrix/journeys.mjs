@@ -1731,9 +1731,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await admin.getByRole('status').filter({ hasText: 'Alias creation saved on the homeserver.' }).waitFor();
         stage = 'admin-directory';
         await until(async () => admin.getByLabel('Public directory').isEnabled(), 'admin-directory-available', 5000);
-        await admin.getByLabel('Public directory').selectOption('public');
+        // Keyboard selection dispatches the change without requiring the
+        // controlled value to persist before the confirmation is accepted.
+        await admin.getByLabel('Public directory').press('End');
         stage = 'admin-directory-confirm';
-        const publicConfirmation = alice.getByRole('dialog');
+        const publicConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
+        await publicConfirmation.waitFor();
         await publicConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
         await publicConfirmation.waitFor({ state: 'hidden' });
         stage = 'admin-directory-readback';
@@ -1749,9 +1752,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           return acl.allow?.includes('*') && acl.deny?.length === 1 && acl.deny[0] === 'blocked.invalid';
         }, 'admin-acl-readback');
         stage = 'admin-directory-private';
-        await admin.getByLabel('Public directory').selectOption('private');
+        await admin.getByLabel('Public directory').press('Home');
         stage = 'admin-directory-private-confirm';
-        const privateConfirmation = alice.getByRole('dialog');
+        const privateConfirmation = alice.getByRole('dialog', { name: 'Change public directory listing?' });
+        await privateConfirmation.waitFor();
         await privateConfirmation.getByRole('button', { name: 'Save directory listing' }).click();
         await privateConfirmation.waitFor({ state: 'hidden' });
         stage = 'admin-directory-private-readback';
