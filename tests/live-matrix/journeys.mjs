@@ -538,7 +538,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
             throw new Error(stage);
           }
           stage = 'upgrade-open-replacement';
-          await admin.getByRole('button', { name: 'Open replacement room' }).click();
+          // Sync may select the replacement and close the old-room controls
+          // between the check above and this click. Either path must land in
+          // the replacement; the assertion below distinguishes a real failure.
+          await admin.getByRole('button', { name: 'Open replacement room' }).click({ timeout: 5000 }).catch(() => {});
         }
         try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
         catch {
