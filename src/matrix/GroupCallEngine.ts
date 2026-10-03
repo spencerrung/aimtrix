@@ -157,7 +157,23 @@ export class GroupCallEngine {
       phase = 'encryption';
       await room.setE2EEEnabled(true);
       if (this.abort.signal.aborted) { await this.release(); return; }
-      if (!room.isE2EEEnabled) throw new Error('The group call could not enable media encryption.');
+      // LiveKit acknowledges setE2EEEnabled before its worker reports the local
+      // encryption state. Wait for that report before enabling capture.
+      if (!room.isE2EEEnabled) await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error): void => {
+          window.clearTimeout(timer);
+          room.off(RoomEvent.ParticipantEncryptionStatusChanged, changed);
+          this.abort.signal.removeEventListener('abort', aborted);
+          if (error) reject(error); else resolve();
+        };
+        const changed = (): void => { if (room.isE2EEEnabled) finish(); };
+        const aborted = (): void => finish(new Error('The call was cancelled.'));
+        const timer = window.setTimeout(() => finish(new Error('The group call could not enable media encryption.')), 10_000);
+        room.on(RoomEvent.ParticipantEncryptionStatusChanged, changed);
+        this.abort.signal.addEventListener('abort', aborted, { once: true });
+        changed();
+      });
+      if (this.abort.signal.aborted) { await this.release(); return; }
       phase = 'microphone';
       if (microphoneEnabled) await room.localParticipant.setMicrophoneEnabled(true, devices.microphoneId ? { deviceId: { exact: devices.microphoneId } } : undefined);
       if (this.abort.signal.aborted) { await this.release(); return; }
