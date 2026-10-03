@@ -114,6 +114,11 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         metrics.largeAccountHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapBefore) / 2 ** 20));
       }
       invariant(metrics.largeAccountDeepRoomReadyMs <= readinessLimitMs, 'large-account-ready-budget');
+      if (roomCount === 10000) {
+        invariant(metrics.largeAccountDeepRoomReadyMs <= 300000, 'large-account-full-room-budget');
+        invariant(metrics.largeAccountDeepRoomOpenMs <= 1500, 'large-account-navigation-budget');
+        invariant(metrics.largeAccountHeapGrowthMiB <= 256, 'large-account-cold-memory-budget');
+      }
     });
     if (sustained) {
       const timeline = page.getByRole('region', { name: 'Messages', exact: true });
@@ -174,6 +179,10 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         if (endingRenderer.JSEventListeners !== undefined) metrics.largeAccountIncrementalListenersAt300 = endingRenderer.JSEventListeners;
         if (heapStart !== undefined && heapAfter !== undefined) {
           metrics.largeAccountIncrementalHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapStart) / 2 ** 20));
+        }
+        if (roomCount === 10000) {
+          invariant(metrics.largeAccountIncrementalP95Ms <= 1500, 'large-account-delivery-budget');
+          invariant(metrics.largeAccountIncrementalHeapGrowthMiB <= 64, 'large-account-sustained-memory-budget');
         }
         invariant(metrics.largeAccountIncrementalDurationMs >= 600000, 'large-account-sustained-duration');
       });
