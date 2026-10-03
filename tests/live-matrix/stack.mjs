@@ -209,9 +209,22 @@ http {
       until(async () => {
         try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
       }, delegatedAuth ? 'mas-synapse-readiness' : 'stack-readiness', 60000),
-      until(async () => {
-        try { return (await fetch(delegatedAuth ? `${origins.mas}/.well-known/openid-configuration` : `${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
-      }, delegatedAuth ? 'mas-discovery-readiness' : 'stack-readiness', 60000),
+      (async () => {
+        try {
+          await until(async () => {
+            try { return (await fetch(delegatedAuth ? `${origins.mas}/.well-known/openid-configuration` : `${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
+          }, delegatedAuth ? 'mas-discovery-readiness' : 'stack-readiness', 60000);
+        } catch (error) {
+          if (!delegatedAuth) throw error;
+          const id = await compose('ps', '--all', '-q', 'mas');
+          if (!id) throw new Error('mas-container-missing', { cause: error });
+          const [info] = JSON.parse(await command('docker', ['inspect', id]));
+          if (info.State?.Status !== 'running') throw new Error('mas-container-exited', { cause: error });
+          let status = 0;
+          try { status = (await fetch(`${origins.mas}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).status; } catch { /* no response */ }
+          throw new Error(status === 404 ? 'mas-discovery-404' : status >= 500 ? 'mas-discovery-5xx' : 'mas-discovery-unreachable', { cause: error });
+        }
+      })(),
     ]);
     if (elementUi) await until(async () => {
       try { return (await fetch(`${origins.element}/config.json`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
