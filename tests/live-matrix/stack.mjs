@@ -70,6 +70,8 @@ export async function createStack({ elementUi = false, syncResponseCache = false
     if (/policy|rego|\bopa\b/.test(sample)) return 'mas-runtime-policy';
     if (/synapse|homeserver/.test(sample)) return 'mas-runtime-homeserver';
     if (/template|assets|file not found/.test(sample)) return 'mas-runtime-assets';
+    if (sample.includes('address already in use')) return 'mas-runtime-bind-in-use';
+    if (sample.includes('cannot assign requested address')) return 'mas-runtime-bind-unavailable';
     if (/bind|listen|address already in use/.test(sample)) return 'mas-runtime-bind';
     if (/config|invalid|missing/.test(sample)) return 'mas-runtime-config';
     return 'mas-runtime-unknown';
@@ -120,7 +122,7 @@ export async function createStack({ elementUi = false, syncResponseCache = false
       rc_message: { per_second: 100, burst_count: 1000 }, rc_login: { address: { per_second: 100, burst_count: 1000 }, account: { per_second: 100, burst_count: 1000 } },
       ...(largeAccount ? { rc_room_creation: { per_second: 100, burst_count: 10000 } } : {}),
       suppress_key_server_warning: true, url_preview_enabled: false,
-      ...(delegatedAuth ? { matrix_authentication_service: { enabled: true, endpoint: 'http://mas:8080/', secret: credentials.mas } } : {
+      ...(delegatedAuth ? { matrix_authentication_service: { enabled: true, endpoint: 'http://mas:8081/', secret: credentials.mas } } : {
         sso: { client_whitelist: [`${origins.app}/`] },
         oidc_providers: [{ idp_id: 'dex', idp_name: 'Disposable test SSO', discover: false, skip_verification: true,
         issuer: `${origins.dex}/dex`, client_id: 'aimtrix-test', client_secret: credentials.oidc,
@@ -143,7 +145,7 @@ export async function createStack({ elementUi = false, syncResponseCache = false
       await writeFile(target, generated, { mode: 0o444 });
       await chmod(target, 0o444);
       await write('mas-overlay.json', {
-        http: { public_base: `${origins.mas}/`, issuer: `${origins.mas}/`, listeners: [{ name: 'web', binds: [{ address: '0.0.0.0:8080' }],
+        http: { public_base: `${origins.mas}/`, issuer: `${origins.mas}/`, listeners: [{ name: 'web', binds: [{ address: '0.0.0.0:8081' }],
           resources: [{ name: 'discovery' }, { name: 'human' }, { name: 'oauth' }, { name: 'compat' }, { name: 'graphql' }, { name: 'assets' }, { name: 'health' }] }] },
         database: { uri: `postgresql://mas:${credentials.postgres}@postgres:5432/mas?sslmode=disable` },
         matrix: { kind: 'synapse', homeserver: 'aimtrix.test', endpoint: 'http://synapse:8008', secret: credentials.mas },
@@ -210,7 +212,7 @@ http {
           environment: { POSTGRES_USER: 'mas', POSTGRES_PASSWORD: credentials.postgres, POSTGRES_DB: 'mas', PGDATA: '/var/lib/postgresql/data/pgdata' },
           networks: ['test'], healthcheck: { test: ['CMD', 'pg_isready', '-U', 'mas'], interval: '2s', timeout: '2s', retries: 20 } },
         mas: { ...isolation, image: images.mas, environment: { MAS_CONFIG: '/config/mas-generated.yaml:/config/mas-overlay.json', RUST_LOG: 'error' },
-          command: ['server'], depends_on: { postgres: { condition: 'service_healthy' } }, ports: [`127.0.0.1:${ports.mas}:8080`] },
+          command: ['server'], depends_on: { postgres: { condition: 'service_healthy' } }, ports: [`127.0.0.1:${ports.mas}:8081`] },
       } : { dex: { ...isolation, image: images.dex, command: ['dex', 'serve', '/config/dex.json'], ports: [`127.0.0.1:${ports.dex}:5556`] } }),
       synapse: { ...isolation, image: images.synapse, entrypoint: ['python', '-m', 'synapse.app.homeserver'], command: ['-c', '/config/synapse.json'], ports: [`127.0.0.1:${ports.synapse}:8008`] },
       ...(elementUi ? { element: { ...isolation, image: images.element, environment: { ELEMENT_WEB_PORT: '8080' }, entrypoint: ['nginx'], command: ['-c', '/config/element-nginx.conf', '-g', 'daemon off;'], ports: [`127.0.0.1:${ports.element}:8080`] } } : {}),
