@@ -119,6 +119,11 @@ test('delegated sessions show provider-managed account actions at desktop and mo
   await expect(guidance).toBeVisible();
   await expect(settings.getByRole('button', { name: 'Change password' })).toHaveCount(0);
   await expect(settings.getByText('Deactivate Matrix account')).toHaveCount(0);
-  await guidance.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: info.outputPath('delegated-account-settings.png') });
+  await expect(settings.getByLabel('Matrix password, if available')).toHaveCount(0);
+  for (const theme of ['aqua', 'graphite', 'midnight']) {
+    await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+    expect((await new AxeBuilder({ page }).include('.matrix-settings-panel').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([]);
+    await guidance.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: info.outputPath(`delegated-account-settings-${theme}.png`) });
+  }
 });

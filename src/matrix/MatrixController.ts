@@ -217,6 +217,7 @@ export class MatrixController {
   private lifecycleRevision = 0;
   private recoverySession?: StoredMatrixSession;
   private credentialWork: Promise<unknown> = Promise.resolve();
+  private stopWork?: Promise<void>;
   private currentIssue?: ConnectionIssue;
   private cleanupPending = false;
   private clientListenerCleanup?: () => void;
@@ -244,14 +245,14 @@ export class MatrixController {
     if (this.snapshot.status === 'reauthentication-required') return;
     if (!session) {
       ++this.lifecycleRevision;
-      void this.stopCurrentClient();
+      void this.stopCurrentClient().catch(() => undefined);
       this.setSnapshot({ status: 'signed-out', error: 'Your Matrix sign-in expired. Please start sign-in again.' });
       return;
     }
     ++this.lifecycleRevision;
     const data = error && typeof error === 'object' ? (error as { data?: { soft_logout?: unknown } }).data : undefined;
     this.recoverySession = tokenFreeRecoverySession(session, data?.soft_logout === true ? 'soft' : 'hard');
-    void this.stopCurrentClient();
+    void this.stopCurrentClient().catch(() => undefined);
     this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! });
     const recovery = this.recoverySession;
     void this.credentialOperation(() => this.platform.credentials.save(recovery)).catch(() => {
@@ -623,7 +624,7 @@ export class MatrixController {
 
   public shutdown(): void {
     ++this.lifecycleRevision;
-    void this.stopCurrentClient();
+    void this.stopCurrentClient().catch(() => undefined);
     this.setSnapshot({ status: 'signed-out' });
   }
 
@@ -3965,7 +3966,17 @@ export class MatrixController {
     }
   }
 
-  private async stopCurrentClient(): Promise<void> {
+  private stopCurrentClient(): Promise<void> {
+    const previous = this.stopWork;
+    const work = previous
+      ? previous.catch(() => undefined).then(() => this.stopCurrentClientNow())
+      : this.stopCurrentClientNow();
+    this.stopWork = work;
+    void work.finally(() => { if (this.stopWork === work) this.stopWork = undefined; }).catch(() => undefined);
+    return work;
+  }
+
+  private async stopCurrentClientNow(): Promise<void> {
     this.groupCallStartRevision += 1;
     const privateWrites = [...this.privateSearchRoomWrites.values()];
     this.privateSearch?.close();
@@ -3992,7 +4003,8 @@ export class MatrixController {
     const groupCall = this.groupCallEngine;
     this.groupCallEngine = undefined;
     this.groupCallSummary = undefined;
-    if (groupCall) await groupCall.leave();
+    let groupCallLeaving: Promise<void> | undefined;
+    try { groupCallLeaving = groupCall?.leave().catch(() => undefined); } catch { /* Keep local shutdown moving. */ }
     this.groupCallActivity?.stop();
     this.groupCallActivity = undefined;
     this.detachClientListeners();
@@ -4001,6 +4013,13 @@ export class MatrixController {
     client?.stopClient();
     this.client = undefined;
     this.activeSession = undefined;
+    this.inMemoryRecoveryKey = undefined;
+    this.liveEncryptedMessages.clear();
+    this.snapshotCache.roomVersions.clear();
+    this.snapshotCache.messages.clear();
+    this.snapshotCache.members.clear();
+    this.clearMediaCache();
+    if (groupCallLeaving) await groupCallLeaving;
     await Promise.allSettled(privateWrites);
     this.privateSearchRedactions.clear();
     this.privateSearchRoomRevisions.clear();
@@ -4008,7 +4027,6 @@ export class MatrixController {
     this.privateSearchIndexingRooms.clear();
     this.privateSearchDepartedRooms.clear();
     this.privateSearchCleanupFailed = false;
-    this.inMemoryRecoveryKey = undefined;
     this.personalizationLoaded = false;
     if (this.personalizationSaveTimer !== undefined) window.clearTimeout(this.personalizationSaveTimer);
     this.personalizationSaveTimer = undefined;
@@ -4023,13 +4041,8 @@ export class MatrixController {
     this.rootSpaceOrderMigrationStarted = false;
     this.rootSpaceOrderOverride = undefined;
     this.signOnTonePlayed = false;
-    this.liveEncryptedMessages.clear();
-    this.snapshotCache.roomVersions.clear();
-    this.snapshotCache.messages.clear();
-    this.snapshotCache.members.clear();
     this.currentIssue = undefined;
     this.threadSupport = 0;
-    this.clearMediaCache();
   }
 
   private readonly handleIncomingCall = (call: MatrixCall): void => {

@@ -1093,7 +1093,8 @@
   .security-status-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
   .security-status-grid > span { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px; color: var(--text-soft); border: 1px solid var(--border-soft); border-radius: 6px; background: var(--surface-raised); font-size: 0.64rem; }
   .security-status-grid > span b { color: var(--away); font-size: 0.61rem; }
-  .security-status-grid > span.is-ready b { color: var(--online); }
+  .security-status-grid > span.is-ready b { color: #277529; }
+  :root[data-theme="midnight"] .security-status-grid > span.is-ready b { color: #8bd47d; }
   .recovery-setup, .recovery-key-output { display: grid; gap: 8px; margin-top: 11px; padding: 10px; border: 1px solid #d2a855; border-radius: 7px; background: #fff5d9; }
   :root[data-theme="midnight"] .recovery-setup, :root[data-theme="midnight"] .recovery-key-output { background: #40371f; }
   .recovery-setup p { margin: 0; color: #6c541f; font-size: 0.63rem; line-height: 1.4; }
