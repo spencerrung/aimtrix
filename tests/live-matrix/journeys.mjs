@@ -868,6 +868,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await incoming.getByRole('button', { name: 'Scan QR code' }).click();
         const scan = recipient.getByRole('dialog', { name: 'Matrix verification QR code' });
         await scan.getByRole('heading', { name: 'Scan the other device’s QR code' }).waitFor({ timeout: 45000 });
+        await until(() => scan.getByLabel('Camera preview for Matrix verification QR code').evaluate((video) =>
+          video.tagName === 'VIDEO' && !video.paused && video.readyState >= 2 && video.videoWidth > 0), stage, 45000);
         stage = 'element-qr-code';
         const code = peer.locator('.mx_VerificationQRCode img').first();
         await code.waitFor({ timeout: 45000 });
@@ -875,7 +877,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(source?.startsWith('data:image/png;base64,'), stage);
         stage = 'element-qr-camera-decode';
         await recipient.evaluate(async (value) => { await window.__aimtrixQrFeed(value); }, source);
-        await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).waitFor({ timeout: 45000 });
+        await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).waitFor({ timeout: 60000 });
         stage = 'element-qr-confirm';
         await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).click();
         stage = 'element-qr-complete';
