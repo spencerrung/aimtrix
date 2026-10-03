@@ -751,9 +751,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
         await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
-        await until(async () => !new URL(peer.url()).hash.startsWith('#/login'), stage);
         stage = 'element-sas-request';
-        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click();
+        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
         stage = 'element-sas-incoming';
         const incoming = alice.getByRole('complementary', { name: 'Incoming device verification' });
         await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
@@ -2176,6 +2175,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant((await api('/_matrix/client/v3/account/whoami', { token: saved.accessToken })).user_id === saved.userId, 'sso-valid-session');
     });
     await check('standard-sso-recovery-guidance', async () => {
+      let stage = 'sso-recovery-create-room';
+      try {
       const ssoRoomName = `SSO recovery ${randomBytes(5).toString('hex')}`;
       const ssoMarker = `Synthetic SSO recovery event ${randomBytes(8).toString('hex')}`;
       await sso.getByRole('button', { name: 'Join or create room' }).click();
@@ -2188,14 +2189,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const created = await creation;
       invariant(created.ok(), 'sso-recovery-room-created');
       const ssoRoomId = (await created.json()).room_id;
+      stage = 'sso-recovery-encryption-state';
       invariant((await api(`/_matrix/client/v3/rooms/${encode(ssoRoomId)}/state/m.room.encryption`, { token: (await session(sso)).accessToken })).algorithm === 'm.megolm.v1.aes-sha2', 'sso-recovery-room-encrypted');
+      stage = 'sso-recovery-open-room';
       await createDialog.waitFor({ state: 'hidden' });
       await openRoom(sso, ssoRoomName);
+      stage = 'sso-recovery-send-marker';
       await sso.getByRole('textbox', { name: `Message ${ssoRoomName}`, exact: true }).fill(ssoMarker);
       await sso.getByRole('button', { name: 'Send message', exact: true }).click();
       const sentMarker = sso.locator('.timeline-message').filter({ hasText: ssoMarker });
       await until(async () => (await sentMarker.getAttribute('data-event-id'))?.startsWith('$'), 'sso-recovery-marker-accepted');
       const ssoMarkerId = await sentMarker.getAttribute('data-event-id');
+      stage = 'sso-recovery-setup';
       await sso.getByRole('button', { name: 'Open settings', exact: true }).click();
       const settings = sso.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
@@ -2210,6 +2215,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
         return;
       }
+      stage = 'sso-recovery-second-login';
       const key = await output.textContent();
       invariant(Boolean(key), 'sso-recovery-key-generated');
       await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
@@ -2222,10 +2228,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await ssoSecond.getByRole('button', { name: 'Login', exact: true }).click();
       await ssoSecond.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
       invariant((await session(ssoSecond))?.deviceId !== (await session(sso))?.deviceId, 'sso-recovery-distinct-device');
+      stage = 'sso-recovery-old-event';
       await openRoom(ssoSecond, ssoRoomName);
       const oldEvent = ssoSecond.locator(`.timeline-message[data-event-id="${ssoMarkerId}"]`);
       await oldEvent.waitFor({ timeout: 45000 });
       invariant(!await oldEvent.getByText(ssoMarker, { exact: true }).count(), 'sso-recovery-old-event-unavailable');
+      stage = 'sso-recovery-restore';
       await ssoSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
       const secondSettings = ssoSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await secondSettings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
@@ -2234,7 +2242,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 60000 });
       invariant(await secondSettings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'sso-recovery-key-cleared');
       await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      stage = 'sso-recovery-decrypted-event';
       await oldEvent.getByText(ssoMarker, { exact: true }).waitFor({ timeout: 45000 });
+      } catch { throw new Error(stage); }
     });
     const assertExpired = async (page) => {
       await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });
