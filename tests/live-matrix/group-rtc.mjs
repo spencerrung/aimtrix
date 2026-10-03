@@ -12,6 +12,7 @@ import { login, openRoom } from './journeys.mjs';
 const checks = [];
 let stage = 'setup';
 let stack, rtc, server, browser, roomId, aliceAccount, bobAccount;
+const membershipWrites = { alice: { accepted: 0, rejected: 0 }, bob: { accepted: 0, rejected: 0 } };
 const run = async (name, action) => {
   stage = name;
   console.log(`MatrixRTC live: ${name}`);
@@ -48,7 +49,7 @@ try {
   });
 
   const contexts = [];
-  const pageFor = async () => {
+  const pageFor = async (label) => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ['microphone', 'camera'], serviceWorkers: 'block' });
     contexts.push(context);
     const permitted = new Set([...Object.values(stack.origins), rtc.authOrigin]);
@@ -64,10 +65,15 @@ try {
       };
     });
     const page = await context.newPage();
+    page.on('response', (response) => {
+      const request = response.request();
+      if (request.method() !== 'PUT' || !decodeURIComponent(new URL(response.url()).pathname).includes('/state/org.matrix.msc3401.call.member/')) return;
+      membershipWrites[label][response.ok() ? 'accepted' : 'rejected']++;
+    });
     page.setDefaultTimeout(30000);
     return page;
   };
-  const alice = await pageFor(), bob = await pageFor();
+  const alice = await pageFor('alice'), bob = await pageFor('bob');
   await run('two-browser-login', async () => {
     await login(alice, stack.origins.app, 'alice', stack.credentials.password);
     await login(bob, stack.origins.app, 'bob', stack.credentials.password);
@@ -139,7 +145,7 @@ try {
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }
