@@ -2232,6 +2232,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       stage = 'sso-recovery-second-login';
       const key = await output.textContent();
       invariant(Boolean(key), 'sso-recovery-key-generated');
+      stage = 'sso-recovery-server-backup';
+      await until(async () => {
+        try {
+          const info = await api('/_matrix/client/v3/room_keys/version', { token: (await session(sso)).accessToken });
+          return Boolean(info.version && info.count > 0);
+        } catch { return false; }
+      }, stage, 60000);
+      stage = 'sso-recovery-second-login';
       await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
       await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
       const ssoSecond = await newPage();
@@ -2253,7 +2261,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await secondSettings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
       await secondSettings.getByLabel('Existing recovery key', { exact: true }).fill(key);
       await secondSettings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
-      await secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 60000 });
+      const restored = secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' });
+      await restored.waitFor({ timeout: 60000 });
+      stage = 'sso-recovery-imported-keys';
+      invariant(Number((await restored.textContent())?.match(/Imported (\d+) room keys/)?.[1] ?? 0) > 0, stage);
       invariant(await secondSettings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'sso-recovery-key-cleared');
       await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
       stage = 'sso-recovery-decrypted-event';
