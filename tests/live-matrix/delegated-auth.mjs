@@ -102,6 +102,7 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         stage = 'delegated-recovery-state-request';
         const encryption = await fetch(`${stack.origins.synapse}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
           { headers: { Authorization: `Bearer ${stored.accessToken}` } });
+        metrics.delegatedRecoveryStateHttpStatus = encryption.status;
         stage = encryption.status === 401 ? 'delegated-recovery-state-unauthorized'
           : encryption.status === 404 ? 'delegated-recovery-state-missing' : 'delegated-recovery-state-http';
         invariant(encryption.ok(), stage);
