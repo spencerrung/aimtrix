@@ -214,7 +214,7 @@ jobs:
     timeout-minutes: 40
     env:
       AIMTRIX_LIVE_OWNER: ci-large-${{ github.run_id }}-${{ github.run_attempt }}
-      AIMTRIX_LIVE_ROOM_COUNT: 1000
+      AIMTRIX_LIVE_ROOM_COUNT: 10000
     steps:
       - name: Checkout
         uses: actions/checkout@v7

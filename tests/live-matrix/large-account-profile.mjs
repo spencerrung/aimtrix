@@ -7,6 +7,7 @@ import { invariant, matrixApi, register, until } from './stack.mjs';
 export async function runLargeAccountProfile({ browser, stack, check, metrics }) {
   const roomCount = Number(process.env.AIMTRIX_LIVE_ROOM_COUNT ?? 1000);
   invariant([100, 1000, 10000].includes(roomCount), 'large-account-room-count');
+  const readinessLimitMs = roomCount === 10000 ? 300000 : 180000;
   const api = matrixApi(stack);
   const account = await register(api, stack, 'large-account-reader');
   const roomName = (index) => `Synthetic live room ${String(index).padStart(5, '0')}`;
@@ -56,17 +57,17 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       await page.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
       const started = Date.now();
       await page.getByRole('button', { name: 'Sign On', exact: true }).click();
-      await page.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 180000 });
+      await page.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: readinessLimitMs });
       metrics.largeAccountShellReadyMs = Date.now() - started;
       const search = page.getByRole('searchbox', { name: 'Search conversations' });
       await search.fill(roomName(roomCount - 1));
       const lastRoom = page.locator('.buddy-row').filter({ hasText: roomName(roomCount - 1) });
-      await lastRoom.waitFor({ timeout: 180000 });
+      await lastRoom.waitFor({ timeout: readinessLimitMs });
       await search.fill('');
       const visibleTotal = async () => (await page.locator('.buddy-group__toggle span:last-child').allTextContents())
         .reduce((sum, value) => sum + Number(value), 0);
       await until(async () => syncedRoomIds.size === roomCount && await visibleTotal() === roomCount,
-        'large-account-complete-sync', 180000);
+        'large-account-complete-sync', readinessLimitMs);
       invariant(invalidSyncResponses === 0, 'large-account-sync-json');
       metrics.largeAccountDeepRoomReadyMs = Date.now() - started;
       metrics.largeAccountObservedRooms = syncedRoomIds.size;
@@ -85,7 +86,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       if (heapBefore !== undefined && heapAfter !== undefined) {
         metrics.largeAccountHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapBefore) / 2 ** 20));
       }
-      invariant(metrics.largeAccountDeepRoomReadyMs <= 180000, 'large-account-ready-budget');
+      invariant(metrics.largeAccountDeepRoomReadyMs <= readinessLimitMs, 'large-account-ready-budget');
     });
   } finally { await context.close(); }
 }
