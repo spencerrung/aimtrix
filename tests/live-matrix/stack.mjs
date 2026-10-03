@@ -12,6 +12,8 @@ export const images = {
   synapse: 'ghcr.io/element-hq/synapse:v1.160.0@sha256:78de1d10bef02e375f861d1cc99f8bedd9381d4f9083ea8b2c22a053477b205f',
   element: 'vectorim/element-web:v1.12.28@sha256:a8f415462ab8d2600a592ba1b92bea51efe5a4d10eb738aab9bed769f7099613',
   dex: 'ghcr.io/dexidp/dex:v2.45.1@sha256:8499afd690c437f52301efd2b05b2455da5bd2dfc20332cd697dc9937f808462',
+  mas: 'ghcr.io/element-hq/matrix-authentication-service:1.26.0@sha256:e089f1048a1d4a9a492ed17b9fe759100f1bd619407b001f5927928d88b780c4',
+  postgres: 'postgres:16.10-alpine',
 };
 export const secret = () => randomBytes(24).toString('hex');
 export const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -42,13 +44,14 @@ export async function freePort() {
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false } = {}) {
+export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false, delegatedAuth = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
-  const ports = { synapse: await freePort(), dex: await freePort(), app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
+  const ports = { synapse: await freePort(), ...(delegatedAuth ? { mas: await freePort() } : { dex: await freePort() }),
+    app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
   invariant(new Set(Object.values(ports)).size === Object.keys(ports).length, 'port-allocation');
   const origins = Object.fromEntries(Object.entries(ports).map(([key, port]) => [key, `http://127.0.0.1:${port}`]));
-  const credentials = { password: secret(), registration: secret(), oidc: secret() };
+  const credentials = { password: secret(), registration: secret(), oidc: secret(), mas: secret(), postgres: secret() };
   const configDirectory = join(directory, 'config');
   await mkdir(configDirectory, { mode: 0o755 });
   await chmod(configDirectory, 0o755);
@@ -83,9 +86,12 @@ export async function createStack({ elementUi = false, syncResponseCache = false
     await command('docker', ['version', '--format', '{{.Server.Version}}']);
     // Pull before hashing: Python/bcrypt comes from the pinned Synapse image.
     await command('docker', ['pull', images.synapse]);
-    await command('docker', ['pull', images.dex]);
+    if (delegatedAuth) {
+      await command('docker', ['pull', images.mas]);
+      await command('docker', ['pull', images.postgres]);
+    } else await command('docker', ['pull', images.dex]);
     if (elementUi) await command('docker', ['pull', images.element]);
-    const hash = await command('docker', ['run', '--rm', '-i', '--network', 'none', '--log-driver', 'none', '--label', `dev.aimtrix.test-owner=${owner}`, '--name', `${project}-hash`, '--user', `${uid}:${uid}`, '--entrypoint', 'python', images.synapse, '-c', 'import bcrypt,sys; print(bcrypt.hashpw(sys.stdin.buffer.read(), bcrypt.gensalt()).decode())'], { input: credentials.password });
+    const hash = delegatedAuth ? undefined : await command('docker', ['run', '--rm', '-i', '--network', 'none', '--log-driver', 'none', '--label', `dev.aimtrix.test-owner=${owner}`, '--name', `${project}-hash`, '--user', `${uid}:${uid}`, '--entrypoint', 'python', images.synapse, '-c', 'import bcrypt,sys; print(bcrypt.hashpw(sys.stdin.buffer.read(), bcrypt.gensalt()).decode())'], { input: credentials.password });
     await write('logging.json', { version: 1, disable_existing_loggers: true, handlers: { discard: { class: 'logging.NullHandler' } }, root: { level: 'CRITICAL', handlers: ['discard'] } });
     await write('synapse.json', {
       server_name: 'aimtrix.test', public_baseurl: `${origins.synapse}/`, report_stats: false,
@@ -102,21 +108,37 @@ export async function createStack({ elementUi = false, syncResponseCache = false
       rc_message: { per_second: 100, burst_count: 1000 }, rc_login: { address: { per_second: 100, burst_count: 1000 }, account: { per_second: 100, burst_count: 1000 } },
       ...(largeAccount ? { rc_room_creation: { per_second: 100, burst_count: 10000 } } : {}),
       suppress_key_server_warning: true, url_preview_enabled: false,
-      sso: { client_whitelist: [`${origins.app}/`] },
-      oidc_providers: [{ idp_id: 'dex', idp_name: 'Disposable test SSO', discover: false, skip_verification: true,
+      ...(delegatedAuth ? { matrix_authentication_service: { enabled: true, endpoint: 'http://mas:8080/', secret: credentials.mas } } : {
+        sso: { client_whitelist: [`${origins.app}/`] },
+        oidc_providers: [{ idp_id: 'dex', idp_name: 'Disposable test SSO', discover: false, skip_verification: true,
         issuer: `${origins.dex}/dex`, client_id: 'aimtrix-test', client_secret: credentials.oidc,
         authorization_endpoint: `${origins.dex}/dex/auth`, token_endpoint: 'http://dex:5556/dex/token',
         jwks_uri: 'http://dex:5556/dex/keys', userinfo_endpoint: 'http://dex:5556/dex/userinfo',
         scopes: ['openid', 'profile', 'email'], user_mapping_provider: { config: { localpart_template: '{{ user.name }}', display_name_template: '{{ user.name }}' } },
-      }],
+        }],
+      }),
     });
-    await write('dex.json', {
+    if (!delegatedAuth) await write('dex.json', {
       issuer: `${origins.dex}/dex`, storage: { type: 'sqlite3', config: { file: '/data/dex.db' } },
       web: { http: '0.0.0.0:5556' }, logger: { level: 'error', format: 'json' },
       oauth2: { skipApprovalScreen: true }, enablePasswordDB: true,
       staticClients: [{ id: 'aimtrix-test', name: 'Aimtrix disposable test', secret: credentials.oidc, redirectURIs: [`${origins.synapse}/_synapse/client/oidc/callback`] }],
       staticPasswords: [{ email: 'sso@aimtrix.test', hash, username: 'sso', userID: 'aimtrix-disposable-sso' }],
     });
+    if (delegatedAuth) {
+      const generated = await command('docker', ['run', '--rm', '--network', 'none', '--log-driver', 'none', '--label', `dev.aimtrix.test-owner=${owner}`, '--user', `${uid}:${uid}`, images.mas, 'config', 'generate']);
+      const target = join(configDirectory, 'mas-generated.yaml');
+      await writeFile(target, generated, { mode: 0o444 });
+      await chmod(target, 0o444);
+      await write('mas-overlay.json', {
+        http: { public_base: `${origins.mas}/`, issuer: `${origins.mas}/`, listeners: [{ name: 'web', binds: [{ address: '0.0.0.0:8080' }],
+          resources: [{ name: 'discovery' }, { name: 'human' }, { name: 'oauth' }, { name: 'compat' }, { name: 'graphql' }, { name: 'assets' }, { name: 'health' }] }] },
+        database: { uri: `postgresql://mas:${credentials.postgres}@postgres:5432/mas?sslmode=disable` },
+        matrix: { kind: 'synapse', homeserver: 'aimtrix.test', endpoint: 'http://synapse:8008', secret: credentials.mas },
+        passwords: { enabled: true },
+        policy: { data: { client_registration: { allow_host_mismatch: true, allow_insecure_uris: true } } },
+      });
+    }
     if (elementUi) {
       await write('element.json', {
         default_server_config: { 'm.homeserver': { base_url: origins.synapse, server_name: 'aimtrix.test' } },
@@ -163,24 +185,34 @@ http {
       volumes: [{ type: 'bind', source: configDirectory, target: '/config', read_only: true }], networks: ['test'],
     };
     await write('compose.json', { services: {
-      dex: { ...isolation, image: images.dex, command: ['dex', 'serve', '/config/dex.json'], ports: [`127.0.0.1:${ports.dex}:5556`] },
+      ...(delegatedAuth ? {
+        postgres: { image: images.postgres, labels: { 'dev.aimtrix.test-owner': owner }, user: '70:70', read_only: true,
+          cap_drop: ['ALL'], security_opt: ['no-new-privileges:true'], logging: { driver: 'none' },
+          tmpfs: ['/var/lib/postgresql/data:uid=70,gid=70,mode=0700', '/var/run/postgresql:uid=70,gid=70,mode=0775', '/tmp:uid=70,gid=70,mode=0700'],
+          environment: { POSTGRES_USER: 'mas', POSTGRES_PASSWORD: credentials.postgres, POSTGRES_DB: 'mas', PGDATA: '/var/lib/postgresql/data/pgdata' },
+          networks: ['test'], healthcheck: { test: ['CMD', 'pg_isready', '-U', 'mas'], interval: '2s', timeout: '2s', retries: 20 } },
+        mas: { ...isolation, image: images.mas, environment: { MAS_CONFIG: '/config/mas-generated.yaml:/config/mas-overlay.json', RUST_LOG: 'error' },
+          command: ['server'], depends_on: { postgres: { condition: 'service_healthy' } }, ports: [`127.0.0.1:${ports.mas}:8080`] },
+      } : { dex: { ...isolation, image: images.dex, command: ['dex', 'serve', '/config/dex.json'], ports: [`127.0.0.1:${ports.dex}:5556`] } }),
       synapse: { ...isolation, image: images.synapse, entrypoint: ['python', '-m', 'synapse.app.homeserver'], command: ['-c', '/config/synapse.json'], ports: [`127.0.0.1:${ports.synapse}:8008`] },
       ...(elementUi ? { element: { ...isolation, image: images.element, environment: { ELEMENT_WEB_PORT: '8080' }, entrypoint: ['nginx'], command: ['-c', '/config/element-nginx.conf', '-g', 'daemon off;'], ports: [`127.0.0.1:${ports.element}:8080`] } } : {}),
     }, networks: { test: { driver: 'bridge', labels: { 'dev.aimtrix.test-owner': owner } } } });
     prepared = true;
     await compose('up', '--detach');
     await until(async () => {
-      try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok && (await fetch(`${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
+      try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok &&
+        (await fetch(delegatedAuth ? `${origins.mas}/.well-known/openid-configuration` : `${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
     }, 'stack-readiness', 60000);
     if (elementUi) await until(async () => {
       try { return (await fetch(`${origins.element}/config.json`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
     }, 'element-readiness', 60000);
     const ids = (await compose('ps', '-q')).split('\n');
-    invariant(ids.length === (elementUi ? 3 : 2), 'service-count');
+    invariant(ids.length === (delegatedAuth ? 3 : elementUi ? 3 : 2), 'service-count');
     for (const id of ids) {
       const [info] = JSON.parse(await command('docker', ['inspect', id]));
       invariant(info.HostConfig.CapDrop?.includes('ALL') && info.HostConfig.SecurityOpt?.includes('no-new-privileges:true'), 'container-capabilities');
-      invariant(info.Config.User === `${uid}:${uid}` && info.HostConfig.ReadonlyRootfs && info.HostConfig.LogConfig.Type === 'none', 'container-isolation');
+      invariant(info.Config.User === (delegatedAuth && info.Config.Labels?.['com.docker.compose.service'] === 'postgres' ? '70:70' : `${uid}:${uid}`) &&
+        info.HostConfig.ReadonlyRootfs && info.HostConfig.LogConfig.Type === 'none', 'container-isolation');
       invariant(Object.values(info.NetworkSettings.Ports).flat().filter(Boolean).every((binding) => binding.HostIp === '127.0.0.1'), 'loopback-bindings');
     }
   };

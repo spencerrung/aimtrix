@@ -206,3 +206,17 @@ test('community administration evidence keeps only fixed stages', () => {
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
+
+test('delegated sign-in evidence cannot expose provider credentials or callback state', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'delegated-auth-login';
+  const result = makeReport({ ...base, delegatedAuth: true, failureStage: name,
+    checks: [{ name, passed: true, durationMs: 150, code: privateValue, state: privateValue,
+      accessToken: privateValue, refreshToken: privateValue, clientId: privateValue }],
+    metrics: { delegatedLoginCompleted: 1, delegatedLogoutCompleted: 1, token: privateValue },
+  });
+  assert.deepEqual(result.checks, [{ name, passed: true, durationMs: 150 }]);
+  assert.deepEqual(result.metrics, { delegatedLoginCompleted: 1, delegatedLogoutCompleted: 1 });
+  assert.match(result.images.mas, /^ghcr\.io\/element-hq\/matrix-authentication-service:1\.26\.0@sha256:[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});

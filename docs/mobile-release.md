@@ -10,7 +10,7 @@ Aimtrix now contains reproducible Capacitor Android and iOS project sources. The
 | --- | --- | --- |
 | Android | `dev.alucard.aimtrix` | `versionName 0.1.0`, `versionCode 1` |
 | iOS | `dev.alucard.aimtrix` | `MARKETING_VERSION 0.1.0`, `CURRENT_PROJECT_VERSION 1` |
-| Deep-link scheme | `aimtrix://` | Routes accept only validated room/event IDs or the transient SSO login token |
+| Deep-link scheme | `aimtrix://` | Routes accept validated room/event IDs and one-time Matrix SSO or delegated OAuth callbacks |
 | HTTPS link host | `aimtrix.alucard.dev` | Android intent filter is present; verified App Links/Universal Links still require hosted association files and signing entitlements |
 
 The web artifact is bundled from `dist/`. The native projects do not configure a remote `server.url`, so a release cannot silently turn into a privileged wrapper around mutable remote content. Runtime homeserver and feature settings remain in the bundled `config.json` contract.
@@ -54,7 +54,7 @@ The native permission explanations are intentionally narrow. Denial must leave l
 
 ## Native deep links
 
-The `App` plugin receives `aimtrix://` and the canonical HTTPS host. The shared platform boundary validates room IDs (`!…`) and event IDs (`$…`) before updating the route. SSO callbacks use `aimtrix://sso?loginToken=…`, are converted to the local app URL only long enough for the existing Matrix token-login flow, then removed from browser history.
+The `App` plugin receives `aimtrix://` and the canonical HTTPS host. The shared platform boundary validates room IDs (`!…`) and event IDs (`$…`) before updating the route. Standard SSO callbacks use `aimtrix://sso?loginToken=…`; delegated OAuth callbacks use a code and state. Both are converted to the local app URL for one-time processing and then removed from browser history. Native sign-in opens the provider in the system browser through App Launcher, with pending state in the protected credential store. See [delegated authentication](delegated-auth.md) for remaining live/device evidence.
 
 HTTPS App Links/Universal Links are not claimed complete until the release operator publishes and verifies:
 

@@ -64,6 +64,7 @@ Record the date, device, OS build, browser build, homeserver, and Aimtrix commit
 ### Matrix and encryption
 
 - [ ] Password login and SSO callback login both complete against the disposable homeserver.
+- [ ] Delegated Matrix OAuth completes against disposable MAS/Synapse with public registration, callback, refresh and logout; native system-browser handoff and warm/cold callbacks are checked on physical devices. See [current implementation and limits](delegated-auth.md).
 - [ ] Expired access token returns to a recoverable signed-out state without displaying private event content.
 - [ ] Encrypted room messages remain encrypted end to end; no plaintext fallback appears when crypto is unavailable.
 - [ ] Recovery setup/export and restore work on a second device or fresh browser profile using a disposable account.
