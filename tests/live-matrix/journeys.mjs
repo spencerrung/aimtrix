@@ -1827,6 +1827,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const card = alice.locator(`[data-event-id=${JSON.stringify(eventId)}] .message-location`);
         await card.waitFor({ timeout: 45000 });
         invariant(/^geo:[+-]?[\d.]+,[+-]?[\d.]+$/.test(await card.getByRole('link', { name: /Open .* in your map application/ }).getAttribute('href') || ''), stage);
+        stage = 'element-location-return-live';
+        const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.isVisible()) { await latest.click(); await latest.waitFor({ state: 'hidden' }); }
       } catch { throw new Error(stage); }
     });
     let voiceEventId;
