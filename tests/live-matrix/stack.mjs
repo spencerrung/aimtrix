@@ -42,7 +42,7 @@ export async function freePort() {
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack({ elementUi = false, syncResponseCache = false, federation = false } = {}) {
+export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
   const ports = { synapse: await freePort(), dex: await freePort(), app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
@@ -100,6 +100,7 @@ export async function createStack({ elementUi = false, syncResponseCache = false
       macaroon_secret_key: secret(), form_secret: secret(), trusted_key_servers: [], federation_domain_whitelist: [],
       listeners: [{ port: 8008, type: 'http', tls: false, bind_addresses: ['0.0.0.0'], resources: [{ names: federation ? ['client', 'federation'] : ['client'], compress: false }] }],
       rc_message: { per_second: 100, burst_count: 1000 }, rc_login: { address: { per_second: 100, burst_count: 1000 }, account: { per_second: 100, burst_count: 1000 } },
+      ...(largeAccount ? { rc_room_creation: { per_second: 100, burst_count: 10000 } } : {}),
       suppress_key_server_warning: true, url_preview_enabled: false,
       sso: { client_whitelist: [`${origins.app}/`] },
       oidc_providers: [{ idp_id: 'dex', idp_name: 'Disposable test SSO', discover: false, skip_verification: true,
@@ -186,9 +187,9 @@ http {
   return stack;
 }
 export function matrixApi(stack) {
-  return async (path, { token, method = 'GET', body, status = 200, binary = false } = {}) => {
+  return async (path, { token, method = 'GET', body, status = 200, binary = false, timeoutMs = 15000 } = {}) => {
     invariant(path.startsWith('/_matrix/') || path.startsWith('/_synapse/'), 'api-path');
-    const response = await fetch(`${stack.origins.synapse}${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(15000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const response = await fetch(`${stack.origins.synapse}${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(timeoutMs), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     invariant(response.status === status, 'matrix-http-status');
     return binary ? new Uint8Array(await response.arrayBuffer()) : response.json();
   };

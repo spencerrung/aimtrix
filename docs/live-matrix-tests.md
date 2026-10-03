@@ -14,6 +14,7 @@ npm run test:matrix:privacy
 npm run test:matrix -- --repeat=2
 npm run test:matrix -- --probe-failure
 npm run test:matrix -- --profile-sustained-sync
+npm run test:matrix -- --profile-large-account
 ```
 
 Build immediately before running so the harness exercises the intended application revision. The harness serves `dist/` through Vite preview and provides a temporary `/config.json` pointing only at its local Synapse. The normal `public/config.json` is unchanged. There are no Matrix response mocks, production controller hooks, or injected login tokens.
@@ -125,6 +126,8 @@ The `encrypted-history-and-context` journey sends 350 real encrypted messages, r
 The disposable Synapse configuration sets `caches.sync_response_cache_duration` to `0s`. Synapse otherwise caches successful sync responses for two minutes: a same-device reload shortly after login can receive its old empty initial response and replay the cached incremental stream. Numeric request diagnostics reproduced that behavior; with the test cache disabled, reload returns the newest 30 events directly, so reaching older messages must exercise real history/context retrieval. This changes only the test server. Cache-enabled reconnect performance and persisted sync/resume remain separate production boundaries under #163. See the [Synapse caching documentation](https://element-hq.github.io/synapse/latest/usage/configuration/config_documentation.html#caching).
 
 The separate `--profile-cache-reload` mode keeps that two-minute cache enabled and records only numeric readiness and request-count metrics after 350 synthetic messages and a same-device reload. Its CI artifact is `matrix-cache-reload-summary-*`; a readiness timeout records `cacheReloadReadyWithin90s: 0` and fails the CI job. The response count includes only `/sync` requests started after reload. This is measurement infrastructure, not a production sync-resume fix. See [large-account performance](large-account-performance.md) for the storage tradeoff and remaining acceptance work.
+
+The isolated `--profile-large-account` mode seeds joined rooms before starting its browser timer, verifies that the server's joined-room IDs match the created set, then requires a successful browser `/sync` and the full published UI count in a fresh device. It measures cold sign-on, bounded unfiltered rows, deep-room navigation and retained heap. Its own CI job targets 10,000 rooms and also repeats the synthetic 10,000-room Chromium fixture on a second host; the first staged CI run passed at 1,000 live rooms. The live room count, seeding time and browser measurements are kept separate in allowlisted numeric artifacts; see [large-account performance](large-account-performance.md). Local Docker is required to run this mode outside CI.
 
 ## Polish 07 extension
 

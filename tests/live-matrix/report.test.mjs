@@ -145,6 +145,28 @@ test('encrypted sustained sync profile discards message and crypto material', ()
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
 
+test('large-account profile retains only numeric workload and timing evidence', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'large-account-initial-sync';
+  const result = makeReport({ ...base, failureStage: name,
+    checks: [{ name, passed: false, category: 'large-account-ready-budget', durationMs: 180000,
+      roomId: privateValue, userId: privateValue }],
+    metrics: { largeAccountRoomCount: 1000, largeAccountSeededRooms: 1000, largeAccountSeedMs: 30000, largeAccountServerJoinedRooms: 1000,
+      largeAccountShellReadyMs: 20000, largeAccountLastRoomVisibleMs: 22000, largeAccountDeepRoomReadyMs: 25000,
+      largeAccountUiRooms: 1000,
+      largeAccountDeepRoomOpenMs: 500, largeAccountRenderedRows: 1, largeAccountDomNodes: 1200,
+      largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42,
+      roomId: privateValue, accessToken: privateValue, responseBody: privateValue },
+  });
+  assert.deepEqual(result.metrics, { largeAccountRoomCount: 1000, largeAccountSeededRooms: 1000,
+    largeAccountSeedMs: 30000, largeAccountServerJoinedRooms: 1000, largeAccountShellReadyMs: 20000, largeAccountLastRoomVisibleMs: 22000, largeAccountDeepRoomReadyMs: 25000,
+    largeAccountUiRooms: 1000,
+    largeAccountDeepRoomOpenMs: 500, largeAccountRenderedRows: 1, largeAccountDomNodes: 1200,
+    largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42 });
+  assert.deepEqual(result.checks, [{ name, passed: false, category: 'large-account-ready-budget', durationMs: 180000 }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});
+
 test('first-use encrypted chat evidence discards identities and message content', () => {
   const privateValue = randomBytes(24).toString('hex');
   const name = 'first-use-encrypted-direct-conversation';

@@ -209,3 +209,42 @@ jobs:
           path: matrix-test-results/encrypted-sustained-sync-1.json
           if-no-files-found: ignore
           retention-days: 14
+  large-account-initial-sync-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      AIMTRIX_LIVE_OWNER: ci-large-${{ github.run_id }}-${{ github.run_attempt }}
+      AIMTRIX_LIVE_ROOM_COUNT: 10000
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build the static client
+        run: npm run build
+      - name: Prepare summary directory
+        run: mkdir -p matrix-test-results
+      - name: Measure synthetic 10k-room rendering on the CI host
+        run: node scripts/profile-large-account.mjs --rooms=10000 --cycles=100 > matrix-test-results/synthetic-large-account.json
+      - name: Measure disposable many-room initial sync
+        run: npm run test:matrix -- --profile-large-account
+      - name: Remove any remaining job-owned test services
+        if: always()
+        run: node tests/live-matrix/cleanup.mjs
+      - name: Preserve only synthetic and allowlisted Matrix summaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-large-account-summary-${{ github.run_id }}
+          path: |
+            matrix-test-results/large-account-1.json
+            matrix-test-results/synthetic-large-account.json
+          if-no-files-found: ignore
+          retention-days: 14
