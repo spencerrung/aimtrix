@@ -35,14 +35,14 @@ export function command(binary, args, { input, timeout = 180000 } = {}) {
     child.stdin.end(input);
   });
 }
-async function freePort() {
+export async function freePort() {
   const listener = createServer();
   await new Promise((resolve, reject) => { listener.once('error', reject); listener.listen(0, '127.0.0.1', resolve); });
   const port = listener.address().port;
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack({ elementUi = false, syncResponseCache = false } = {}) {
+export async function createStack({ elementUi = false, syncResponseCache = false, federation = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
   const ports = { synapse: await freePort(), dex: await freePort(), app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
@@ -98,7 +98,7 @@ export async function createStack({ elementUi = false, syncResponseCache = false
       // The disposable community journey explicitly permits room publication.
       room_list_publication_rules: [{ action: 'allow', user_id: '*', room_id: '*', alias: '*' }],
       macaroon_secret_key: secret(), form_secret: secret(), trusted_key_servers: [], federation_domain_whitelist: [],
-      listeners: [{ port: 8008, type: 'http', tls: false, bind_addresses: ['0.0.0.0'], resources: [{ names: ['client'], compress: false }] }],
+      listeners: [{ port: 8008, type: 'http', tls: false, bind_addresses: ['0.0.0.0'], resources: [{ names: federation ? ['client', 'federation'] : ['client'], compress: false }] }],
       rc_message: { per_second: 100, burst_count: 1000 }, rc_login: { address: { per_second: 100, burst_count: 1000 }, account: { per_second: 100, burst_count: 1000 } },
       suppress_key_server_warning: true, url_preview_enabled: false,
       sso: { client_whitelist: [`${origins.app}/`] },

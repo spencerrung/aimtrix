@@ -54,11 +54,19 @@ async function installSyntheticQrCamera(page) {
       }
     };
     paint();
-    const stream = canvas.captureStream(0);
+    const stream = canvas.captureStream(15);
     const track = stream.getVideoTracks()[0];
-    // Drive captured frames explicitly. Chromium may otherwise stop advancing
-    // an unchanged canvas before the asynchronous QR reader starts scanning.
-    const frame = () => { paint(); track.requestFrame(); };
+    // Keep the synthetic camera advancing even if the QR image is unchanged.
+    // A corner pixel outside the QR alternates so Chromium has a changed frame
+    // to deliver to the asynchronous reader under CI load.
+    let marker = false;
+    const frame = () => {
+      paint();
+      context.fillStyle = marker ? '#fff' : '#000';
+      context.fillRect(0, 0, 2, 2);
+      marker = !marker;
+      track.requestFrame?.();
+    };
     frame();
     const timer = window.setInterval(frame, 100);
     const devices = navigator.mediaDevices;
