@@ -1783,12 +1783,19 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await until(() => tile.locator('.mx_MLocationBody_map canvas').isVisible(), 'element-location-render', 60000);
     });
     if (elementPeer) await check('element-ui-location-to-aimtrix', async () => {
-      let stage = 'element-location-open-menu';
+      let stage = 'element-location-return-room';
       try {
+        await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}`);
+        await elementPeer.locator('.mx_RoomView_body .mx_BasicMessageComposer_input').waitFor({ timeout: 45000 });
+        stage = 'element-location-open-menu';
         await elementPeer.locator('.mx_RoomView_body .mx_MessageComposer').getByRole('button', { name: 'More options', exact: true }).click();
+        stage = 'element-location-menu-item';
+        await elementPeer.getByRole('menu').getByRole('menuitem', { name: 'Location', exact: true }).click();
+        const shareMenu = elementPeer.locator('.mx_LocationShareMenu');
+        stage = 'element-location-share-menu';
+        await shareMenu.waitFor({ state: 'visible', timeout: 45000 });
         stage = 'element-location-pin-option';
-        await elementPeer.getByRole('menuitem', { name: 'Location', exact: true }).click();
-        await elementPeer.getByTestId('share-location-option-Pin').click();
+        await shareMenu.getByTestId('share-location-option-Pin').click();
         stage = 'element-location-map';
         const map = elementPeer.locator('#mx_LocationPicker_map');
         await map.waitFor({ state: 'visible', timeout: 45000 });
