@@ -152,17 +152,23 @@ test('large-account profile retains only numeric workload and timing evidence', 
     checks: [{ name, passed: false, category: 'large-account-ready-budget', durationMs: 180000,
       roomId: privateValue, userId: privateValue }],
     metrics: { largeAccountRoomCount: 1000, largeAccountSeededRooms: 1000, largeAccountSeedMs: 30000, largeAccountServerJoinedRooms: 1000,
+      largeAccountHistorySeededEvents: 350,
       largeAccountShellReadyMs: 20000, largeAccountLastRoomVisibleMs: 22000, largeAccountDeepRoomReadyMs: 25000,
       largeAccountUiRooms: 1000,
       largeAccountDeepRoomOpenMs: 500, largeAccountRenderedRows: 1, largeAccountDomNodes: 1200,
-      largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42,
+      largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42, largeAccountHistoryPages: 7,
+      largeAccountIncrementalEvents: 300, largeAccountIncrementalDurationMs: 600000,
+      largeAccountIncrementalP95Ms: 325, largeAccountIncrementalMaxMs: 710, largeAccountIncrementalHeapGrowthMiB: 21,
       roomId: privateValue, accessToken: privateValue, responseBody: privateValue },
   });
   assert.deepEqual(result.metrics, { largeAccountRoomCount: 1000, largeAccountSeededRooms: 1000,
-    largeAccountSeedMs: 30000, largeAccountServerJoinedRooms: 1000, largeAccountShellReadyMs: 20000, largeAccountLastRoomVisibleMs: 22000, largeAccountDeepRoomReadyMs: 25000,
+    largeAccountSeedMs: 30000, largeAccountServerJoinedRooms: 1000, largeAccountHistorySeededEvents: 350,
+    largeAccountShellReadyMs: 20000, largeAccountLastRoomVisibleMs: 22000, largeAccountDeepRoomReadyMs: 25000,
     largeAccountUiRooms: 1000,
     largeAccountDeepRoomOpenMs: 500, largeAccountRenderedRows: 1, largeAccountDomNodes: 1200,
-    largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42 });
+    largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42, largeAccountHistoryPages: 7,
+    largeAccountIncrementalEvents: 300, largeAccountIncrementalDurationMs: 600000,
+    largeAccountIncrementalP95Ms: 325, largeAccountIncrementalMaxMs: 710, largeAccountIncrementalHeapGrowthMiB: 21 });
   assert.deepEqual(result.checks, [{ name, passed: false, category: 'large-account-ready-budget', durationMs: 180000 }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });

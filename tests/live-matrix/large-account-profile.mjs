@@ -1,16 +1,24 @@
 import process from 'node:process';
 import { URL } from 'node:url';
+import { setTimeout as pause } from 'node:timers/promises';
 import { invariant, matrixApi, register, until } from './stack.mjs';
+
+const percentile = (values, percent) => {
+  const ordered = [...values].sort((left, right) => left - right);
+  return Math.round(ordered[Math.max(0, Math.ceil(ordered.length * percent) - 1)] ?? 0);
+};
 
 // Room creation is deliberately outside the client timing window. The
 // disposable account contains only generated names and no copied room data.
 export async function runLargeAccountProfile({ browser, stack, check, metrics }) {
   const roomCount = Number(process.env.AIMTRIX_LIVE_ROOM_COUNT ?? 1000);
+  const sustained = process.env.AIMTRIX_LIVE_SUSTAINED === '1';
   invariant([100, 1000, 10000].includes(roomCount), 'large-account-room-count');
   const readinessLimitMs = roomCount === 10000 ? 600000 : 180000;
   const api = matrixApi(stack);
   const account = await register(api, stack, 'large-account-reader');
   const createdRoomIds = new Set();
+  let lastRoomId;
   const roomName = (index) => `Synthetic live room ${String(index).padStart(5, '0')}`;
   metrics.largeAccountRoomCount = roomCount;
   metrics.largeAccountSeededRooms = 0;
@@ -24,6 +32,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         });
         invariant(typeof room.room_id === 'string', 'large-account-room-created');
         createdRoomIds.add(room.room_id);
+        if (index === roomCount - 1) lastRoomId = room.room_id;
       }));
       metrics.largeAccountSeededRooms = Math.min(roomCount, start + 10);
     }
@@ -36,6 +45,15 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
     metrics.largeAccountServerJoinedRooms = joinedRoomIds.size;
     invariant(joinedRoomIds.size === roomCount && createdRoomIds.size === roomCount
       && [...createdRoomIds].every((roomId) => joinedRoomIds.has(roomId)), 'large-account-server-joined-rooms');
+  });
+  if (sustained) await check('large-account-history-seed', async () => {
+    invariant(typeof lastRoomId === 'string', 'large-account-room-created');
+    for (let index = 0; index < 350; index += 1) {
+      await api(`/_matrix/client/v3/rooms/${encodeURIComponent(lastRoomId)}/send/m.room.message/large-history-${index}`, {
+        token: account.access_token, method: 'PUT', body: { msgtype: 'm.text', body: `Synthetic large-account history ${index}` },
+      });
+      metrics.largeAccountHistorySeededEvents = index + 1;
+    }
   });
 
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block', reducedMotion: 'reduce' });
@@ -96,5 +114,56 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       }
       invariant(metrics.largeAccountDeepRoomReadyMs <= readinessLimitMs, 'large-account-ready-budget');
     });
+    if (sustained) {
+      const timeline = page.getByRole('region', { name: 'Messages', exact: true });
+      const message = (body) => timeline.locator('.timeline-message').filter({ has: page.getByText(body, { exact: true }) });
+      await check('large-account-history-navigation', async () => {
+        await message('Synthetic large-account history 349').waitFor({ timeout: 45000 });
+        for (let pageIndex = 0; pageIndex < 20 && await message('Synthetic large-account history 0').count() === 0; pageIndex += 1) {
+          const older = page.getByRole('button', { name: 'Load older messages', exact: true });
+          await until(() => older.isEnabled(), 'large-account-history-page', 45000);
+          const firstEvent = await timeline.locator('[data-event-id]').first().getAttribute('data-event-id');
+          await older.evaluate((button) => button.click());
+          await until(async () => (await timeline.locator('[data-event-id]').first().getAttribute('data-event-id')) !== firstEvent,
+            'large-account-history-page', 45000);
+          metrics.largeAccountHistoryPages = pageIndex + 1;
+          invariant(await timeline.locator('.timeline-message').count() <= 250, 'large-account-bounded-timeline');
+        }
+        invariant(await message('Synthetic large-account history 0').count() === 1, 'large-account-history-start');
+        await page.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
+        await page.getByRole('button', { name: 'Jump to latest messages', exact: true }).waitFor({ state: 'hidden', timeout: 45000 });
+        await message('Synthetic large-account history 349').waitFor({ timeout: 45000 });
+      });
+      await check('large-account-sustained-delivery', async () => {
+        const heapStart = await heap();
+        const latencies = [];
+        const started = Date.now();
+        for (let index = 0; index < 300; index += 1) {
+          const cycleStarted = Date.now();
+          const body = `Synthetic large-account incremental ${index}`;
+          await api(`/_matrix/client/v3/rooms/${encodeURIComponent(lastRoomId)}/send/m.room.message/large-incremental-${index}`, {
+            token: account.access_token, method: 'PUT', body: { msgtype: 'm.text', body },
+          });
+          await message(body).waitFor({ timeout: 45000 });
+          latencies.push(Date.now() - cycleStarted);
+          metrics.largeAccountIncrementalEvents = index + 1;
+          if (index % 30 === 29) {
+            invariant(await timeline.locator('.timeline-message').count() <= 250, 'large-account-bounded-timeline');
+            invariant(await page.locator('.buddy-row').count() <= 101, 'large-account-bounded-rows');
+          }
+          await pause(Math.max(0, 2000 - (Date.now() - cycleStarted)));
+        }
+        await pause(Math.max(0, 600000 - (Date.now() - started)));
+        metrics.largeAccountIncrementalDurationMs = Date.now() - started;
+        metrics.largeAccountIncrementalP95Ms = percentile(latencies, 0.95);
+        metrics.largeAccountIncrementalMaxMs = Math.round(Math.max(...latencies));
+        metrics.largeAccountSyncResponses = syncResponses;
+        const heapAfter = await heap();
+        if (heapStart !== undefined && heapAfter !== undefined) {
+          metrics.largeAccountIncrementalHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapStart) / 2 ** 20));
+        }
+        invariant(metrics.largeAccountIncrementalDurationMs >= 600000, 'large-account-sustained-duration');
+      });
+    }
   } finally { await context.close(); }
 }
