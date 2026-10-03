@@ -125,7 +125,7 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic delegated recovery ${randomBytes(12).toString('hex')}`);
         stage = 'delegated-recovery-setup-action';
         await settings.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
-        const guidance = settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' });
+        const guidance = settings.getByRole('alert').filter({ hasText: 'This homeserver requires an authorization step Aimtrix cannot complete here.' });
         const output = settings.locator('.recovery-key-output code');
         stage = 'delegated-recovery-outcome';
         await until(async () => Boolean(await guidance.count() || await output.count()), 'delegated-recovery-outcome', 60000);

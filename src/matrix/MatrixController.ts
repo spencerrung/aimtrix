@@ -4014,6 +4014,11 @@ export class MatrixController {
     this.client = undefined;
     this.activeSession = undefined;
     this.inMemoryRecoveryKey = undefined;
+    this.liveEncryptedMessages.clear();
+    this.snapshotCache.roomVersions.clear();
+    this.snapshotCache.messages.clear();
+    this.snapshotCache.members.clear();
+    this.clearMediaCache();
     if (groupCallLeaving) await groupCallLeaving;
     await Promise.allSettled(privateWrites);
     this.privateSearchRedactions.clear();
@@ -4036,13 +4041,8 @@ export class MatrixController {
     this.rootSpaceOrderMigrationStarted = false;
     this.rootSpaceOrderOverride = undefined;
     this.signOnTonePlayed = false;
-    this.liveEncryptedMessages.clear();
-    this.snapshotCache.roomVersions.clear();
-    this.snapshotCache.messages.clear();
-    this.snapshotCache.members.clear();
     this.currentIssue = undefined;
     this.threadSupport = 0;
-    this.clearMediaCache();
   }
 
   private readonly handleIncomingCall = (call: MatrixCall): void => {
