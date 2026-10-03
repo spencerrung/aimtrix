@@ -4,7 +4,7 @@ Checked items record the implemented scope described on that line, not universal
 
 The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the ordered GitHub issue queue for the next implementation program. It supplements this release/compatibility inventory; its baseline audit reconciles implementation and validation evidence without removing existing obligations.
 
-The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. The first-use direct-chat path now opens the newly created encrypted conversation; disposable Synapse checks its room state, first encrypted send and peer decryption alongside password-account fresh-device backup restore and incoming Aimtrix-to-Aimtrix SAS. SSO authorization variants, cross-client QR/SAS, and withheld-key/secret-sharing interoperability remain open.
+The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. The first-use direct-chat path now opens the newly created encrypted conversation; disposable Synapse checks its room state, first encrypted send and peer decryption alongside password-account and standard SSO fresh-device backup restore and incoming Aimtrix-to-Aimtrix SAS. [PR #218](https://github.com/spencerrung/aimtrix/pull/218) verified Element Web emoji SAS and [PR #219](https://github.com/spencerrung/aimtrix/pull/219) verified Element-to-Aimtrix QR scanning. Provider-specific SSO/UIA, reverse-direction QR, independently generated withheld-key and secret-sharing interoperability remain open.
 
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
 The [daily-client acceptance record](docs/daily-client-acceptance.md) joins the nine roadmap journeys to browser/live checks and keeps unverified core and target-specific gates visible for #164.
@@ -165,8 +165,8 @@ These retain compatibility depth and validation obligations alongside additive f
 
 ### Encryption and identity depth
 
-- [ ] Validate implemented incoming QR scan/show and cancellation with an independent Matrix client; disposable Aimtrix-to-Aimtrix incoming SAS is exercised separately. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
-- [ ] Validate key-request and withheld-key guidance, SDK-owned secret sharing, and confirmed recovery reset across relevant server/UIA variants. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Validate Aimtrix QR display with an independent scanner and cross-client cancellation; [PR #219](https://github.com/spencerrung/aimtrix/pull/219) completed the Element-generated QR to Aimtrix camera-scan direction, and disposable Aimtrix-to-Aimtrix incoming SAS is exercised separately. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Validate independently generated withheld-key and secret-gossip behavior, key-request guidance, and recovery reset across further UIA variants. The disposable Synapse harness exercises a standard withheld-key event and confirmed password-account reset; the installed Rust SDK disables automatic room-key requests. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Test delegated OIDC/MSC3861 native flows beyond standard Matrix SSO token login. — [#174](https://github.com/spencerrung/aimtrix/issues/174).
 
 ### Group calls

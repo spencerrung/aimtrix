@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MatrixClient, MatrixEvent, Room } from 'matrix-js-sdk';
 import { inMainTimelineForReceipt } from 'matrix-js-sdk';
 import { MatrixEvent as SDKEvent, RoomState } from 'matrix-js-sdk';
+import { DecryptionFailureCode } from 'matrix-js-sdk/lib/crypto-api/index.js';
 import { HISTORY_MESSAGE_LIMIT } from './historyEvents';
 import { POLL_START, POLL_TEXT } from './polls';
 import {
@@ -659,6 +660,20 @@ describe('buildWorkspaceSnapshot threads', () => {
     expect(snapshot.threadsByRoot['$root:test'].messages).toMatchObject([{ id: '$encrypted', kind: 'encrypted' }, { id: '$media', encryptedFile: file }]);
     expect(snapshot.threadsByRoot['$root:test'].messages).toHaveLength(2);
     expect(snapshot.threadsByRoot['$other-root']).toBeUndefined();
+  });
+
+  it('renders SDK decryption failures through safe guidance rather than the synthetic error body', () => {
+    const failure = Object.assign(fakeEvent('m.room.message', {
+      msgtype: 'm.bad.encrypted', body: '** Unable to decrypt: private SDK diagnostic **',
+    }, '$withheld'), {
+      decryptionFailureReason: DecryptionFailureCode.MEGOLM_KEY_WITHHELD_FOR_UNVERIFIED_DEVICE,
+    });
+    const snapshot = buildWorkspaceSnapshot(fakeClient([failure]), 'online', [], [], createWorkspaceSnapshotCache());
+    expect(snapshot.messagesByRoom['!room:test'][0]).toMatchObject({
+      id: '$withheld', kind: 'encrypted',
+      body: 'This device is unverified, so the sender withheld the key. Verify this session with another trusted device, then retry.',
+    });
+    expect(JSON.stringify(snapshot)).not.toContain('private SDK diagnostic');
   });
 
   it('applies loaded thread edits and reactions with only thread-scoped reader receipts', () => {

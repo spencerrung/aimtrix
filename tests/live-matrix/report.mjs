@@ -6,7 +6,7 @@ export const checkNames = new Set([
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
   'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
-  'encrypted-send-receive-and-latency', 'password-two-device-recovery-setup-and-restore', 'incoming-two-device-sas-verification', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'authenticated-encrypted-media',
+  'encrypted-send-receive-and-latency', 'password-two-device-recovery-setup-and-restore', 'incoming-two-device-sas-verification', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'withheld-key-guidance-live', 'authenticated-encrypted-media',
   'encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment',
   'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop',
   'element-ui-encrypted-poll', 'element-ui-encrypted-location', 'element-ui-encrypted-voice',
@@ -18,7 +18,7 @@ export const checkNames = new Set([
   'room-knock-and-upgrade-administration',
   'space-child-parent-and-recommendation-administration',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback', 'standard-sso-recovery-guidance',
-  'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery',
+  'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery', 'confirmed-recovery-reset-and-key-replacement',
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
   'diagnostic-failure-probe', 'cleanup',
   'cache-reload-first-login', 'cache-reload-seed', 'cache-reload-readiness-profile',
@@ -31,6 +31,8 @@ failureCategories.push('element-back-at-login', 'element-left-room-route', 'elem
 failureCategories.push('element-sas-login', 'element-sas-request', 'element-sas-incoming', 'element-sas-incoming-method', 'element-sas-method', 'element-sas-emoji', 'element-sas-confirm', 'element-sas-complete');
 failureCategories.push('element-qr-login', 'element-qr-request', 'element-qr-incoming', 'element-qr-scan-ready', 'element-qr-code', 'element-qr-camera-decode', 'element-qr-confirm', 'element-qr-complete');
 failureCategories.push('sso-recovery-create-room', 'sso-recovery-encryption-state', 'sso-recovery-open-room', 'sso-recovery-send-marker', 'sso-recovery-setup', 'sso-recovery-server-backup', 'sso-recovery-second-login', 'sso-recovery-old-event', 'sso-recovery-restore', 'sso-recovery-imported-keys', 'sso-recovery-decrypted-event');
+failureCategories.push('withheld-read-ciphertext', 'withheld-post-fresh-event', 'withheld-load-fresh-event', 'withheld-send-to-device', 'withheld-actionable-guidance', 'withheld-generic-guidance', 'withheld-key-pending', 'withheld-unattempted', 'withheld-backup-pending', 'withheld-historical-backup', 'withheld-historical-no-backup', 'withheld-not-joined', 'withheld-sender-trust', 'withheld-unknown-error', 'withheld-event-gone', 'withheld-not-encrypted', 'withheld-other-guidance');
+failureCategories.push('reset-existing-backup', 'reset-confirmation', 'reset-new-key', 'reset-backup-replaced', 'reset-old-key-rejected', 'reset-new-key-restores');
 failureCategories.push('saved-open-source', 'saved-write', 'saved-own-device', 'saved-exact-context', 'saved-remove-own-device', 'saved-removal-sync', 'saved-access-loss', 'saved-remove-after-leave',
   'pin-source', 'pin-server-state', 'pin-peer-collection', 'pin-member-denied', 'pin-remove-sync',
   'search-create-peer', 'search-old-history', 'search-query', 'search-exact-context');

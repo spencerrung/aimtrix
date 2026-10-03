@@ -646,7 +646,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
     });
-    let recoveryDevice;
+    let recoveryDevice, passwordRecoveryKey;
     await check('password-two-device-recovery-setup-and-restore', async () => {
       let stage = 'recovery-open-first-settings';
       try {
@@ -677,6 +677,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }, 'recovery-server-secret-storage', 60000);
       const key = await first.locator('.recovery-key-output code').textContent();
       invariant(Boolean(key), 'recovery-key-generated');
+      passwordRecoveryKey = key;
       await first.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
       invariant(await first.locator('.recovery-key-output code').count() === 0, 'recovery-key-dismissed');
       await first.getByRole('button', { name: 'Close settings', exact: true }).click();
@@ -1235,6 +1236,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.getByText('That message was removed.', { exact: true }).waitFor({ timeout: 45000 });
       invariant(await entry(20).count() === 0, 'redacted-context-hidden');
     });
+    let charlieFresh, freshSession;
     await check('private-encrypted-search-key-availability', async () => {
       let stage = 'private-search-keyed-device';
       const passphrase = () => randomBytes(24).toString('hex');
@@ -1283,9 +1285,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'private-search-new-device';
         // Charlie joined before the history was sent but had no browser session
         // receiving its room keys. A first signed-in device exposes that gap.
-        const charlieFresh = await newPage();
+        charlieFresh = await newPage();
         await login(charlieFresh, stack.origins.app, 'charlie', stack.credentials.password);
-        const freshSession = await session(charlieFresh);
+        freshSession = await session(charlieFresh);
         invariant(freshSession.userId === accounts.charlie.user_id, 'private-search-new-device');
         const freshPassphrase = passphrase();
         const freshTraffic = capture(charlieFresh);
@@ -1314,6 +1316,60 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await freshPanel.getByRole('button', { name: 'Create or unlock index' }).waitFor();
         invariant(await charlieFresh.evaluate(async () => (await indexedDB.databases()).every((database) => !database.name?.startsWith('aimtrix.private-search.'))), 'private-search-delete');
       } catch { throw new Error(stage); }
+    });
+    await check('withheld-key-guidance-live', async () => {
+      let stage = 'withheld-read-ciphertext';
+      let row;
+      try {
+        const event = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(navigationHistory.secondId)}`, { token: aliceSession.accessToken });
+        invariant(event.sender === aliceSession.userId && event.type === 'm.room.encrypted' && event.content?.algorithm === 'm.megolm.v1.aes-sha2' &&
+          typeof event.content.sender_key === 'string' && typeof event.content.session_id === 'string', stage);
+        // A historical event is classified as backup/recovery before the SDK
+        // considers withholding. Use its opaque encrypted payload with a fresh,
+        // intentionally unshared session ID after this device exists, so the
+        // receiver has a definite missing-key state before the withheld notice.
+        const withheldSessionId = randomBytes(32).toString('base64').replace(/=+$/, '');
+        stage = 'withheld-post-fresh-event';
+        const freshEvent = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/send/m.room.encrypted/${randomBytes(8).toString('hex')}`, {
+          token: aliceSession.accessToken, method: 'PUT', body: { ...event.content, session_id: withheldSessionId },
+        });
+        invariant(typeof freshEvent.event_id === 'string', stage);
+        stage = 'withheld-load-fresh-event';
+        await charlieFresh.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(freshEvent.event_id)}`);
+        row = charlieFresh.locator(`[data-event-id=${JSON.stringify(freshEvent.event_id)}]`);
+        await row.waitFor({ timeout: 45000 });
+        await row.locator('.message-kind--encrypted').waitFor({ timeout: 45000 });
+        invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
+        stage = 'withheld-send-to-device';
+        await api(`/_matrix/client/v3/sendToDevice/m.room_key.withheld/${randomBytes(8).toString('hex')}`, {
+          token: aliceSession.accessToken, method: 'PUT', body: { messages: { [freshSession.userId]: { [freshSession.deviceId]: {
+            algorithm: 'm.megolm.v1.aes-sha2', code: 'm.unverified', reason: 'The sender has disabled encrypting to unverified devices.',
+            room_id: roomId, sender_key: event.content.sender_key, session_id: withheldSessionId,
+          } } } },
+        });
+        stage = 'withheld-actionable-guidance';
+        const guidance = row.locator('.message-kind--encrypted');
+        await until(async () => await guidance.count() > 0 && (await guidance.textContent() ?? '').includes('This device is unverified, so the sender withheld the key. Verify this session with another trusted device, then retry.'), stage);
+        invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
+      } catch {
+        if (stage === 'withheld-actionable-guidance' && row) {
+          const encrypted = row.locator('.message-kind--encrypted');
+          const guidance = await encrypted.count() ? await encrypted.textContent() ?? '' : '';
+          if (guidance.includes('The sender withheld this message key.')) stage = 'withheld-generic-guidance';
+          else if (guidance.includes('Waiting for this message key.')) stage = 'withheld-key-pending';
+          else if (guidance.includes('Waiting for encryption keys…')) stage = 'withheld-unattempted';
+          else if (guidance.includes('Checking your key backup')) stage = 'withheld-backup-pending';
+          else if (guidance.includes('This older message needs your key backup.')) stage = 'withheld-historical-backup';
+          else if (guidance.includes('No key backup was available')) stage = 'withheld-historical-no-backup';
+          else if (guidance.includes('This message predates your room access')) stage = 'withheld-not-joined';
+          else if (guidance.includes('The sender’s device identity needs review')) stage = 'withheld-sender-trust';
+          else if (guidance.includes('This encrypted message could not be opened.')) stage = 'withheld-unknown-error';
+          else if (!await row.count()) stage = 'withheld-event-gone';
+          else if (!await encrypted.count()) stage = 'withheld-not-encrypted';
+          else stage = 'withheld-other-guidance';
+        }
+        throw new Error(stage);
+      }
     });
     await check('standard-favorites-and-own-device-sync', async () => {
       const tagPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/rooms/${encode(roomId)}/tags`;
@@ -2413,6 +2469,48 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await bob.goto(stack.origins.app);
       await assertExpired(bob);
       await openRecovery(bob, bobSession);
+    });
+    await check('confirmed-recovery-reset-and-key-replacement', async () => {
+      let stage = 'reset-existing-backup';
+      try {
+        const original = await api('/_matrix/client/v3/room_keys/version', { token: aliceSession.accessToken });
+        invariant(Boolean(original.version && passwordRecoveryKey), stage);
+        stage = 'reset-confirmation';
+        await alice.bringToFront();
+        await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
+        const settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+        await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic reset ${randomBytes(12).toString('hex')}`);
+        await settings.getByLabel('Matrix password, if available', { exact: true }).fill(stack.credentials.password);
+        await settings.getByRole('button', { name: 'Reset recovery and backup', exact: true }).click();
+        const confirmation = alice.getByRole('dialog', { name: 'Reset encryption recovery?' });
+        await confirmation.getByText('This deletes existing key backups and replaces the account’s encryption identity.', { exact: false }).waitFor();
+        await confirmation.getByRole('button', { name: 'Reset recovery and backup', exact: true }).click();
+        stage = 'reset-new-key';
+        const output = settings.locator('.recovery-key-output code');
+        await output.waitFor({ timeout: 90000 });
+        const newKey = await output.textContent();
+        invariant(Boolean(newKey && newKey !== passwordRecoveryKey), stage);
+        stage = 'reset-backup-replaced';
+        await until(async () => {
+          try {
+            const next = await api('/_matrix/client/v3/room_keys/version', { token: aliceSession.accessToken });
+            return Boolean(next.version && next.version !== original.version);
+          } catch { return false; }
+        }, stage, 60000);
+        await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
+        stage = 'reset-old-key-rejected';
+        await settings.getByLabel('Existing recovery key', { exact: true }).fill(passwordRecoveryKey);
+        await settings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
+        await settings.getByRole('alert').filter({ hasText: 'This key does not match this account’s recovery storage.' }).waitFor({ timeout: 45000 });
+        invariant(await settings.getByLabel('Existing recovery key', { exact: true }).inputValue() === passwordRecoveryKey, stage);
+        stage = 'reset-new-key-restores';
+        await settings.getByLabel('Existing recovery key', { exact: true }).fill(newKey);
+        await settings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
+        await settings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 90000 });
+        invariant(await settings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', stage);
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
     });
   } finally {
     for (const context of contexts) await context.close();
