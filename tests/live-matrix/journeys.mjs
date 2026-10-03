@@ -1795,7 +1795,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'element-location-share-menu';
         await shareMenu.waitFor({ state: 'visible', timeout: 45000 });
         stage = 'element-location-pin-option';
-        await shareMenu.getByTestId('share-location-option-Pin').click();
+        await shareMenu.getByRole('button', { name: 'Drop a Pin', exact: true }).click();
         stage = 'element-location-map';
         const map = elementPeer.locator('#mx_LocationPicker_map');
         await map.waitFor({ state: 'visible', timeout: 45000 });
