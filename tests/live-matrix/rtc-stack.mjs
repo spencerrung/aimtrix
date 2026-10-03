@@ -35,6 +35,7 @@ export async function startRtcStack(stack, roomId) {
   const keyId = 'devkey';
   let containerId;
   let server;
+  const metrics = { authorizationRequests: 0, openidAccepted: 0, jwtIssued: 0 };
 
   const respond = (response, status, data) => {
     response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': stack.origins.app, 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' });
@@ -61,6 +62,7 @@ export async function startRtcStack(stack, roomId) {
     server = createServer(async (request, response) => {
       if (request.method === 'OPTIONS') { respond(response, 204, {}); return; }
       if (request.method !== 'POST' || request.url !== '/sfu/get') { respond(response, 404, {}); return; }
+      metrics.authorizationRequests += 1;
       try {
         let raw = '';
         for await (const chunk of request) { raw += chunk; if (raw.length > 8192) throw new Error('too-large'); }
@@ -72,16 +74,18 @@ export async function startRtcStack(stack, roomId) {
         if (!userinfo.ok) throw new Error('invalid-openid');
         const { sub } = await userinfo.json();
         if (!['@alice:aimtrix.test', '@bob:aimtrix.test'].includes(sub)) throw new Error('invalid-subject');
+        metrics.openidAccepted += 1;
         const now = Math.floor(Date.now() / 1000);
         const subject = `${sub}:${body.device_id}`;
         const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
         const payload = base64url(JSON.stringify({ iss: keyId, sub: subject, nbf: now - 10, exp: now + 600, video: { room: roomAlias(roomId), roomJoin: true, canPublish: true, canSubscribe: true } }));
         const input = `${header}.${payload}`;
         const signature = createHmac('sha256', secret).update(input).digest('base64url');
+        metrics.jwtIssued += 1;
         respond(response, 200, { url: origin, jwt: `${input}.${signature}` });
       } catch { respond(response, 403, { errcode: 'M_FORBIDDEN' }); }
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-    return { origin, authOrigin: `http://127.0.0.1:${server.address().port}`, stop };
+    return { origin, authOrigin: `http://127.0.0.1:${server.address().port}`, metrics, stop };
   } catch (error) { await stop(); throw error; }
 }

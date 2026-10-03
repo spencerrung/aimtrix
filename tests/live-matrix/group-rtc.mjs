@@ -76,12 +76,27 @@ try {
     await openRoom(bob, 'RTC Proof');
   });
   const join = async (page, label) => {
+    stage = 'group-control';
     await page.getByRole('button', { name: label }).click();
     const prejoin = page.getByRole('dialog', { name: 'Join group call' });
+    stage = 'group-prejoin';
     await prejoin.getByLabel('Join with microphone on').check();
+    stage = 'group-join-request';
     await prejoin.getByRole('button', { name: 'Join encrypted call' }).click();
     const shelf = page.getByRole('region', { name: 'Group call in RTC Proof' });
-    await shelf.getByText('Media encrypted').waitFor({ timeout: 60000 });
+    stage = 'group-encryption-ready';
+    try { await shelf.getByText('Media encrypted').waitFor({ timeout: 60000 }); }
+    catch (error) {
+      const alert = prejoin.getByRole('alert');
+      if (await alert.count()) {
+        const message = await alert.textContent();
+        stage = message?.includes('authorization') ? 'group-token-rejected'
+          : message?.includes('media key') ? 'group-key-unavailable'
+            : message?.includes('connect') ? 'group-sfu-unavailable'
+              : 'group-join-rejected';
+      }
+      throw error;
+    }
     return shelf;
   };
   let aliceShelf, bobShelf;
@@ -112,7 +127,7 @@ try {
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, checks, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }
