@@ -187,9 +187,9 @@ http {
   return stack;
 }
 export function matrixApi(stack) {
-  return async (path, { token, method = 'GET', body, status = 200, binary = false } = {}) => {
+  return async (path, { token, method = 'GET', body, status = 200, binary = false, timeoutMs = 15000 } = {}) => {
     invariant(path.startsWith('/_matrix/') || path.startsWith('/_synapse/'), 'api-path');
-    const response = await fetch(`${stack.origins.synapse}${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(15000), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
+    const response = await fetch(`${stack.origins.synapse}${path}`, { method, redirect: 'error', signal: AbortSignal.timeout(timeoutMs), headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body ? { 'Content-Type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) });
     invariant(response.status === status, 'matrix-http-status');
     return binary ? new Uint8Array(await response.arrayBuffer()) : response.json();
   };

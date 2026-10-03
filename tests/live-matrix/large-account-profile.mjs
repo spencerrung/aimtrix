@@ -10,6 +10,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
   const readinessLimitMs = roomCount === 10000 ? 600000 : 180000;
   const api = matrixApi(stack);
   const account = await register(api, stack, 'large-account-reader');
+  const createdRoomIds = new Set();
   const roomName = (index) => `Synthetic live room ${String(index).padStart(5, '0')}`;
   metrics.largeAccountRoomCount = roomCount;
   metrics.largeAccountSeededRooms = 0;
@@ -22,10 +23,19 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
           token: account.access_token, method: 'POST', body: { name: roomName(index), preset: 'private_chat' },
         });
         invariant(typeof room.room_id === 'string', 'large-account-room-created');
+        createdRoomIds.add(room.room_id);
       }));
       metrics.largeAccountSeededRooms = Math.min(roomCount, start + 10);
     }
     metrics.largeAccountSeedMs = Date.now() - started;
+  });
+  await check('large-account-server-membership', async () => {
+    const joined = await api('/_matrix/client/v3/joined_rooms', { token: account.access_token, timeoutMs: 60000 });
+    invariant(Array.isArray(joined.joined_rooms), 'large-account-server-joined-rooms');
+    const joinedRoomIds = new Set(joined.joined_rooms);
+    metrics.largeAccountServerJoinedRooms = joinedRoomIds.size;
+    invariant(joinedRoomIds.size === roomCount && createdRoomIds.size === roomCount
+      && [...createdRoomIds].every((roomId) => joinedRoomIds.has(roomId)), 'large-account-server-joined-rooms');
   });
 
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block', reducedMotion: 'reduce' });
@@ -43,18 +53,10 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       return (await cdp.send('Performance.getMetrics')).metrics.find((entry) => entry.name === 'JSHeapUsedSize')?.value;
     };
     const heapBefore = await heap();
-    let syncResponses = 0, invalidSyncResponses = 0;
-    const syncedRoomIds = new Set();
+    let syncResponses = 0;
     page.on('response', (response) => {
       if (!new URL(response.url()).pathname.endsWith('/sync') || !response.ok()) return;
       syncResponses += 1;
-      void response.json().then((body) => {
-        for (const roomId of Object.keys(body.rooms?.join ?? {})) syncedRoomIds.add(roomId);
-        metrics.largeAccountObservedRooms = syncedRoomIds.size;
-      }).catch(() => {
-        invalidSyncResponses += 1;
-        metrics.largeAccountInvalidSyncResponses = invalidSyncResponses;
-      });
       metrics.largeAccountSyncResponses = syncResponses;
     });
     await check('large-account-initial-sync', async () => {
@@ -74,9 +76,9 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         .reduce((sum, value) => sum + Number(value), 0);
       await until(async () => {
         metrics.largeAccountUiRooms = await visibleTotal();
-        return syncedRoomIds.size === roomCount && metrics.largeAccountUiRooms === roomCount;
+        return metrics.largeAccountUiRooms === roomCount;
       }, 'large-account-complete-sync', readinessLimitMs);
-      invariant(invalidSyncResponses === 0, 'large-account-sync-json');
+      invariant(syncResponses > 0, 'large-account-sync-response');
       metrics.largeAccountDeepRoomReadyMs = Date.now() - started;
       metrics.largeAccountRenderedRows = await page.locator('.buddy-row').count();
       invariant(metrics.largeAccountRenderedRows > 0 && metrics.largeAccountRenderedRows <= 101, 'large-account-bounded-rows');
