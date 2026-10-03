@@ -177,3 +177,35 @@ jobs:
           path: matrix-test-results/sustained-sync-1.json
           if-no-files-found: ignore
           retention-days: 14
+  encrypted-sustained-sync-profile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AIMTRIX_LIVE_OWNER: ci-encrypted-sustained-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build the static client
+        run: npm run build
+      - name: Measure ten-minute encrypted Synapse sync
+        run: npm run test:matrix -- --profile-encrypted-sustained-sync
+      - name: Remove any remaining job-owned test services
+        if: always()
+        run: node tests/live-matrix/cleanup.mjs
+      - name: Preserve only allowlisted Matrix summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-encrypted-sustained-sync-summary-${{ github.run_id }}
+          path: matrix-test-results/encrypted-sustained-sync-1.json
+          if-no-files-found: ignore
+          retention-days: 14
