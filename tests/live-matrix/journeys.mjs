@@ -608,9 +608,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
     });
+    let recoveryDevice;
     await check('password-two-device-recovery-setup-and-restore', async () => {
       let stage = 'recovery-open-first-settings';
-      let recoveryDevice;
       try {
       await alice.bringToFront();
       await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
@@ -699,10 +699,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         throw new Error(stage);
       }
     });
+    let verifyPeer;
     await check('incoming-two-device-sas-verification', async () => {
       let stage = 'verification-new-device';
       try {
-        const verifyPeer = await newPage();
+        verifyPeer = await newPage();
         await login(verifyPeer, stack.origins.app, 'alice', stack.credentials.password);
         const verifySession = await session(verifyPeer);
         invariant(verifySession?.deviceId && verifySession.deviceId !== aliceSession.deviceId, 'verification-distinct-device');
@@ -754,9 +755,22 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'element-sas-request';
         await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
         stage = 'element-sas-incoming';
-        const incoming = alice.getByRole('complementary', { name: 'Incoming device verification' });
+        await alice.bringToFront();
+        let recipient;
+        await until(async () => {
+          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
+            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
+              recipient = candidate;
+              return true;
+            }
+          }
+          return false;
+        }, stage, 45000);
+        await recipient.bringToFront();
+        const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
+        stage = 'element-sas-incoming-method';
         await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
-        const challenge = alice.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
+        const challenge = recipient.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
         const elementEmoji = peer.locator('.mx_VerificationShowSas_emojiSas > div > div:first-child');
         stage = 'element-sas-method';
         const chooseEmoji = peer.getByRole('button', { name: /^(Compare using unique emoji|Verify by emoji)$/ });
