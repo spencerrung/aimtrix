@@ -28,6 +28,7 @@ export interface MatrixServerSummary {
 }
 
 export interface MatrixSettingsSnapshot {
+  authentication: { delegated: boolean };
   server: MatrixServerSummary;
   security: MatrixSecuritySummary;
   devices: MatrixDeviceSummary[];

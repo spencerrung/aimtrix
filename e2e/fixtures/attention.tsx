@@ -27,7 +27,7 @@ const notificationState: AttentionSettingsSnapshot = {
 };
 const unusedAction = async (): Promise<never> => { throw new Error('Outside this synthetic fixture.'); };
 const matrixActions: MatrixSettingsActions = {
-  load: async () => ({ server: { userId: '@synthetic:test', homeserverUrl: 'https://synthetic.test', serverName: 'synthetic.test', deviceId: 'SYNTHETIC', versions: ['v1.12'], rtcFoci: [] }, security: { encryptionReady: true, crossSigningReady: true, secretStorageReady: true, keyBackupEnabled: true }, devices: [], ignoredUsers: [] }),
+  load: async () => ({ authentication: { delegated: new URLSearchParams(window.location.search).has('delegated') }, server: { userId: '@synthetic:test', homeserverUrl: 'https://synthetic.test', serverName: 'synthetic.test', deviceId: 'SYNTHETIC', versions: ['v1.12'], rtcFoci: [] }, security: { encryptionReady: true, crossSigningReady: true, secretStorageReady: true, keyBackupEnabled: true }, devices: [], ignoredUsers: [] }),
   verifyDevice: unusedAction, renameDevice: unusedAction, removeDevice: unusedAction, setIgnoredUsers: unusedAction, uploadAvatar: unusedAction,
   setupRecovery: unusedAction, restoreRecovery: unusedAction, changePassword: unusedAction, deactivateAccount: unusedAction,
   attention: {

@@ -110,3 +110,15 @@ test('notification rules reconcile rejected writes and quiet hours remain reacha
     await page.screenshot({ path: info.outputPath(`notification-settings-${size.width}x${size.height}.png`) });
   }
 });
+
+test('delegated sessions show provider-managed account actions at desktop and mobile sizes', async ({ page }, info) => {
+  await page.evaluate(() => history.replaceState({}, '', '?delegated=1'));
+  await page.getByRole('main', { name: 'Home activity' }).getByRole('button', { name: 'Notification settings', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+  const guidance = settings.getByText(/This account signs in through homeserver OAuth/);
+  await expect(guidance).toBeVisible();
+  await expect(settings.getByRole('button', { name: 'Change password' })).toHaveCount(0);
+  await expect(settings.getByText('Deactivate Matrix account')).toHaveCount(0);
+  await guidance.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('delegated-account-settings.png') });
+});
