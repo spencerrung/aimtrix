@@ -38,6 +38,44 @@ async function verifyAttachment(scope, file, caption) {
   invariant(Buffer.from(received).equals(file.buffer), 'attachment-decryption');
 }
 
+async function installSyntheticQrCamera(page) {
+  await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = 640;
+    const context = canvas.getContext('2d');
+    let image;
+    const paint = () => {
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, 640, 640);
+      if (image) {
+        context.imageSmoothingEnabled = false;
+        context.drawImage(image, 40, 40, 560, 560);
+      }
+    };
+    paint();
+    const timer = window.setInterval(paint, 100);
+    const stream = canvas.captureStream(10);
+    const devices = navigator.mediaDevices;
+    const original = Object.getOwnPropertyDescriptor(devices, 'getUserMedia');
+    Object.defineProperty(devices, 'getUserMedia', { configurable: true, value: async () => stream });
+    window.__aimtrixQrFeed = async (source) => {
+      const next = document.createElement('img');
+      next.src = source;
+      await next.decode();
+      image = next;
+      paint();
+    };
+    window.__aimtrixQrStop = () => {
+      window.clearInterval(timer);
+      stream.getTracks().forEach((track) => track.stop());
+      if (original) Object.defineProperty(devices, 'getUserMedia', original);
+      else Reflect.deleteProperty(devices, 'getUserMedia');
+      delete window.__aimtrixQrFeed;
+      delete window.__aimtrixQrStop;
+    };
+  });
+}
+
 export async function runJourneys({ browser, stack, check, forceFailure, metrics }) {
   const api = matrixApi(stack);
   const accounts = {};
@@ -796,6 +834,51 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await elementDialog.getByRole('button', { name: 'Got it', exact: true }).click();
         await until(() => incoming.isHidden(), stage, 45000);
       } catch { throw new Error(stage); }
+    });
+    if (elementPeer) await check('element-ui-incoming-qr-verification', async () => {
+      let stage = 'element-qr-login';
+      let recipient;
+      try {
+        const peer = await newPage();
+        await peer.goto(`${stack.origins.element}/#/login`);
+        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
+        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        stage = 'element-qr-request';
+        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
+        stage = 'element-qr-incoming';
+        await until(async () => {
+          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
+            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).getByRole('button', { name: 'Scan QR code' }).isVisible()) {
+              recipient = candidate;
+              return true;
+            }
+          }
+          return false;
+        }, stage, 45000);
+        await recipient.bringToFront();
+        await installSyntheticQrCamera(recipient);
+        const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
+        stage = 'element-qr-scan-ready';
+        await incoming.getByRole('button', { name: 'Scan QR code' }).click();
+        const scan = recipient.getByRole('dialog', { name: 'Matrix verification QR code' });
+        await scan.getByRole('heading', { name: 'Scan the other device’s QR code' }).waitFor({ timeout: 45000 });
+        stage = 'element-qr-code';
+        const code = peer.locator('.mx_VerificationQRCode img').first();
+        await code.waitFor({ timeout: 45000 });
+        const source = await code.getAttribute('src');
+        invariant(source?.startsWith('data:image/png;base64,'), stage);
+        stage = 'element-qr-camera-decode';
+        await recipient.evaluate(async (value) => { await window.__aimtrixQrFeed(value); }, source);
+        await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).waitFor({ timeout: 45000 });
+        stage = 'element-qr-confirm';
+        await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).click();
+        stage = 'element-qr-complete';
+        await scan.waitFor({ state: 'hidden', timeout: 45000 });
+        await peer.locator('.mx_InfoDialog').getByRole('button', { name: 'Got it', exact: true }).click();
+        await until(() => incoming.isHidden(), stage, 45000);
+      } catch { throw new Error(stage); }
+      finally { if (recipient) await recipient.evaluate(() => window.__aimtrixQrStop?.()).catch(() => undefined); }
     });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();

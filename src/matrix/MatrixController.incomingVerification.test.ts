@@ -71,6 +71,15 @@ describe('incoming verification', () => {
     expect(scanQRCode).not.toHaveBeenCalled();
   });
 
+  it('accepts a QR scan request before the camera receives a code', async () => {
+    const { controller, internals, request } = fixture();
+    request.otherPartySupportsMethod.mockImplementation((method: string) => method === 'm.qr_code.show.v1');
+    internals.handleIncomingVerification(request as unknown as VerificationRequest);
+    await controller.scanIncomingVerificationQr('verification-1');
+    expect(request.accept).toHaveBeenCalledOnce();
+    expect(request.phase).toBe(VerificationPhase.Ready);
+  });
+
   it('does not offer emoji after a QR verifier starts', () => {
     const { internals, request } = fixture();
     request.phase = VerificationPhase.Started;
