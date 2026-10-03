@@ -138,6 +138,12 @@ export async function createStack({ elementUi = false, syncResponseCache = false
         passwords: { enabled: true },
         policy: { data: { client_registration: { allow_host_mismatch: true, allow_insecure_uris: true } } },
       });
+      try {
+        await command('docker', ['run', '--rm', '--network', 'none', '--log-driver', 'none',
+          '--label', `dev.aimtrix.test-owner=${owner}`, '--user', `${uid}:${uid}`,
+          '--volume', `${configDirectory}:/config:ro`,
+          '--env', 'MAS_CONFIG=/config/mas-generated.yaml:/config/mas-overlay.json', images.mas, 'config', 'check']);
+      } catch { throw new Error('mas-config-invalid'); }
     }
     if (elementUi) {
       await write('element.json', {
@@ -198,11 +204,15 @@ http {
       ...(elementUi ? { element: { ...isolation, image: images.element, environment: { ELEMENT_WEB_PORT: '8080' }, entrypoint: ['nginx'], command: ['-c', '/config/element-nginx.conf', '-g', 'daemon off;'], ports: [`127.0.0.1:${ports.element}:8080`] } } : {}),
     }, networks: { test: { driver: 'bridge', labels: { 'dev.aimtrix.test-owner': owner } } } });
     prepared = true;
-    await compose('up', '--detach');
-    await until(async () => {
-      try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok &&
-        (await fetch(delegatedAuth ? `${origins.mas}/.well-known/openid-configuration` : `${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
-    }, 'stack-readiness', 60000);
+    try { await compose('up', '--detach'); } catch { throw new Error(delegatedAuth ? 'mas-compose-start' : 'stack-compose-start'); }
+    await Promise.all([
+      until(async () => {
+        try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
+      }, delegatedAuth ? 'mas-synapse-readiness' : 'stack-readiness', 60000),
+      until(async () => {
+        try { return (await fetch(delegatedAuth ? `${origins.mas}/.well-known/openid-configuration` : `${origins.dex}/dex/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
+      }, delegatedAuth ? 'mas-discovery-readiness' : 'stack-readiness', 60000),
+    ]);
     if (elementUi) await until(async () => {
       try { return (await fetch(`${origins.element}/config.json`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
     }, 'element-readiness', 60000);

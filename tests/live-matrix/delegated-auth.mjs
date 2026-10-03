@@ -57,7 +57,7 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
     await check('delegated-auth-logout', async () => {
       await page.getByRole('button', { name: 'Open settings' }).click();
       await page.getByRole('button', { name: 'Sign out', exact: true }).click();
-      await page.getByRole('button', { name: 'Sign On', exact: true }).waitFor({ timeout: 30000 });
+      await page.getByRole('button', { name: 'Sign in with homeserver OAuth', exact: true }).waitFor({ timeout: 30000 });
       const cleared = await page.evaluate(() => !localStorage.getItem('aimtrix.matrix-session.v1'));
       invariant(cleared, 'delegated-local-cleanup');
       const response = await fetch(tokenEndpoint, { method: 'POST',
