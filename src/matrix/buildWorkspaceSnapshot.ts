@@ -291,11 +291,14 @@ function eventBody(
   location?: MessageSummary['location'];
   poll?: MessageSummary['poll'];
 } | undefined {
-  if (event.isRedacted()) return event.getType() === 'org.matrix.msc3381.poll.start' || event.getType() === 'm.poll.start'
-    ? { body: 'This poll was removed.', kind: 'unsupported', fallbackType: event.getType() } : undefined;
-  if (event.isState?.()) return undefined;
   const type = event.getType();
-  if (type === matrixEventType.encrypted) {
+  if (event.isRedacted()) return type === 'org.matrix.msc3381.poll.start' || type === 'm.poll.start'
+    ? { body: 'This poll was removed.', kind: 'unsupported', fallbackType: type } : undefined;
+  if (event.isState?.()) return undefined;
+  // A failed SDK decryption has a synthetic m.room.message clear type and an
+  // m.bad.encrypted body. Render only our reason-code guidance, never that
+  // SDK-generated error body.
+  if (type === matrixEventType.encrypted || event.decryptionFailureReason) {
     return { body: decryptionGuidance(event.decryptionFailureReason), kind: 'encrypted' };
   }
   const originalContent = originalEventContent(event);
