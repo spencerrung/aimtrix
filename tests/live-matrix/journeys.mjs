@@ -54,7 +54,8 @@ async function installSyntheticQrCamera(page) {
       }
     };
     paint();
-    const stream = canvas.captureStream(15);
+    // Explicit frames avoid automatic capture pacing varying under a busy CI runner.
+    const stream = canvas.captureStream(0);
     const track = stream.getVideoTracks()[0];
     // Keep the synthetic camera advancing even if the QR image is unchanged.
     // A corner pixel outside the QR alternates so Chromium has a changed frame
@@ -65,7 +66,7 @@ async function installSyntheticQrCamera(page) {
       context.fillStyle = marker ? '#fff' : '#000';
       context.fillRect(0, 0, 2, 2);
       marker = !marker;
-      track.requestFrame?.();
+      track.requestFrame();
     };
     frame();
     const timer = window.setInterval(frame, 100);
@@ -77,7 +78,27 @@ async function installSyntheticQrCamera(page) {
       next.src = source;
       await next.decode();
       image = next;
-      frame();
+      const preview = document.querySelector('video.incoming-verification__camera');
+      const capture = document.createElement('canvas');
+      capture.width = capture.height = 640;
+      const captureContext = capture.getContext('2d', { willReadFrequently: true });
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        frame();
+        await new Promise((resolve) => window.setTimeout(resolve, 100));
+        // A successful scan unmounts its preview while the peer handshake continues.
+        if (!preview?.isConnected) return;
+        if (!preview || preview.readyState < 2) continue;
+        captureContext.drawImage(preview, 0, 0, 640, 640);
+        const pixels = captureContext.getImageData(0, 0, 640, 640).data;
+        let dark = 0; let light = 0;
+        for (let y = 80; y < 560; y += 40) for (let x = 80; x < 560; x += 40) {
+          const offset = (y * 640 + x) * 4;
+          if (pixels[offset] < 100 && pixels[offset + 1] < 100 && pixels[offset + 2] < 100) dark += 1;
+          if (pixels[offset] > 200 && pixels[offset + 1] > 200 && pixels[offset + 2] > 200) light += 1;
+        }
+        if (dark >= 10 && light >= 10) return;
+      }
+      throw new Error('Synthetic camera did not display the QR frame.');
     };
     window.__aimtrixQrStop = () => {
       window.clearInterval(timer);
@@ -894,8 +915,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await code.waitFor({ timeout: 45000 });
         const source = await code.getAttribute('src');
         invariant(source?.startsWith('data:image/png;base64,'), stage);
-        stage = 'element-qr-camera-decode';
+        stage = 'element-qr-camera-frame';
         await recipient.evaluate(async (value) => { await window.__aimtrixQrFeed(value); }, source);
+        stage = 'element-qr-camera-decode';
+        await scan.getByRole('heading', { name: 'Scan the other device’s QR code' }).waitFor({ state: 'hidden', timeout: 60000 });
+        invariant(!await incoming.getByRole('alert').isVisible(), stage);
+        stage = 'element-qr-reciprocate';
         await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).waitFor({ timeout: 60000 });
         stage = 'element-qr-confirm';
         await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).click();
