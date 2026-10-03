@@ -1779,7 +1779,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       // Voting in an older poll can detach Element's visible timeline. Open
       // the exact server-accepted location event and require its decrypted UI.
       await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(locationEventId)}`);
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last().isVisible(), 'element-location-render', 60000);
+      await until(() => elementPeer.locator('.mx_EventTile .mx_MLocationBody_map canvas').last().isVisible(), 'element-location-render', 60000);
     });
     if (elementPeer) await check('element-ui-location-to-aimtrix', async () => {
       let stage = 'element-location-open-menu';
