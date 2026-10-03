@@ -617,6 +617,9 @@ export class MatrixController {
 
   private setSnapshot(snapshot: MatrixControllerSnapshot): void {
     this.snapshot = snapshot;
+    // Temporary live-scale diagnostic; remove before merging the performance PR.
+    (globalThis as typeof globalThis & { __aimtrixCaptureSnapshot?: (value: MatrixControllerSnapshot) => void })
+      .__aimtrixCaptureSnapshot?.(snapshot);
     for (const subscriber of this.subscribers) subscriber();
   }
 
