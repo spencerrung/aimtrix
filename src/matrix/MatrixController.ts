@@ -1105,6 +1105,7 @@ export class MatrixController {
       : [];
 
     return {
+      authentication: { delegated: Boolean(session.oauth) },
       server: {
         userId: session.userId,
         homeserverUrl: session.baseUrl,
@@ -1332,6 +1333,7 @@ export class MatrixController {
   ): Promise<void> {
     const client = this.client;
     if (!client) throw new Error('Matrix is not connected.');
+    if (this.activeSession?.oauth) throw new Error('This delegated account manages its password with its identity provider.');
     await client.setPassword(
       {
         type: 'm.login.password',
@@ -1346,6 +1348,7 @@ export class MatrixController {
   public async deactivateAccount(password: string, erase: boolean): Promise<void> {
     const client = this.client;
     if (!client) throw new Error('Matrix is not connected.');
+    if (this.activeSession?.oauth) throw new Error('This delegated account manages deactivation with its identity provider.');
     try {
       await this.unregisterPushNotifications();
     } catch {
@@ -1386,6 +1389,9 @@ export class MatrixController {
     } catch (error) {
       const candidate = error as { errcode?: string; data?: { session?: string }; httpStatus?: number };
       const authSession = candidate.data?.session;
+      if (session.oauth && (candidate.errcode === 'M_UNAUTHORIZED' || (candidate.httpStatus === 401 && authSession))) {
+        throw new Error('This delegated account needs provider authorization to sign out that device.', { cause: error });
+      }
       if ((candidate.errcode === 'M_UNAUTHORIZED' || candidate.httpStatus === 401) && authSession) {
         this.pendingDeviceAuth.set(deviceId, authSession);
         return 'password-required';

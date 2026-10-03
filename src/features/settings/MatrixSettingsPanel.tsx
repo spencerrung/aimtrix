@@ -61,14 +61,16 @@ function formatLastSeen(timestamp?: number): string {
   }).format(timestamp);
 }
 
-function recoverySetupError(error: unknown): string {
+function recoverySetupError(error: unknown, delegated = false): string {
   if (error instanceof Error && error.message.startsWith('This homeserver requires interactive authentication')) {
     return 'This homeserver requires an authorization step Aimtrix cannot complete here. Set up recovery in a trusted Matrix client, then return with its recovery key.';
   }
   if (error instanceof Error && (error.message.startsWith('Recovery or key backup already exists') || error.message.startsWith('This account already has an encryption identity'))) {
     return 'This account already has recovery or an encryption identity. Restore its existing key or use a trusted device before considering a confirmed reset.';
   }
-  return 'Recovery setup failed. Confirm your account password and try again.';
+  return delegated
+    ? 'Recovery setup failed. Retry or use a trusted Matrix client if this provider requires another authorization step.'
+    : 'Recovery setup failed. Confirm your account password and try again.';
 }
 
 function recoveryRestoreError(error: unknown): string {
@@ -282,8 +284,12 @@ export function MatrixSettingsPanel({
       setAccountPassword('');
       setNotice('The Matrix session was signed out.');
       await refresh();
-    } catch {
-      throw new Error('The homeserver did not accept that session removal.');
+    } catch (error) {
+      if (snapshot?.authentication.delegated && error instanceof Error && error.message.includes('provider authorization')) {
+        setError('This provider requires another authorization step to sign out that device. Manage it in a trusted Matrix client or your identity provider.');
+        return;
+      }
+      throw new Error('The homeserver did not accept that session removal.', { cause: error });
     }
   });
 
@@ -338,7 +344,7 @@ export function MatrixSettingsPanel({
       setNotice('Encryption recovery and key backup are ready. Store this key safely.');
       await refresh();
     } catch (error) {
-      setError(recoverySetupError(error));
+      setError(recoverySetupError(error, snapshot?.authentication.delegated));
     }
   });
 
@@ -352,9 +358,13 @@ export function MatrixSettingsPanel({
       setRecoveryPassword('');
       setNotice('Recovery was reset. Older backup versions may no longer be available. Save the new key now.');
       await refresh();
-    } catch {
+    } catch (error) {
       await refresh();
-      setError('Recovery reset did not finish. Check the refreshed account health before retrying; the previous backup may already have changed.');
+      const providerGuidance = snapshot?.authentication.delegated && error instanceof Error &&
+        error.message.startsWith('This homeserver requires interactive authentication')
+        ? ' This provider requires an authorization step Aimtrix cannot complete here. Use a trusted Matrix client, then return with its new recovery key.'
+        : '';
+      setError(`Recovery reset did not finish. Check the refreshed account health before retrying; the previous backup may already have changed.${providerGuidance}`);
     }
   });
 
@@ -443,15 +453,15 @@ export function MatrixSettingsPanel({
             {!snapshot.security.secretStorageConfigured && !snapshot.security.keyBackupConfigured && !snapshot.security.keyBackupEnabled ? (
               <div className="recovery-setup">
                 <strong>Set up new recovery</strong>
-                <p>Choose this only for an account without existing recovery. Save the generated key before closing this page. Some servers ask for your account password to authorize setup; SSO-only authorization is not supported here when they do.</p>
+                <p>Choose this only for an account without existing recovery. Save the generated key before closing this page. {snapshot.authentication.delegated ? 'If this provider requires extra authorization, complete setup in a trusted Matrix client and return with its recovery key.' : 'Some servers ask for your account password to authorize setup; SSO-only authorization is not supported here when they do.'}</p>
                 <label>New recovery passphrase<input type="password" autoComplete="new-password" minLength={12} value={recoveryPassphrase} onChange={(event) => setRecoveryPassphrase(event.target.value)} /></label>
-                <label>Matrix password, if this account has one<input type="password" autoComplete="current-password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></label>
+                {!snapshot.authentication.delegated ? <label>Matrix password, if this account has one<input type="password" autoComplete="current-password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></label> : null}
                 <button className="aqua-button" type="button" onClick={() => void setupRecovery()} disabled={recoveryPassphrase.trim().length < 12}>Set up new recovery</button>
               </div>
             ) : <div className="recovery-setup">
               <strong>Lost recovery key?</strong>
               <p>Try your existing key or a trusted device first. Reset deletes existing backup versions and changes your encryption identity; older messages may become unreadable.</p>
-              {actions.resetRecovery ? <><label>New recovery passphrase<input type="password" minLength={12} value={recoveryPassphrase} onChange={(event) => setRecoveryPassphrase(event.target.value)} /></label><label>Matrix password, if available<input type="password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></label><button className="aqua-button is-danger" type="button" disabled={recoveryPassphrase.trim().length < 12} onClick={() => setConfirmRecoveryReset(true)}>Reset recovery and backup</button></> : <p>Use another trusted Matrix client to reset recovery, then return here to restore its new key.</p>}
+              {actions.resetRecovery ? <><label>New recovery passphrase<input type="password" minLength={12} value={recoveryPassphrase} onChange={(event) => setRecoveryPassphrase(event.target.value)} /></label>{!snapshot.authentication.delegated ? <label>Matrix password, if available<input type="password" value={recoveryPassword} onChange={(event) => setRecoveryPassword(event.target.value)} /></label> : null}<button className="aqua-button is-danger" type="button" disabled={recoveryPassphrase.trim().length < 12} onClick={() => setConfirmRecoveryReset(true)}>Reset recovery and backup</button></> : <p>Use another trusted Matrix client to reset recovery, then return here to restore its new key.</p>}
             </div>}
             {recoveryKey ? (
               <div className="recovery-key-output">
@@ -529,6 +539,7 @@ export function MatrixSettingsPanel({
 
           <section className="matrix-settings-group account-danger-zone">
             <header><AlertTriangle size={17} /><div><h3>Password and account</h3><p>Security-sensitive Matrix account actions.</p></div></header>
+            {snapshot.authentication.delegated ? <p>This account signs in through homeserver OAuth. Change its password or deactivate it through the identity provider or a Matrix client that supports the provider’s account-management flow. Aimtrix cannot complete those provider-specific actions here.</p> : <>
             <form onSubmit={(event) => {
               event.preventDefault();
               void run(() => actions.changePassword(currentPassword, newPassword, logoutOtherDevices).then(() => {
@@ -555,6 +566,7 @@ export function MatrixSettingsPanel({
                 }}>Permanently deactivate account</button>
               </div>
             </details>
+            </>}
           </section>
         </>
       ) : null}

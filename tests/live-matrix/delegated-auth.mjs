@@ -54,6 +54,17 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
       tokenEndpoint = metadata.token_endpoint;
       metrics.delegatedLoginCompleted = 1;
     });
+    await check('delegated-auth-account-settings', async () => {
+      await page.getByRole('button', { name: 'Open settings' }).click();
+      const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+      await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+      await settings.getByText(/This account signs in through homeserver OAuth/).waitFor();
+      invariant(await settings.getByRole('button', { name: 'Change password' }).count() === 0,
+        'delegated-password-control-hidden');
+      invariant(await settings.getByText('Deactivate Matrix account').count() === 0,
+        'delegated-deactivation-control-hidden');
+      await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+    });
     await check('delegated-auth-logout', async () => {
       await page.getByRole('button', { name: 'Open settings' }).click();
       await page.getByRole('button', { name: 'Sign out', exact: true }).click();

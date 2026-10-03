@@ -6,6 +6,7 @@ import { Dialog, DialogClose } from '../../components/Dialog';
 import type { MatrixSettingsSnapshot } from '../../matrix/settingsTypes';
 
 const snapshot: MatrixSettingsSnapshot = {
+  authentication: { delegated: false },
   server: { userId: '@synthetic:example.test', homeserverUrl: 'https://example.test', serverName: 'example.test', deviceId: 'LOCAL', versions: ['v1.11'], rtcFoci: [] },
   security: { encryptionReady: true, crossSigningReady: true, secretStorageReady: true, keyBackupEnabled: true },
   devices: [{ id: 'OTHER', displayName: 'Test session', current: false, verified: false }], ignoredUsers: [],
@@ -58,6 +59,34 @@ it('keeps failed device removal open and retains password-required UIA input', a
   fireEvent.click(screen.getByText('Confirm sign out'));
   await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('did not accept'));
   expect(password).toHaveValue('synthetic-test-only');
+});
+
+it('shows provider-managed account guidance for delegated sessions without password-only controls', async () => {
+  const delegated = { ...snapshot, authentication: { delegated: true },
+    security: { ...snapshot.security, secretStorageConfigured: false, keyBackupConfigured: false, keyBackupEnabled: false } };
+  const removeDevice = vi.fn().mockRejectedValue(new Error('This delegated account needs provider authorization to sign out that device.'));
+  setup({ load: vi.fn().mockResolvedValue(delegated), removeDevice });
+  expect(await screen.findByText(/This account signs in through homeserver OAuth/)).toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Change password' })).not.toBeInTheDocument();
+  expect(screen.queryByText('Deactivate Matrix account')).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Matrix password, if this account has one')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByText('Sign out'));
+  fireEvent.click(screen.getByText('Sign out device'));
+  expect(await screen.findByRole('alert')).toHaveTextContent('provider requires another authorization step');
+  expect(screen.queryByRole('dialog', { name: 'Sign out this device?' })).not.toBeInTheDocument();
+  expect(removeDevice).toHaveBeenCalledWith('OTHER', undefined);
+});
+
+it('retains reset context and gives delegated provider guidance after a UIA challenge', async () => {
+  const delegated = { ...snapshot, authentication: { delegated: true } };
+  const load = vi.fn().mockResolvedValue(delegated);
+  setup({ load, resetRecovery: vi.fn().mockRejectedValue(new Error('This homeserver requires interactive authentication that Aimtrix cannot complete here.')) });
+  fireEvent.change(await screen.findByLabelText('New recovery passphrase'), { target: { value: 'synthetic passphrase only' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Reset recovery and backup' }));
+  fireEvent.click(within(screen.getByRole('dialog', { name: 'Reset encryption recovery?' })).getByRole('button', { name: 'Reset recovery and backup' }));
+  await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+  expect(await screen.findByRole('alert')).toHaveTextContent('trusted Matrix client');
+  expect(screen.getByLabelText('New recovery passphrase')).toHaveValue('synthetic passphrase only');
 });
 
 it('loads notification rules only when the controls are opened', async () => {

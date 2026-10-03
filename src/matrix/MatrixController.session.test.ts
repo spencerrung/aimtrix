@@ -94,6 +94,22 @@ afterEach(() => {
 });
 
 describe('MatrixController session lifecycle', () => {
+  it('keeps password-only account operations unavailable to delegated sessions', async () => {
+    const delegated = { ...session, oauth: { clientId: 'public-client', issuer: 'https://auth.example.test',
+      refreshToken: 'synthetic-refresh' } };
+    const client = { ...fakeClient(), setPassword: vi.fn(), deactivateAccount: vi.fn(),
+      deleteDevice: vi.fn().mockRejectedValue({ httpStatus: 401, data: { session: 'synthetic-uia' } }) };
+    createClient.mockReturnValue(client);
+    const { controller } = controllerFixture(delegated);
+    await controller.initialize();
+    await expect(controller.changePassword('synthetic-old', 'synthetic-new', false)).rejects.toThrow('identity provider');
+    await expect(controller.deactivateAccount('synthetic-old', false)).rejects.toThrow('identity provider');
+    await expect(controller.removeDevice('OTHER')).rejects.toThrow('provider authorization');
+    expect(client.setPassword).not.toHaveBeenCalled();
+    expect(client.deactivateAccount).not.toHaveBeenCalled();
+    expect(client.deleteDevice).toHaveBeenCalledOnce();
+  });
+
   it('hides an expired active session immediately and stores one token-free recovery record', async () => {
     const client = fakeClient(); createClient.mockReturnValue(client);
     const { controller, credentials, internals } = controllerFixture();
