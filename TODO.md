@@ -165,7 +165,7 @@ These retain compatibility depth and validation obligations alongside additive f
 
 ### Encryption and identity depth
 
-- [ ] Validate Aimtrix QR display with an independent scanner and cross-client cancellation; [PR #219](https://github.com/spencerrung/aimtrix/pull/219) completed the Element-generated QR to Aimtrix camera-scan direction, and disposable Aimtrix-to-Aimtrix incoming SAS is exercised separately. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
+- [ ] Validate Aimtrix QR display with an independent scanner; [PR #219](https://github.com/spencerrung/aimtrix/pull/219) completed the Element-generated QR to Aimtrix camera-scan direction, and disposable Aimtrix-to-Aimtrix incoming SAS is exercised separately. The optional Element peer journey also exercises cancellation initiated by each client. Element Web v1.12.28 has no QR scanner control, so a separate scanner is needed for the reverse direction. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Validate independently generated withheld-key and secret-gossip behavior, key-request guidance, and recovery reset across further UIA variants. The disposable Synapse harness exercises a standard withheld-key event and confirmed password-account reset; the installed Rust SDK disables automatic room-key requests. — [#161](https://github.com/spencerrung/aimtrix/issues/161).
 - [ ] Test delegated OIDC/MSC3861 native flows beyond standard Matrix SSO token login. — [#174](https://github.com/spencerrung/aimtrix/issues/174).
 
