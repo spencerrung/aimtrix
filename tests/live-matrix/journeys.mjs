@@ -1351,7 +1351,13 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         if (stage === 'withheld-actionable-guidance' && row) {
           if (await row.getByText('The sender withheld this message key.', { exact: false }).count()) stage = 'withheld-generic-guidance';
           else if (await row.getByText('Waiting for this message key.', { exact: false }).count()) stage = 'withheld-key-pending';
+          else if (await row.getByText('Waiting for encryption keys…', { exact: true }).count()) stage = 'withheld-unattempted';
           else if (await row.getByText('Checking your key backup', { exact: false }).count()) stage = 'withheld-backup-pending';
+          else if (await row.getByText('This older message needs your key backup.', { exact: false }).count()) stage = 'withheld-historical-backup';
+          else if (await row.getByText('No key backup was available', { exact: false }).count()) stage = 'withheld-historical-no-backup';
+          else if (await row.getByText('This message predates your room access', { exact: false }).count()) stage = 'withheld-not-joined';
+          else if (await row.getByText('The sender’s device identity needs review', { exact: false }).count()) stage = 'withheld-sender-trust';
+          else if (await row.getByText('This encrypted message could not be opened.', { exact: false }).count()) stage = 'withheld-unknown-error';
           else if (!await row.count()) stage = 'withheld-event-gone';
           else stage = 'withheld-other-guidance';
         }
