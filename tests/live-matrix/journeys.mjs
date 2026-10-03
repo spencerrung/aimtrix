@@ -1853,11 +1853,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       try {
         await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(voiceEventId)}`);
         const tile = elementPeer.locator(`.mx_EventTile[data-scroll-tokens=${JSON.stringify(voiceEventId)}]`);
+        stage = 'element-voice-tile';
+        await tile.waitFor({ state: 'visible', timeout: 60000 });
         const player = tile.locator('.mx_MVoiceMessageBody');
-        stage = 'element-voice-player-ready';
+        stage = 'element-voice-body';
+        await player.waitFor({ state: 'visible', timeout: 60000 });
         const play = player.getByRole('button', { name: 'Play', exact: true });
-        await play.waitFor({ state: 'visible', timeout: 60000 });
-        invariant(await play.isEnabled(), stage);
+        stage = 'element-voice-player-ready';
+        await until(async () => await play.isVisible() || await player.locator('.mx_MediaProcessingError_Icon').count() > 0, stage, 60000);
+        if (await player.locator('.mx_MediaProcessingError_Icon').count()) { stage = 'element-voice-media-error'; throw new Error(stage); }
+        stage = 'element-voice-player-enabled';
+        await until(() => play.isEnabled(), stage, 60000);
         stage = 'element-voice-playing';
         await play.click();
         await player.getByRole('button', { name: 'Pause', exact: true }).waitFor({ timeout: 10000 });
