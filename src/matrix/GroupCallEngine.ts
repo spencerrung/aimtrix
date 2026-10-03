@@ -106,10 +106,13 @@ export class GroupCallEngine {
   }
 
   public async join(video: boolean, devices: { microphoneId: string; cameraId: string }, microphoneEnabled: boolean): Promise<void> {
+    let phase: 'browser' | 'room' | 'transport' | 'authorization' | 'worker' | 'membership' | 'key' | 'connection' | 'encryption' | 'microphone' | 'camera' = 'browser';
     try {
       if (!isE2EESupported()) throw new Error('Encrypted group calling is not supported by this browser.');
+      phase = 'room';
       const matrixRoom = this.client.getRoom(this.state.roomId);
       if (!matrixRoom || matrixRoom.getMyMembership() !== 'join') throw new Error('Join this Matrix room before starting a group call.');
+      phase = 'transport';
       const session = this.client.matrixRTC.getRoomSession(matrixRoom);
       const transport = await discoverGroupCallTransport(this.client, session);
       if (!transport) throw new Error('This homeserver has no supported MatrixRTC LiveKit service.');
@@ -117,9 +120,11 @@ export class GroupCallEngine {
       const deviceId = this.client.getDeviceId();
       if (!deviceId) throw new Error('A Matrix device is required for encrypted group calls.');
       const identity = { userId, deviceId, memberId: `${userId}:${deviceId}` };
+      phase = 'authorization';
       const authorization = await authorizeGroupCall(this.client, transport, identity, this.state.roomId, this.abort.signal);
       if (this.abort.signal.aborted) return;
 
+      phase = 'worker';
       const keys = new MatrixMediaKeys();
       this.worker = new E2EEWorker();
       const room = new LiveKitRoom({ encryption: { keyProvider: keys, worker: this.worker } });
@@ -136,7 +141,9 @@ export class GroupCallEngine {
       this.keyListener = keyChanged;
       session.on(MatrixRTCSessionEvent.EncryptionKeyChanged, keyChanged);
       session.reemitEncryptionKeys();
+      phase = 'membership';
       session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio' });
+      phase = 'key';
       await Promise.race([ownKey, new Promise<never>((_, reject) => {
         const timer = window.setTimeout(() => reject(new Error('The group call media key was not ready.')), 30_000);
         const abort = () => reject(new DOMException('The call was cancelled.', 'AbortError'));
@@ -144,21 +151,37 @@ export class GroupCallEngine {
         void ownKey.finally(() => { window.clearTimeout(timer); this.abort.signal.removeEventListener('abort', abort); });
       })]);
       if (this.abort.signal.aborted) return;
+      phase = 'connection';
       await room.connect(authorization.url, authorization.jwt);
       if (this.abort.signal.aborted) { await this.release(); return; }
+      phase = 'encryption';
       await room.setE2EEEnabled(true);
       if (this.abort.signal.aborted) { await this.release(); return; }
       if (!room.isE2EEEnabled) throw new Error('The group call could not enable media encryption.');
+      phase = 'microphone';
       if (microphoneEnabled) await room.localParticipant.setMicrophoneEnabled(true, devices.microphoneId ? { deviceId: { exact: devices.microphoneId } } : undefined);
       if (this.abort.signal.aborted) { await this.release(); return; }
+      phase = 'camera';
       if (video) await room.localParticipant.setCameraEnabled(true, devices.cameraId ? { deviceId: { exact: devices.cameraId } } : undefined);
       if (this.abort.signal.aborted) { await this.release(); return; }
       this.publish({ state: 'connected' });
     } catch (cause) {
-      const message = cause instanceof Error && cause.name !== 'AbortError' ? cause.message : 'The group call could not start.';
+      const message = {
+        browser: 'This browser does not support encrypted group calls.',
+        room: 'Join this Matrix room before starting a group call.',
+        transport: 'This homeserver has no compatible group call transport.',
+        authorization: 'The group call authorization service could not issue a token.',
+        worker: 'The media encryption worker could not start.',
+        membership: 'The MatrixRTC membership could not be created.',
+        key: 'The group call media key was not ready.',
+        connection: 'The group call could not connect to its media server.',
+        encryption: 'The group call could not enable media encryption.',
+        microphone: 'The selected microphone could not be opened.',
+        camera: 'The selected camera could not be opened.',
+      }[phase];
       await this.release();
       if (!this.disposed && !this.abort.signal.aborted) this.publish({ state: 'error', error: message });
-      throw cause;
+      throw new Error(message, { cause });
     }
   }
 

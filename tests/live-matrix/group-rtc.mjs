@@ -90,10 +90,12 @@ try {
       const alert = prejoin.getByRole('alert');
       if (await alert.count()) {
         const message = await alert.textContent();
-        stage = message?.includes('authorization') ? 'group-token-rejected'
-          : message?.includes('media key') ? 'group-key-unavailable'
-            : message?.includes('connect') ? 'group-sfu-unavailable'
-              : 'group-join-rejected';
+        const category = [
+          ['authorization', 'token'], ['media key', 'key'], ['connect', 'sfu'],
+          ['encryption worker', 'worker'], ['membership', 'membership'],
+          ['microphone', 'microphone'], ['media encryption', 'encryption'],
+        ].find(([needle]) => message?.includes(needle))?.[1];
+        stage = category ? `group-${category}-unavailable` : 'group-join-rejected';
       }
       throw error;
     }
