@@ -102,9 +102,11 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         stage = 'delegated-recovery-state-request';
         const encryption = await fetch(`${stack.origins.synapse}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
           { headers: { Authorization: `Bearer ${stored.accessToken}` } });
+        stage = encryption.status === 401 ? 'delegated-recovery-state-unauthorized'
+          : encryption.status === 404 ? 'delegated-recovery-state-missing' : 'delegated-recovery-state-http';
+        invariant(encryption.ok(), stage);
         stage = 'delegated-recovery-room-encryption';
-        invariant(encryption.ok() && (await encryption.json()).algorithm === 'm.megolm.v1.aes-sha2',
-          'delegated-recovery-room-encrypted');
+        invariant((await encryption.json()).algorithm === 'm.megolm.v1.aes-sha2', stage);
         stage = 'delegated-recovery-room-open';
         await createDialog.waitFor({ state: 'hidden' });
         await page.locator('.buddy-row').filter({ hasText: recoveryRoomName }).first().click();

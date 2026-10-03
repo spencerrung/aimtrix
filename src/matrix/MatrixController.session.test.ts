@@ -67,6 +67,8 @@ function platformFixture(stored: StoredMatrixSession | undefined = session) {
 
 type Internals = {
   client?: MatrixClient;
+  groupCallEngine?: { leave: () => Promise<void> };
+  inMemoryRecoveryKey?: Uint8Array<ArrayBuffer>;
   lifecycleRevision: number;
   connection: string;
   currentIssue?: string;
@@ -94,6 +96,29 @@ afterEach(() => {
 });
 
 describe('MatrixController session lifecycle', () => {
+  it('finishes expired-client teardown before a replacement client can connect', async () => {
+    const oldClient = fakeClient();
+    const replacement = fakeClient();
+    createClient.mockReturnValueOnce(oldClient).mockReturnValueOnce(replacement);
+    const { controller, internals } = controllerFixture();
+    await controller.initialize();
+    const leaving = deferred<void>();
+    internals.groupCallEngine = { leave: () => leaving.promise };
+    internals.inMemoryRecoveryKey = new Uint8Array([1, 2, 3]);
+    oldClient.emit('Session.logged_out', { errcode: 'M_UNKNOWN_TOKEN', data: { soft_logout: true } });
+    expect(controller.getSnapshot().status).toBe('reauthentication-required');
+    expect(oldClient.stopClient).toHaveBeenCalledOnce();
+    expect(internals.client).toBeUndefined();
+    expect(internals.inMemoryRecoveryKey).toBeUndefined();
+    const reconnecting = internals.connect({ ...session, accessToken: 'replacement-token' }, internals.lifecycleRevision);
+    await Promise.resolve();
+    expect(replacement.initRustCrypto).not.toHaveBeenCalled();
+    leaving.resolve();
+    await reconnecting;
+    expect(replacement.initRustCrypto).toHaveBeenCalledOnce();
+    expect(internals.client).toBe(replacement);
+  });
+
   it('keeps password-only account operations unavailable to delegated sessions', async () => {
     const delegated = { ...session, oauth: { clientId: 'public-client', issuer: 'https://auth.example.test',
       refreshToken: 'synthetic-refresh' } };
