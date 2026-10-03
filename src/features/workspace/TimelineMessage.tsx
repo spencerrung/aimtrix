@@ -8,6 +8,7 @@ import { emojiReactionKey, type EmojiPackEntry } from '../media/emojiPacks';
 import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
 import { EmojiAsset, MessageContent, LinkPreviewCard, type LinkPreview } from './MessageContent';
 import { MessageActions } from './MessageActions';
+import { useMessageGeneration } from './useMessageGeneration';
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 const MAX_VISIBLE_EMOJI_RESULTS = 240;
@@ -70,8 +71,7 @@ export const TimelineMessage = memo(function TimelineMessage({
   const [reactionPickerOpen, setReactionPickerOpen] = useState(false);
   const [reactionFeedback, setReactionFeedback] = useState<'pending' | 'failed'>();
   const reactionBusy = useRef(false);
-  const reactionGeneration = useRef(0);
-  useLayoutEffect(() => () => { reactionGeneration.current += 1; }, [message.id]);
+  const reactionGeneration = useMessageGeneration(message.id);
   const [reactionQuery, setReactionQuery] = useState('');
   const [reactionPickerPosition, setReactionPickerPosition] = useState({ top: 0, left: 0 });
   const reactionTrigger = useRef<HTMLButtonElement>(null);

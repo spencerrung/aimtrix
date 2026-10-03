@@ -16,6 +16,7 @@ declare global {
       revision: number;
       publish: (target?: 'hidden' | 'visible' | 'offpage') => void;
     };
+    largeAccountSnapshotRefs: WeakRef<WorkspaceSnapshot>[];
   }
 }
 
@@ -66,6 +67,7 @@ const initial: WorkspaceSnapshot = {
 };
 
 window.largeAccountFixture = { readyAt: 0, revision: 0, publish: () => {} };
+window.largeAccountSnapshotRefs = [];
 
 function Fixture() {
   const [workspace, setWorkspace] = useState(initial);
@@ -75,19 +77,23 @@ function Fixture() {
     window.largeAccountFixture.revision = revision;
     window.largeAccountFixture.publish = (target = 'hidden') => {
       const roomId = target === 'visible' ? lastRoomId : target === 'offpage' ? rooms[Math.floor(count / 2)].id : firstRoomId;
-      setWorkspace((current) => ({
-        ...current,
-        rooms: current.rooms.map((room) => room.id === roomId
-          ? { ...room, lastMessage: `Synthetic update ${revision + 1}`, updatedAt: room.updatedAt + 1 }
-          : room),
-        messagesByRoom: target === 'visible' ? {
-          ...current.messagesByRoom,
-          [lastRoomId]: [
-            ...current.messagesByRoom[lastRoomId].slice(1),
-            { ...messages[0], id: `$visible-update-${revision + 1}`, roomId: lastRoomId, body: `Synthetic visible update ${revision + 1}`, timestamp: count + revision + 1 },
-          ],
-        } : current.messagesByRoom,
-      }));
+      setWorkspace((current) => {
+        const next = {
+          ...current,
+          rooms: current.rooms.map((room) => room.id === roomId
+            ? { ...room, lastMessage: `Synthetic update ${revision + 1}`, updatedAt: room.updatedAt + 1 }
+            : room),
+          messagesByRoom: target === 'visible' ? {
+            ...current.messagesByRoom,
+            [lastRoomId]: [
+              ...current.messagesByRoom[lastRoomId].slice(1),
+              { ...messages[0], id: `$visible-update-${revision + 1}`, roomId: lastRoomId, body: `Synthetic visible update ${revision + 1}`, timestamp: count + revision + 1 },
+            ],
+          } : current.messagesByRoom,
+        };
+        window.largeAccountSnapshotRefs.push(new WeakRef(next));
+        return next;
+      });
       setRevision((value) => value + 1);
     };
   }, [revision]);

@@ -211,10 +211,11 @@ jobs:
           retention-days: 14
   large-account-initial-sync-profile:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       AIMTRIX_LIVE_OWNER: ci-large-${{ github.run_id }}-${{ github.run_attempt }}
       AIMTRIX_LIVE_ROOM_COUNT: 10000
+      AIMTRIX_LIVE_SUSTAINED: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -233,7 +234,7 @@ jobs:
         run: mkdir -p matrix-test-results
       - name: Measure synthetic 10k-room rendering on the CI host
         run: node scripts/profile-large-account.mjs --rooms=10000 --cycles=100 > matrix-test-results/synthetic-large-account.json
-      - name: Measure disposable many-room initial sync
+      - name: Measure disposable many-room initial sync and sustained delivery
         run: npm run test:matrix -- --profile-large-account
       - name: Remove any remaining job-owned test services
         if: always()

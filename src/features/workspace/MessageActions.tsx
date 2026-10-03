@@ -4,6 +4,7 @@ import { Bookmark, Copy, Link, MessageCircle, MoreHorizontal, Pencil, Pin, Reply
 import { Popover } from '../../components/Popover';
 import type { MessageSummary } from '../../matrix/viewModels';
 import { copyMessageText } from './messageClipboard';
+import { useMessageGeneration } from './useMessageGeneration';
 
 type Action = (message: MessageSummary) => void | Promise<void>;
 export interface MessageActionsProps {
@@ -31,10 +32,9 @@ export function MessageActions({ message, onReply, onOpenThread, onStartThread, 
   const [pending, setPending] = useState<string>();
   const [feedback, setFeedback] = useState<{ text: string; failed: boolean }>();
   const busy = useRef(false);
-  const generation = useRef(0);
+  const generation = useMessageGeneration(message.id);
   const trigger = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
-  useLayoutEffect(() => () => { generation.current += 1; }, [message.id]);
   useLayoutEffect(() => {
     if (!open || !trigger.current || !menu.current) return;
     const place = () => {
