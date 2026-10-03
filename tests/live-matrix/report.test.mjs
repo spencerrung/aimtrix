@@ -75,7 +75,7 @@ test('messaging evidence discards filenames, captions, drafts, bytes and formatt
 
 test('optional Element evidence records the pinned client without session or rendered content', () => {
   const privateValue = randomBytes(24).toString('hex');
-  for (const name of ['element-ui-formatted-interoperability', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification', 'element-ui-aimtrix-declines-verification', 'element-ui-withdraws-verification', 'element-ui-encrypted-poll', 'element-ui-encrypted-location', 'element-ui-encrypted-voice']) {
+  for (const name of ['element-ui-formatted-interoperability', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification', 'element-ui-aimtrix-declines-verification', 'element-ui-withdraws-verification', 'element-ui-encrypted-poll', 'element-ui-poll-vote', 'element-ui-poll-vote-replaced', 'element-ui-poll-ended', 'element-ui-encrypted-location', 'element-ui-encrypted-voice']) {
     const result = makeReport({ ...base, elementUi: true, failureStage: name, checks: [{ name, passed: true,
       storage: privateValue, renderedContent: privateValue, screenshot: privateValue, accessToken: privateValue }],
     });

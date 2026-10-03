@@ -1680,8 +1680,33 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const pollStartWire = wire.slice(socialWireStart);
       invariant(pollStartWire.length > 0 && pollStartWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(question)), 'poll-create-decrypted');
     });
-    if (elementPeer) await check('element-ui-encrypted-poll', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: question }).last().isVisible(), 'element-poll-render', 60000);
+    const elementPoll = elementPeer?.locator('.mx_MPollBody').filter({ hasText: question }).last();
+    if (elementPoll) await check('element-ui-encrypted-poll', async () => {
+      await until(() => elementPoll.isVisible(), 'element-poll-render', 60000);
+    });
+    if (elementPoll) await check('element-ui-poll-vote', async () => {
+      let stage = 'element-poll-vote-radio';
+      try {
+        const option = elementPoll.locator('.mx_PollOption .mx_StyledRadioButton').filter({ hasText: first });
+        await option.waitFor({ state: 'visible', timeout: 45000 });
+        const radio = option.getByRole('radio');
+        invariant(await radio.count() === 1, stage);
+        stage = 'element-poll-vote-enabled';
+        invariant(await radio.isEnabled(), stage);
+        stage = 'element-poll-vote-control';
+        const [request] = await Promise.all([
+          elementPeer.waitForRequest((candidate) => candidate.method() === 'PUT' && new URL(candidate.url()).pathname.includes('/send/m.room.encrypted/'), { timeout: 45000 }),
+          option.click({ timeout: 45000 }),
+        ]);
+        stage = 'element-poll-vote-encrypted';
+        const ciphertext = request.postData();
+        invariant(ciphertext && !ciphertext.includes(first) && !ciphertext.includes(question), stage);
+        stage = 'element-poll-vote-received';
+        await until(async () => {
+          await alicePoll.getByRole('button', { name: 'Refresh results' }).click();
+          return (await alicePoll.getByRole('button', { name: first }).locator('b').textContent()) === '1';
+        }, stage);
+      } catch { throw new Error(stage); }
     });
     await check('encrypted-poll-vote', async () => {
       const bobVoteStart = bobWire.length;
@@ -1700,8 +1725,16 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(voteWire.length > 0 && voteWire.every((event) => event.path.includes('/m.room.encrypted/')), 'poll-vote-reconciled');
       await until(async () => {
         await alicePoll.getByRole('button', { name: 'Refresh results' }).click();
-        return (await alicePoll.textContent()).includes('1 vote');
+        return (await alicePoll.textContent()).includes('1 vote') &&
+          (await alicePoll.getByRole('button', { name: first }).locator('b').textContent()) === '0' &&
+          (await alicePoll.getByRole('button', { name: second }).locator('b').textContent()) === '1';
       }, 'poll-vote-reconciled');
+    });
+    if (elementPoll) await check('element-ui-poll-vote-replaced', async () => {
+      await until(async () =>
+        (await elementPoll.locator('.mx_PollOption').filter({ hasText: first }).locator('.mx_PollOption_optionVoteCount').textContent())?.includes('0 votes') &&
+        (await elementPoll.locator('.mx_PollOption').filter({ hasText: second }).locator('.mx_PollOption_optionVoteCount').textContent())?.includes('1 vote'),
+      'element-poll-replacement', 45000);
     });
     await check('encrypted-poll-end', async () => {
       const pollEndWireStart = wire.length;
@@ -1714,6 +1747,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await bobPoll.getByRole('button', { name: 'Refresh results' }).click();
         return (await bobPoll.textContent()).includes('Poll ended');
       }, 'poll-end-reconciled');
+    });
+    if (elementPoll) await check('element-ui-poll-ended', async () => {
+      await until(() => elementPoll.getByRole('radio', { name: new RegExp(first) }).isDisabled(), 'element-poll-ended', 45000);
     });
     const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;
     await check('encrypted-location-interop', async () => {
