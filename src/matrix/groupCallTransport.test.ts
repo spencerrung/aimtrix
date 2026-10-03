@@ -30,16 +30,16 @@ describe('MatrixRTC transport contract', () => {
     expect(await discoverGroupCallTransport(client, empty)).toEqual({ type: 'livekit', livekit_service_url: 'https://wellknown.example.test' });
   });
 
-  it('requests a room-scoped token with OpenID and refuses invalid SFU responses', async () => {
+  it('requests the JWT matching legacy membership identity and refuses invalid SFU responses', async () => {
     const client = { getOpenIdToken: vi.fn().mockResolvedValue({ access_token: '<synthetic>', token_type: 'Bearer' }) } as unknown as Pick<MatrixClient, 'getOpenIdToken'>;
     const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' }), { status: 200 }));
     vi.stubGlobal('fetch', request);
     const identity = { userId: '@user:example.test', deviceId: 'DEVICE', memberId: '@user:example.test:DEVICE' };
     const transport = { type: 'livekit' as const, livekit_service_url: 'https://rtc.example.test/jwt' };
     expect(await authorizeGroupCall(client, transport, identity, '!room:example.test')).toEqual({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
-    expect(request).toHaveBeenCalledWith('https://rtc.example.test/jwt/get_token', expect.objectContaining({ method: 'POST' }));
+    expect(request).toHaveBeenCalledWith('https://rtc.example.test/jwt/sfu/get', expect.objectContaining({ method: 'POST' }));
     const body = JSON.parse(request.mock.calls[0][1].body as string);
-    expect(body).toEqual({ room_id: '!room:example.test', slot_id: 'm.call#ROOM', openid_token: { access_token: '<synthetic>', token_type: 'Bearer' }, member: { id: identity.memberId, claimed_user_id: identity.userId, claimed_device_id: identity.deviceId } });
+    expect(body).toEqual({ room: '!room:example.test', openid_token: { access_token: '<synthetic>', token_type: 'Bearer' }, device_id: identity.deviceId });
     request.mockResolvedValueOnce(new Response(JSON.stringify({ url: 'ws://outside.example.test', jwt: 'bad' }), { status: 200 }));
     await expect(authorizeGroupCall(client, transport, identity, '!room:example.test')).rejects.toThrow('invalid connection');
     request.mockResolvedValueOnce(new Response('denied', { status: 403 }));

@@ -51,19 +51,20 @@ export interface GroupCallAuthorization {
 export async function authorizeGroupCall(
   client: Pick<MatrixClient, 'getOpenIdToken'>,
   transport: GroupCallTransport,
-  identity: { userId: string; deviceId: string; memberId: string },
+  identity: { deviceId: string },
   roomId: string,
   signal?: AbortSignal,
 ): Promise<GroupCallAuthorization> {
   const openidToken = await client.getOpenIdToken();
-  const response = await fetch(`${transport.livekit_service_url}/get_token`, {
+  // The state-event membership uses the legacy user:device backend identity.
+  // Its JWT must come from the matching legacy endpoint; /get_token hashes it.
+  const response = await fetch(`${transport.livekit_service_url}/sfu/get`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      room_id: roomId,
-      slot_id: 'm.call#ROOM',
+      room: roomId,
       openid_token: openidToken,
-      member: { id: identity.memberId, claimed_user_id: identity.userId, claimed_device_id: identity.deviceId },
+      device_id: identity.deviceId,
     }),
     signal,
   });

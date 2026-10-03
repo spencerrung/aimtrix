@@ -171,7 +171,7 @@ These retain compatibility depth and validation obligations alongside additive f
 
 ### Group calls
 
-- [ ] Implement group MatrixRTC memberships and LiveKit focus authorization. The opt-in standalone `livekit_service_url` path is implemented; homeserver-mediated MSC4195 token requests and live peer interoperability are still open. — [#169](https://github.com/spencerrung/aimtrix/issues/169).
+- [ ] Implement group MatrixRTC memberships and LiveKit focus authorization. The opt-in legacy standalone `livekit_service_url` and `/sfu/get` path is implemented; `m.rtc.member`, homeserver-mediated MSC4195 token requests, and live peer interoperability are still open. — [#169](https://github.com/spencerrung/aimtrix/issues/169).
 - [ ] Add room call activity, participant grid, active speaker, member controls, reconnect state, and group-call E2EE indicators. The UI and controller slice is implemented; live participant and reconnect evidence is still open. — [#169](https://github.com/spencerrung/aimtrix/issues/169).
 - [ ] Add automated WebRTC tests with fake media plus disposable Synapse/LiveKit/TURN interoperability coverage. — [#143](https://github.com/spencerrung/aimtrix/issues/143), [#169](https://github.com/spencerrung/aimtrix/issues/169).
 
