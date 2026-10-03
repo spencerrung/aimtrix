@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { invariant, until, register, matrixApi } from './stack.mjs';
 
 export const session = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
@@ -2387,7 +2388,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const beforeLate = await api(relationPath, { token: aliceSession.accessToken });
         const endEvent = beforeLate.chunk?.find((event) => event.type === 'org.matrix.msc3381.poll.end');
         invariant(Number.isFinite(endEvent?.origin_server_ts), stage);
-        await new Promise((resolve) => setTimeout(resolve, 25));
+        await delay(25);
         const late = await sendResponse([answerId]);
         const relations = await api(relationPath, { token: aliceSession.accessToken });
         const lateEvent = relations.chunk?.find((event) => event.event_id === late.event_id);
