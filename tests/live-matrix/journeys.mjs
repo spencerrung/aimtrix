@@ -1318,17 +1318,25 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       } catch { throw new Error(stage); }
     });
     await check('withheld-key-guidance-live', async () => {
-      let stage = 'withheld-load-old-event';
+      let stage = 'withheld-read-ciphertext';
       let row;
       try {
-        await charlieFresh.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(navigationHistory.secondId)}`);
-        row = charlieFresh.locator(`[data-event-id=${JSON.stringify(navigationHistory.secondId)}]`);
-        await row.waitFor({ timeout: 45000 });
-        invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
-        stage = 'withheld-read-ciphertext';
         const event = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(navigationHistory.secondId)}`, { token: aliceSession.accessToken });
         invariant(event.sender === aliceSession.userId && event.type === 'm.room.encrypted' && event.content?.algorithm === 'm.megolm.v1.aes-sha2' &&
           typeof event.content.sender_key === 'string' && typeof event.content.session_id === 'string', stage);
+        // A historical event is classified as backup/recovery before the SDK
+        // considers withholding. Repost its opaque encrypted payload after the
+        // fresh device exists, so this fixture isolates the withheld path.
+        stage = 'withheld-post-fresh-event';
+        const freshEvent = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/send/m.room.encrypted/${randomBytes(8).toString('hex')}`, {
+          token: aliceSession.accessToken, method: 'PUT', body: event.content,
+        });
+        invariant(typeof freshEvent.event_id === 'string', stage);
+        stage = 'withheld-load-fresh-event';
+        await charlieFresh.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(freshEvent.event_id)}`);
+        row = charlieFresh.locator(`[data-event-id=${JSON.stringify(freshEvent.event_id)}]`);
+        await row.waitFor({ timeout: 45000 });
+        invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
         stage = 'withheld-send-to-device';
         await api(`/_matrix/client/v3/sendToDevice/m.room_key.withheld/${randomBytes(8).toString('hex')}`, {
           token: aliceSession.accessToken, method: 'PUT', body: { messages: { [freshSession.userId]: { [freshSession.deviceId]: {
