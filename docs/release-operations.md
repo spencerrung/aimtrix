@@ -6,7 +6,7 @@ This is the operating process for Aimtrix's hosted PWA, Tauri desktop client, an
 
 | Client | Development | Candidate | Stable | Rollback |
 | --- | --- | --- | --- | --- |
-| PWA | Branch/PR preview and local Vite server | A reviewed merge to `main`, with the immutable image available for inspection | The approved immutable multi-architecture image deployed by the operator's normal GitOps/release process | Reconcile the previous immutable image tag; never rebuild over a known-good tag |
+| PWA | Branch/PR preview and local Vite server | A reviewed merge to `main`, with a passing multi-architecture build, unprivileged smoke test, and image scan | The manually published and approved immutable multi-architecture image deployed by the operator's normal GitOps/release process | Reconcile the previous immutable image tag; never rebuild over a known-good tag |
 | Tauri desktop | Unsigned local `desktop:dev` / debug compile | Protected `vMAJOR.MINOR.PATCH` tag creates a draft GitHub Release | Publish the draft only after clean-machine, signature, updater, and live Matrix gates | Distribute the previous immutable GitHub Release; do not retag or force a downgrade |
 | Capacitor mobile | Local synced Android/iOS projects | Signed internal Android build or TestFlight/Play internal track | Store release after physical-device, provider, privacy, and store-review gates | Halt promotion, roll back store availability where supported, and keep the prior internal/store build available |
 
@@ -49,7 +49,7 @@ The required CI evidence is the Quality workflow run, including its retained Pla
 1. Open the release issue and record the target commit, version, channel, owner, reviewer, and required external evidence.
 2. Run the shared automated gate locally. Push the branch/PR; do not merge while required checks or dependency review are red.
 3. Review `docs/privacy-and-store-disclosures.md` against the actual diff, manifests, runtime config, and provider setup. Update the store forms before submission, not after rejection.
-4. Merge to `main`. For the PWA, follow the existing immutable image/GitOps process. For desktop, push a protected `vMAJOR.MINOR.PATCH` tag or dispatch the desktop release workflow with an existing tag. For mobile, create a signed internal build from the same commit.
+4. Merge to `main`. For the PWA, review the container verification result, manually dispatch the image workflow from that commit, then follow the immutable image/GitOps process. For desktop, push a protected `vMAJOR.MINOR.PATCH` tag or dispatch the desktop release workflow with an existing tag. For mobile, create a signed internal build from the same commit.
 5. Inspect release artifacts: platform coverage, signatures, `latest.json`, `SHA256SUMS`, SBOM, provenance, version/build numbers, and absence of secrets. Keep desktop releases as drafts until the manual gate passes.
 6. Run the live Matrix interoperability gate with disposable accounts and the physical client gate on the target devices. Record redacted evidence using the template below.
 7. A second reviewer checks the evidence, privacy/store declarations, known issues, and rollback target. Only then publish the desktop draft or promote the mobile/PWA candidate.
