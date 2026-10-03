@@ -103,7 +103,9 @@ try {
         const category = [
           ['authorization', 'token'], ['media key', 'key'], ['connect', 'sfu'],
           ['encryption worker', 'worker'], ['membership', 'membership'],
-          ['microphone', 'microphone'], ['media encryption', 'encryption'],
+          ['microphone', 'microphone'],
+          ['media encryption failed', 'encryption-worker-error'],
+          ['could not enable media encryption', 'encryption-enable'],
         ].find(([needle]) => message?.includes(needle))?.[1];
         stage = category ? `group-${category}-unavailable` : 'group-join-rejected';
       }
