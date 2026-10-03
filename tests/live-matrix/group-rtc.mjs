@@ -11,7 +11,7 @@ import { login, openRoom } from './journeys.mjs';
 
 const checks = [];
 let stage = 'setup';
-let stack, rtc, server, browser;
+let stack, rtc, server, browser, roomId, aliceAccount, bobAccount;
 const run = async (name, action) => {
   stage = name;
   console.log(`MatrixRTC live: ${name}`);
@@ -23,16 +23,15 @@ try {
   stack = await createStack({ federation: true });
   await run('disposable-synapse', () => stack.start());
   const api = matrixApi(stack);
-  let roomId;
   await run('encrypted-room-and-accounts', async () => {
-    const alice = await register(api, stack, 'alice');
-    const bob = await register(api, stack, 'bob');
-    const created = await api('/_matrix/client/v3/createRoom', { token: alice.access_token, method: 'POST', body: {
+    aliceAccount = await register(api, stack, 'alice');
+    bobAccount = await register(api, stack, 'bob');
+    const created = await api('/_matrix/client/v3/createRoom', { token: aliceAccount.access_token, method: 'POST', body: {
       name: 'RTC Proof', preset: 'private_chat', initial_state: [{ type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } }],
     } });
     roomId = created.room_id;
-    await api(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`, { token: alice.access_token, method: 'POST', body: { user_id: bob.user_id } });
-    await api(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/join`, { token: bob.access_token, method: 'POST', body: {} });
+    await api(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`, { token: aliceAccount.access_token, method: 'POST', body: { user_id: bobAccount.user_id } });
+    await api(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/join`, { token: bobAccount.access_token, method: 'POST', body: {} });
   });
   await run('disposable-livekit-and-openid-authorization', async () => { rtc = await startRtcStack(stack, roomId); });
   await run('application-server', async () => {
@@ -124,12 +123,23 @@ try {
   process.exitCode = 1;
   console.log(`MatrixRTC live: stopped at ${stage}`);
 } finally {
+  let membershipState = null;
+  if (stack && roomId && aliceAccount && bobAccount) {
+    try {
+      const events = await matrixApi(stack)(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state`, { token: aliceAccount.access_token });
+      const members = events.filter((event) => event.type === 'org.matrix.msc3401.call.member');
+      membershipState = {
+        alicePresent: members.some((event) => event.state_key.includes(aliceAccount.user_id) && Boolean(event.content?.device_id && event.content?.expires)),
+        bobPresent: members.some((event) => event.state_key.includes(bobAccount.user_id) && Boolean(event.content?.device_id && event.content?.expires)),
+      };
+    } catch { membershipState = { queryFailed: true }; }
+  }
   const results = await Promise.allSettled([browser?.close(), server?.close(), rtc?.stop(), stack?.stop()]);
   const cleaned = results.every((result) => result.status === 'fulfilled');
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }
