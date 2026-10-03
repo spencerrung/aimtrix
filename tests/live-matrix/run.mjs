@@ -10,18 +10,20 @@ import { createStack, command, invariant } from './stack.mjs';
 import { runJourneys } from './journeys.mjs';
 import { runCacheReloadProfile } from './cache-reload-profile.mjs';
 import { runEncryptedSustainedSyncProfile, runSustainedSyncProfile } from './sustained-sync-profile.mjs';
+import { runLargeAccountProfile } from './large-account-profile.mjs';
 import { checkNames, failureCategories, makeReport } from './report.mjs';
 
 // No Playwright reporter, traces, HAR, videos, storage snapshots, or screenshots.
 // All exceptions are discarded at this boundary; only a fixed check ID is reported.
 const args = process.argv.slice(2);
-invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui', '--profile-cache-reload', '--profile-sustained-sync', '--profile-encrypted-sustained-sync'].includes(arg)), 'unsupported-option');
+invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui', '--profile-cache-reload', '--profile-sustained-sync', '--profile-encrypted-sustained-sync', '--profile-large-account'].includes(arg)), 'unsupported-option');
 const probe = args.includes('--probe-failure');
 const elementUi = args.includes('--element-ui');
 const profileCacheReload = args.includes('--profile-cache-reload');
 const profileSustainedSync = args.includes('--profile-sustained-sync');
 const profileEncryptedSustainedSync = args.includes('--profile-encrypted-sustained-sync');
-const profileCount = [profileCacheReload, profileSustainedSync, profileEncryptedSustainedSync].filter(Boolean).length;
+const profileLargeAccount = args.includes('--profile-large-account');
+const profileCount = [profileCacheReload, profileSustainedSync, profileEncryptedSustainedSync, profileLargeAccount].filter(Boolean).length;
 invariant(profileCount <= 1 && (profileCount === 0 || (!probe && !elementUi && !args.includes('--repeat=2'))), 'incompatible-option');
 const repeats = args.includes('--repeat=2') ? 2 : 1;
 const output = resolve('matrix-test-results');
@@ -50,7 +52,7 @@ for (let run = 1; run <= repeats; run++) {
     }
   };
   try {
-    stack = await createStack({ elementUi, syncResponseCache: profileCount > 0 });
+    stack = await createStack({ elementUi, syncResponseCache: profileCount > 0, largeAccount: profileLargeAccount });
     await check('disposable-stack', () => stack.start());
     await check('application-server', async () => {
       const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: false,
@@ -68,6 +70,7 @@ for (let run = 1; run <= repeats; run++) {
     if (profileCacheReload) await runCacheReloadProfile({ browser, stack, check, metrics });
     else if (profileSustainedSync) await runSustainedSyncProfile({ browser, stack, check, metrics });
     else if (profileEncryptedSustainedSync) await runEncryptedSustainedSyncProfile({ browser, stack, check, metrics });
+    else if (profileLargeAccount) await runLargeAccountProfile({ browser, stack, check, metrics });
     else await runJourneys({ browser, stack, check, forceFailure: probe, metrics });
     invariant(!probe, 'probe-must-fail');
   } catch {
@@ -92,7 +95,7 @@ for (let run = 1; run <= repeats; run++) {
   // Belt-and-braces check in addition to the allowlisted report fields.
   invariant(!stack || Object.values(stack.credentials).every((value) => !serialized.includes(value)), 'diagnostic-secret-leak');
   invariant(!serialized.includes('private-room-canary'), 'diagnostic-content-leak');
-  const destination = resolve(output, `${profileCacheReload ? 'cache-reload' : profileSustainedSync ? 'sustained-sync' : profileEncryptedSustainedSync ? 'encrypted-sustained-sync' : probe ? 'failure-probe' : 'run'}-${run}.json`);
+  const destination = resolve(output, `${profileCacheReload ? 'cache-reload' : profileSustainedSync ? 'sustained-sync' : profileEncryptedSustainedSync ? 'encrypted-sustained-sync' : profileLargeAccount ? 'large-account' : probe ? 'failure-probe' : 'run'}-${run}.json`);
   await writeFile(destination, `${serialized}\n`, { mode: 0o600 });
   invariant(await readFile(destination, 'utf8') === `${serialized}\n`, 'report-write');
   console.log(`Matrix live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks; cleanup ${checks.at(-1)?.passed ? 'complete' : 'failed'})`);
