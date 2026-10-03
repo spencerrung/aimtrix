@@ -6,7 +6,7 @@ export interface IncomingVerificationActions {
   accept: (id: string, signal?: AbortSignal) => Promise<DeviceVerificationChallenge>;
   decline: (id: string) => Promise<void>;
   showQr: (id: string, signal?: AbortSignal) => Promise<Uint8ClampedArray>;
-  scanQr: (id: string, bytes: Uint8ClampedArray, signal?: AbortSignal) => Promise<void>;
+  scanQr: (id: string, bytes?: Uint8ClampedArray, signal?: AbortSignal) => Promise<void>;
   confirmQr: (id: string) => Promise<void>;
 }
 
@@ -70,7 +70,10 @@ export function IncomingVerification({ requests, actions }: { requests: Incoming
     const image = await toDataURL([{ mode: 'byte', data: bytes }], { errorCorrectionLevel: 'L', margin: 2, width: 256 });
     if (!signal.aborted) setQr({ request, image });
   });
-  const scanQr = (request: IncomingVerificationSummary) => { setError(''); abort.current = new AbortController(); setQr({ request, scanning: true }); };
+  const scanQr = (request: IncomingVerificationSummary) => void start(request, async (signal) => {
+    await actions.scanQr(request.id, undefined, signal);
+    if (!signal.aborted) setQr({ request, scanning: true });
+  });
   const scanned = (bytes: Uint8ClampedArray) => {
     const request = qr?.request;
     if (!request) return;

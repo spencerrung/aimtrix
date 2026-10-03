@@ -7,7 +7,7 @@ vi.mock('qrcode', () => ({ toDataURL: vi.fn().mockResolvedValue('data:image/png;
 
 const request: IncomingVerificationSummary = { id: 'req', userId: '@self:example.test', deviceId: 'PHONE', selfVerification: true, timeoutMs: 60000, sasAvailable: true, qrShowAvailable: false, qrScanAvailable: false, qrConfirmAvailable: false };
 function actions(overrides: Partial<IncomingVerificationActions> = {}): IncomingVerificationActions {
-  return { accept: vi.fn(), decline: vi.fn().mockResolvedValue(undefined), showQr: vi.fn(), scanQr: vi.fn(), confirmQr: vi.fn(), ...overrides };
+  return { accept: vi.fn(), decline: vi.fn().mockResolvedValue(undefined), showQr: vi.fn(), scanQr: vi.fn().mockResolvedValue(undefined), confirmQr: vi.fn(), ...overrides };
 }
 
 describe('incoming verification controls', () => {
@@ -41,5 +41,21 @@ describe('incoming verification controls', () => {
     expect(await screen.findByRole('dialog', { name: 'Matrix verification QR code' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(api.decline).toHaveBeenCalledWith('req'));
+  });
+
+  it('accepts the request before opening the QR camera', async () => {
+    const mediaDevices = Object.getOwnPropertyDescriptor(navigator, 'mediaDevices');
+    Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: vi.fn() } });
+    let ready!: () => void;
+    const scanQr = vi.fn().mockImplementation(() => new Promise<void>((resolve) => { ready = resolve; }));
+    const api = actions({ scanQr });
+    render(<IncomingVerification requests={[{ ...request, qrScanAvailable: true }]} actions={api} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Scan QR code' }));
+    expect(scanQr).toHaveBeenCalledWith('req', undefined, expect.any(AbortSignal));
+    expect(screen.queryByRole('dialog', { name: 'Matrix verification QR code' })).not.toBeInTheDocument();
+    ready();
+    expect(await screen.findByRole('dialog', { name: 'Matrix verification QR code' })).toBeInTheDocument();
+    if (mediaDevices) Object.defineProperty(navigator, 'mediaDevices', mediaDevices);
+    else Reflect.deleteProperty(navigator, 'mediaDevices');
   });
 });

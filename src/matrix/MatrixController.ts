@@ -1134,9 +1134,11 @@ export class MatrixController {
     return bytes;
   }
 
-  public async scanIncomingVerificationQr(id: string, payload: Uint8ClampedArray, signal?: AbortSignal): Promise<void> {
+  /** Without a payload, accept the request so the other device can display its code before the camera opens. */
+  public async scanIncomingVerificationQr(id: string, payload?: Uint8ClampedArray, signal?: AbortSignal): Promise<void> {
     const request = await this.readyIncomingRequest(id, signal);
     if (!request.otherPartySupportsMethod('m.qr_code.show.v1')) throw new Error('The other device cannot show a verification QR code. Use emoji instead.');
+    if (!payload) return;
     if (!payload.length || payload.length > 512) throw new Error('This QR code is not a valid Matrix verification code.');
     const verifier = await request.scanQRCode(payload);
     signal?.throwIfAborted();
