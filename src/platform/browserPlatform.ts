@@ -4,6 +4,7 @@ import {
 } from '../matrix/sessionStore';
 import { routeUrl } from '../pwa/pushRouting';
 import type { PushRoute } from '../pwa/pushRouting';
+import { parseSsoPendingState } from './platform';
 import type {
   AimtrixPlatform,
   AppLifecycle,
@@ -117,8 +118,8 @@ function createBrowserSsoState(): CredentialStore<SsoPendingState> {
       const serialized = sessionStorage.getItem(SSO_PENDING_KEY);
       if (!serialized) return undefined;
       try {
-        const value = JSON.parse(serialized) as Partial<SsoPendingState>;
-        if (typeof value.baseUrl === 'string' && typeof value.serverName === 'string') return value as SsoPendingState;
+        const value = parseSsoPendingState(JSON.parse(serialized));
+        if (value) return value;
       } catch {
         // Remove malformed state below.
       }

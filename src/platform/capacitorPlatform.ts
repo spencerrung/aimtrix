@@ -1,5 +1,6 @@
 import { NotificationGuard } from '../pwa/notificationPolicy';
 import { App } from '@capacitor/app';
+import { AppLauncher } from '@capacitor/app-launcher';
 import { Capacitor } from '@capacitor/core';
 import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
@@ -10,6 +11,7 @@ import {
   type StoredMatrixSession,
 } from '../matrix/sessionStore';
 import { parsePushRoute, routeUrl, type PushRoute } from '../pwa/pushRouting';
+import { nativeSsoCallbackPath, parseSsoPendingState } from './platform';
 import type {
   AimtrixPlatform,
   AppLifecycle,
@@ -70,8 +72,8 @@ function createNativeSsoState(): CredentialStore<SsoPendingState> {
         await prepareNativeSecureStorage();
         const serialized = await SecureStorage.getItem(NATIVE_SSO_KEY);
         if (!serialized) return undefined;
-        const value = JSON.parse(serialized) as Partial<SsoPendingState>;
-        if (typeof value.baseUrl === 'string' && typeof value.serverName === 'string') return value as SsoPendingState;
+        const value = parseSsoPendingState(JSON.parse(serialized));
+        if (value) return value;
         await SecureStorage.removeItem(NATIVE_SSO_KEY);
       } catch {
         await SecureStorage.removeItem(NATIVE_SSO_KEY).catch(() => undefined);
@@ -254,9 +256,9 @@ function createNativeLifecycle(): AppLifecycle {
 
 function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkService {
   const applySsoCallback = (url: URL): boolean => {
-    const loginToken = url.searchParams.get('loginToken');
-    if (!loginToken) return false;
-    window.history.replaceState({}, '', `/?loginToken=${encodeURIComponent(loginToken)}`);
+    const path = nativeSsoCallbackPath(url);
+    if (!path) return false;
+    window.history.replaceState({}, '', path);
     window.location.reload();
     return true;
   };
@@ -270,7 +272,7 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
   void App.addListener('appUrlOpen', ({ url }) => {
     try {
       const parsed = new URL(url);
-      if (parsed.protocol !== 'matrix:' && parsed.hostname !== 'matrix.to' && applySsoCallback(parsed)) return;
+      if (applySsoCallback(parsed)) return;
       const route = parsePushRoute(parsed);
       if (route) applyRoute(route);
     } catch {
@@ -284,7 +286,7 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
       if (!launch) return;
       try {
         const parsed = new URL(launch.url);
-        if (parsed.protocol !== 'matrix:' && parsed.hostname !== 'matrix.to' && applySsoCallback(parsed)) return;
+        if (applySsoCallback(parsed)) return;
         const route = parsePushRoute(parsed);
         if (route) window.history.replaceState({}, '', routeUrl(route));
       } catch {
@@ -295,7 +297,10 @@ function createNativeDeepLinks(onRoute: (route: PushRoute) => void): DeepLinkSer
     currentUrl: () => new URL(window.location.href),
     replacePath: (path) => window.history.replaceState({}, '', path),
     openRoute: applyRoute,
-    navigate: (url) => window.location.assign(url),
+    navigate: async (url) => {
+      const opened = await AppLauncher.openUrl({ url });
+      if (!opened.completed) throw new Error('The device could not open the sign-in provider.');
+    },
     focus: () => window.focus(),
   };
 }

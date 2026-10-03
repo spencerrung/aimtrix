@@ -13,6 +13,8 @@
     "notification:allow-notify",
     "notification:allow-register-action-types",
     "notification:allow-register-listener",
+    "opener:allow-open-url",
+    "opener:allow-default-urls",
     "process:allow-restart",
     "deep-link:allow-get-current",
     "core:event:default",

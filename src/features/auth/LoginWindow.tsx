@@ -41,7 +41,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDisc
     return () => { current = false; window.clearTimeout(timer); };
   }, [userId, homeserver, query]);
   const passwordAvailable = methods?.password ?? methodsError;
-  const ssoAvailable = methods ? methods.sso || methods.cas : methodsError;
+  const ssoAvailable = methods ? methods.oauth || methods.sso || methods.cas : methodsError;
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -73,7 +73,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDisc
         {recovery ? <p className="session-recovery__note">Sign in to the same account to reconnect. Your encryption keys are retained on this device.</p> : null}
         {methodsLoading ? <p role="status">Checking sign-in options for this homeserver…</p> : null}
         {methodsError ? <p role="alert">Sign-in options could not be checked. Password sign-in may still work; SSO will be checked before redirecting.</p> : null}
-        {methods && !passwordAvailable && !ssoAvailable ? <p role="alert">This homeserver does not advertise password or standard Matrix SSO sign-in. Try another supported client or ask your server operator.</p> : null}
+        {methods && !passwordAvailable && !ssoAvailable ? <p role="alert">This homeserver does not advertise a supported sign-in method. Try another client or ask your server operator.</p> : null}
 
         <form className="login-form" onSubmit={submit}>
           <label>
@@ -136,7 +136,7 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDisc
             disabled={busy || !homeserver.trim()}
             onClick={() => void onSso({ userId, homeserver })}
           >
-            <KeyRound size={16} /> Sign in with homeserver {methods?.cas && !methods.sso ? 'CAS' : 'SSO'}
+            <KeyRound size={16} /> Sign in with homeserver {methods?.oauth ? 'OAuth' : methods?.cas && !methods.sso ? 'CAS' : 'SSO'}
           </button> : null}
         </form>
 

@@ -249,3 +249,35 @@ jobs:
             matrix-test-results/synthetic-large-account.json
           if-no-files-found: ignore
           retention-days: 14
+  delegated-auth-live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      AIMTRIX_LIVE_OWNER: ci-auth-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Build the static client
+        run: npm run build
+      - name: Exercise delegated Matrix sign-in and revocation against disposable MAS
+        run: npm run test:matrix -- --delegated-auth
+      - name: Remove any remaining job-owned test services
+        if: always()
+        run: node tests/live-matrix/cleanup.mjs
+      - name: Preserve only allowlisted Matrix summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: matrix-delegated-auth-summary-${{ github.run_id }}
+          path: matrix-test-results/delegated-auth-1.json
+          if-no-files-found: ignore
+          retention-days: 14

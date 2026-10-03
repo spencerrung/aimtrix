@@ -9,6 +9,7 @@ export interface StoredMatrixSession {
   /** A token-free recovery record must never be used to construct an SDK client. */
   recovery?: 'soft' | 'hard';
   retainedDeviceIds?: string[];
+  oauth?: { clientId: string; issuer: string; refreshToken: string };
 }
 
 export const SESSION_KEY = 'aimtrix.matrix-session.v1';
@@ -23,6 +24,19 @@ export function parseStoredMatrixSession(value: unknown): StoredMatrixSession | 
   if (typeof candidate.accessToken !== 'string' || (candidate.recovery ? candidate.accessToken !== '' : !candidate.accessToken)) return undefined;
   if (candidate.retainedDeviceIds !== undefined && (!Array.isArray(candidate.retainedDeviceIds) ||
     !candidate.retainedDeviceIds.every((id) => typeof id === 'string' && id.length > 0))) return undefined;
+  if (candidate.oauth !== undefined) {
+    if (candidate.recovery || !candidate.oauth || typeof candidate.oauth !== 'object') return undefined;
+    const oauth = candidate.oauth;
+    if (typeof oauth.clientId !== 'string' || !oauth.clientId || oauth.clientId.length > 512 ||
+      typeof oauth.refreshToken !== 'string' || !oauth.refreshToken || oauth.refreshToken.length > 8192 ||
+      typeof oauth.issuer !== 'string') return undefined;
+    try {
+      const issuer = new URL(oauth.issuer);
+      if (issuer.username || issuer.password || issuer.search || issuer.hash ||
+        !(issuer.protocol === 'https:' || issuer.protocol === 'http:' &&
+          ['localhost', '127.0.0.1', '[::1]'].includes(issuer.hostname))) return undefined;
+    } catch { return undefined; }
+  }
   try {
     const url = new URL(candidate.baseUrl!);
     if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) return undefined;
@@ -31,10 +45,17 @@ export function parseStoredMatrixSession(value: unknown): StoredMatrixSession | 
       deviceId: candidate.deviceId!, accessToken: candidate.accessToken,
       ...(candidate.recovery ? { recovery: candidate.recovery } : {}),
       ...(candidate.retainedDeviceIds?.length ? { retainedDeviceIds: [...new Set(candidate.retainedDeviceIds)] } : {}),
+      ...(candidate.oauth ? { oauth: { ...candidate.oauth } } : {}),
     };
   } catch {
     return undefined;
   }
+}
+
+export function tokenFreeRecoverySession(session: StoredMatrixSession, recovery: 'soft' | 'hard'): StoredMatrixSession {
+  const tokenFree = { ...session, accessToken: '', recovery };
+  delete tokenFree.oauth;
+  return tokenFree;
 }
 
 export function createBrowserCredentialStore(

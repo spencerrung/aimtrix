@@ -3,6 +3,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrent, onOpenUrl } from '@tauri-apps/plugin-deep-link';
+import { openUrl } from '@tauri-apps/plugin-opener';
 import {
   isPermissionGranted,
   onAction,
@@ -18,6 +19,7 @@ import {
   type StoredMatrixSession,
 } from '../matrix/sessionStore';
 import { parsePushRoute, routeUrl, type PushRoute } from '../pwa/pushRouting';
+import { nativeSsoCallbackPath, parseSsoPendingState } from './platform';
 import type {
   AimtrixPlatform,
   AppLifecycle,
@@ -81,10 +83,8 @@ function createTauriSsoState(): CredentialStore<SsoPendingState> {
       try {
         const serialized = await store.load();
         if (!serialized) return undefined;
-        const value = JSON.parse(serialized) as Partial<SsoPendingState>;
-        if (typeof value.baseUrl === 'string' && typeof value.serverName === 'string') {
-          return value as SsoPendingState;
-        }
+        const value = parseSsoPendingState(JSON.parse(serialized));
+        if (value) return value;
         await store.clear();
       } catch {
         await store.clear().catch(() => undefined);
@@ -200,9 +200,9 @@ function createTauriLifecycle(): AppLifecycle {
 function createTauriDeepLinks(): DeepLinkService {
   let prepared = false;
   const applySsoCallback = (url: URL): boolean => {
-    const loginToken = url.searchParams.get('loginToken');
-    if (!loginToken) return false;
-    window.history.replaceState({}, '', `/?loginToken=${encodeURIComponent(loginToken)}`);
+    const path = nativeSsoCallbackPath(url);
+    if (!path) return false;
+    window.history.replaceState({}, '', path);
     window.location.reload();
     return true;
   };
@@ -213,7 +213,7 @@ function createTauriDeepLinks(): DeepLinkService {
   const applyUrl = (value: string) => {
     try {
       const url = new URL(value);
-      if (url.protocol !== 'matrix:' && url.hostname !== 'matrix.to' && applySsoCallback(url)) return;
+      if (applySsoCallback(url)) return;
       const route = parsePushRoute(url);
       if (route) applyRoute(route);
     } catch {
@@ -233,7 +233,7 @@ function createTauriDeepLinks(): DeepLinkService {
     currentUrl: () => new URL(window.location.href),
     replacePath: (path) => window.history.replaceState({}, '', path),
     openRoute: applyRoute,
-    navigate: (url) => window.location.assign(url),
+    navigate: (url) => openUrl(url),
     focus: () => void getCurrentWindow().show().then(() => getCurrentWindow().setFocus()),
   };
 }
