@@ -43,6 +43,9 @@ import {
 } from '../settings/profilePersonalization';
 import { buildWorkspaceSnapshot, createWorkspaceSnapshotCache } from './buildWorkspaceSnapshot';
 import { loginMethodsFromFlows, resolveHomeserver, type LoginMethods } from './discovery';
+import { beginDelegatedAuth, completeDelegatedAuth, readDelegatedCallback, refreshDelegatedAuth, revokeDelegatedAuth } from './delegatedAuth';
+import { TokenRefreshLogoutError } from 'matrix-js-sdk/lib/http-api/index.js';
+import { OAuth2Error } from 'matrix-js-sdk/lib/oauth/index.js';
 import { sendConfirmedReceipt } from './sendConfirmedReceipt';
 import { MessageSendError } from './messageDelivery';
 import { AttachmentSender, type AttachmentSendOptions } from './AttachmentSender';
@@ -65,6 +68,7 @@ import {
 } from './messageFormatting';
 import {
   databaseNames,
+  tokenFreeRecoverySession,
   type StoredMatrixSession,
 } from './sessionStore';
 import { getAimtrixPlatform } from '../platform/aimtrixPlatform';
@@ -139,6 +143,11 @@ function loadMatrixSdk(): Promise<MatrixSdk> {
   return matrixSdkPromise;
 }
 
+async function sdkAuthMetadata(baseUrl: string) {
+  const sdk = await loadMatrixSdk();
+  return sdk.createClient({ baseUrl, localTimeoutMs: 10000 }).getAuthMetadata();
+}
+
 function friendlyError(error: unknown): string {
   if (typeof error === 'string' && /secure credential storage/i.test(error)) {
     return 'Aimtrix could not access secure credential storage on this device.';
@@ -150,11 +159,19 @@ function friendlyError(error: unknown): string {
   if (candidate.errcode === 'M_USER_DEACTIVATED') return 'This Matrix account has been deactivated.';
   if (candidate.errcode === 'M_CONSENT_NOT_GIVEN') return 'This homeserver requires account consent. Complete it in another Matrix client or the server account page, then retry.';
   if (candidate.name === 'AbortError') return 'The connection was cancelled.';
+  if (candidate.message === OAuth2Error.DynamicRegistrationNotSupported ||
+    candidate.message === OAuth2Error.DynamicRegistrationFailed ||
+    candidate.message === OAuth2Error.DynamicRegistrationInvalid) {
+    return 'This homeserver’s sign-in provider could not register Aimtrix. Ask its administrator to enable public client registration.';
+  }
   const safeMessages = [
     'This homeserver does not advertise SSO.',
     'SSO homeserver information is missing.',
     'SSO returned another homeserver. Sign in to the original account.',
     'SSO returned another account. Sign in to the original account, or forget it first.',
+    'The device could not open the sign-in provider.',
+    'The delegated sign-in provider has an invalid address.',
+    'The delegated sign-in provider has an unsafe address.',
   ];
   if (typeof candidate.message === 'string' && safeMessages.includes(candidate.message)) return candidate.message;
   if (connectionIssue(error) === 'storage') return connectionIssueMessage('storage');
@@ -233,7 +250,7 @@ export class MatrixController {
     }
     ++this.lifecycleRevision;
     const data = error && typeof error === 'object' ? (error as { data?: { soft_logout?: unknown } }).data : undefined;
-    this.recoverySession = { ...session, accessToken: '', recovery: data?.soft_logout === true ? 'soft' : 'hard' };
+    this.recoverySession = tokenFreeRecoverySession(session, data?.soft_logout === true ? 'soft' : 'hard');
     void this.stopCurrentClient();
     this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! });
     const recovery = this.recoverySession;
@@ -628,14 +645,20 @@ export class MatrixController {
   public async initialize(): Promise<void> {
     if (this.initialized) return;
     this.initialized = true;
-    const loginToken = new URL(window.location.href).searchParams.get('loginToken');
-    if (loginToken) window.history.replaceState({}, '', window.location.pathname);
+    const callbackUrl = new URL(window.location.href);
+    const loginToken = callbackUrl.searchParams.get('loginToken');
+    const delegatedCallback = readDelegatedCallback(callbackUrl);
+    if (loginToken || delegatedCallback) window.history.replaceState({}, '', window.location.pathname);
     const revision = ++this.lifecycleRevision;
     try {
       const session = await this.credentialOperation(() => this.platform.credentials.load());
       if (revision !== this.lifecycleRevision) return;
       if (session?.recovery) this.recoverySession = session;
-      if (loginToken) {
+      if (loginToken && delegatedCallback) throw new Error('Sign-in callback contained conflicting methods.');
+      if (delegatedCallback) {
+        this.setSnapshot({ status: 'connecting', message: 'Completing delegated Matrix sign-in…' });
+        await this.completeDelegatedLogin(delegatedCallback, revision);
+      } else if (loginToken) {
         this.setSnapshot({ status: 'connecting', message: 'Completing Matrix SSO…' });
         await this.completeSso(loginToken, revision);
       } else if (session?.recovery) {
@@ -647,7 +670,7 @@ export class MatrixController {
     } catch (error) {
       if (revision !== this.lifecycleRevision) return;
       if (isSessionRejected(error)) this.expireSession(error);
-      else if (loginToken && !this.activeSession && connectionIssue(error) !== 'storage') {
+      else if ((loginToken || delegatedCallback) && !this.activeSession && connectionIssue(error) !== 'storage') {
         this.setSnapshot({ status: 'signed-out', error: 'SSO sign-in could not be completed. Please start sign-in again.', recovery: this.recoveryInfo() });
       } else this.showConnectionError(error);
     }
@@ -661,9 +684,11 @@ export class MatrixController {
       configuredBaseUrl: this.config.defaultHomeserver.baseUrl,
     });
     const sdk = await loadMatrixSdk();
-    const client = sdk.createClient({ baseUrl: target.baseUrl });
-    const response = await client.loginFlows();
-    return loginMethodsFromFlows(response.flows, target.baseUrl);
+    const client = sdk.createClient({ baseUrl: target.baseUrl, localTimeoutMs: 10000 });
+    const [flows, delegated] = await Promise.allSettled([client.loginFlows(), client.getAuthMetadata()]);
+    if (flows.status === 'rejected' && delegated.status === 'rejected') throw new Error('Sign-in options could not be checked.');
+    return { ...loginMethodsFromFlows(flows.status === 'fulfilled' ? flows.value.flows : [], target.baseUrl),
+      oauth: delegated.status === 'fulfilled' };
   }
 
   public async startSso(credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>): Promise<void> {
@@ -677,7 +702,23 @@ export class MatrixController {
         configuredBaseUrl: this.config.defaultHomeserver.baseUrl,
       });
       const sdk = await loadMatrixSdk();
-      const ssoClient = sdk.createClient({ baseUrl: target.baseUrl });
+      const ssoClient = sdk.createClient({ baseUrl: target.baseUrl, localTimeoutMs: 10000 });
+      if (this.recoverySession && target.baseUrl !== this.recoverySession.baseUrl) throw new Error('Recovery account mismatch');
+      const delegated = await ssoClient.getAuthMetadata().catch(() => undefined);
+      if (delegated) {
+        const redirectUri = this.platform.deepLinks.ssoRedirectUrl();
+        const native = ['desktop', 'ios', 'android'].includes(this.platform.capabilities.platform ?? 'browser');
+        const clientUri = native ? 'https://github.com/spencerrung/aimtrix' : `${window.location.origin}${window.location.pathname}`;
+        const { pending, authorizationUrl } = await beginDelegatedAuth({
+          metadata: delegated, baseUrl: target.baseUrl, serverName: target.serverName,
+          redirectUri, clientUri, clientName: this.config.brandName, native,
+        });
+        if (revision !== this.lifecycleRevision) return;
+        await this.platform.sso.save(pending);
+        if (revision !== this.lifecycleRevision) return;
+        await this.platform.deepLinks.navigate(authorizationUrl);
+        return;
+      }
       const flows = await ssoClient.loginFlows();
       const loginType = flows.flows.some((flow) => flow.type === 'm.login.sso')
         ? 'sso'
@@ -686,11 +727,10 @@ export class MatrixController {
           : undefined;
       if (!loginType) throw new Error('This homeserver does not advertise SSO.');
       if (revision !== this.lifecycleRevision) return;
-      if (this.recoverySession && target.baseUrl !== this.recoverySession.baseUrl) throw new Error('Recovery account mismatch');
       await this.platform.sso.save(target);
       if (revision !== this.lifecycleRevision) return;
       const redirectUrl = this.platform.deepLinks.ssoRedirectUrl();
-      this.platform.deepLinks.navigate(ssoClient.getSsoLoginUrl(redirectUrl, loginType));
+      await this.platform.deepLinks.navigate(ssoClient.getSsoLoginUrl(redirectUrl, loginType));
     } catch (error) {
       if (revision === this.lifecycleRevision) this.setSnapshot({ status: 'signed-out', error: friendlyError(error), recovery: this.recoveryInfo() });
     }
@@ -698,7 +738,7 @@ export class MatrixController {
 
   private async completeSso(loginToken: string, revision: number): Promise<void> {
     const target = await this.platform.sso.load();
-    if (!target) throw new Error('SSO homeserver information is missing.');
+    if (!target || target.kind === 'oauth') throw new Error('SSO homeserver information is missing.');
     if (revision !== this.lifecycleRevision) return;
     if (this.recoverySession && target.baseUrl !== this.recoverySession.baseUrl) throw new Error('SSO returned another homeserver. Sign in to the original account.');
     const sdk = await loadMatrixSdk();
@@ -722,6 +762,32 @@ export class MatrixController {
     };
     await this.platform.sso.clear();
     window.history.replaceState({}, '', window.location.pathname);
+    await this.acceptLogin(session, revision);
+  }
+
+  private async completeDelegatedLogin(callback: NonNullable<ReturnType<typeof readDelegatedCallback>>, revision: number): Promise<void> {
+    const pending = await this.platform.sso.load();
+    await this.platform.sso.clear();
+    if (!pending || pending.kind !== 'oauth' || callback.kind === 'invalid' || callback.state !== pending.state) {
+      throw new Error('Delegated sign-in could not be matched to this device. Start sign-in again.');
+    }
+    if (callback.kind === 'error') throw new Error('Delegated sign-in was cancelled or denied. Start sign-in again.');
+    if (revision !== this.lifecycleRevision) return;
+    const sdk = await loadMatrixSdk();
+    const discovery = sdk.createClient({ baseUrl: pending.baseUrl, localTimeoutMs: 10000 });
+    const metadata = await discovery.getAuthMetadata();
+    const tokens = await completeDelegatedAuth(pending, metadata, callback.code);
+    if (revision !== this.lifecycleRevision) return;
+    const client = sdk.createClient({ baseUrl: pending.baseUrl, accessToken: tokens.accessToken });
+    const identity = await client.whoami();
+    if (!identity.user_id || !identity.device_id || identity.device_id !== pending.deviceId) {
+      throw new Error('The sign-in provider returned an unexpected Matrix device. Start sign-in again.');
+    }
+    const session: StoredMatrixSession = {
+      baseUrl: pending.baseUrl, serverName: pending.serverName,
+      accessToken: tokens.accessToken, userId: identity.user_id, deviceId: identity.device_id,
+      oauth: { clientId: pending.clientId, issuer: pending.issuer, refreshToken: tokens.refreshToken },
+    };
     await this.acceptLogin(session, revision);
   }
 
@@ -835,7 +901,7 @@ export class MatrixController {
       const stored = session ?? await this.credentialOperation(() => this.platform.credentials.load());
       if (revision !== this.lifecycleRevision) return;
       if (stored) {
-        const recovery: StoredMatrixSession = { ...stored, accessToken: '', recovery: 'hard' };
+        const recovery = tokenFreeRecoverySession(stored, 'hard');
         await this.credentialOperation(async () => {
           if (revision === this.lifecycleRevision) await this.platform.credentials.save(recovery);
         });
@@ -845,7 +911,13 @@ export class MatrixController {
       if (client && stored) await this.removePushersForDevice(client, stored.deviceId);
       if (revision !== this.lifecycleRevision) return;
       if (remoteLogout && client) {
-        try { await client.logout(false); } catch { /* A revoked/offline token cannot prevent local sign-out. */ }
+        try {
+          if (stored?.oauth) {
+            const metadata = await sdkAuthMetadata(stored.baseUrl);
+            await revokeDelegatedAuth({ ...stored.oauth, redirectUri: this.platform.deepLinks.ssoRedirectUrl(), deviceId: stored.deviceId },
+              metadata, stored.oauth.refreshToken);
+          } else await client.logout(false);
+        } catch { /* A revoked/offline token cannot prevent local sign-out. */ }
       }
       if (revision !== this.lifecycleRevision) return;
       const cleanup = this.pushWork.catch(() => undefined).then(async () => {
@@ -3764,6 +3836,32 @@ export class MatrixController {
       accessToken: session.accessToken,
       userId: session.userId,
       deviceId: session.deviceId,
+      ...(session.oauth ? {
+        refreshToken: session.oauth.refreshToken,
+        tokenRefreshFunction: async (refreshToken: string) => {
+          if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('Matrix session changed.');
+          try {
+            const current = this.activeSession;
+            if (!current?.oauth) throw new Error('Delegated session is unavailable.');
+            const metadata = await sdkAuthMetadata(current.baseUrl);
+            const renewed = await refreshDelegatedAuth({ ...current.oauth,
+              redirectUri: this.platform.deepLinks.ssoRedirectUrl(), deviceId: current.deviceId }, metadata, refreshToken);
+            const updated: StoredMatrixSession = { ...current, accessToken: renewed.accessToken,
+              oauth: { ...current.oauth, refreshToken: renewed.refreshToken } };
+            await this.credentialOperation(async () => {
+              if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('Matrix session changed.');
+              await this.platform.credentials.save(updated);
+            });
+            this.activeSession = updated;
+            return renewed;
+          } catch (error) {
+            if (error instanceof TokenRefreshLogoutError) throw error;
+            // The provider error may contain credentials and the SDK logs refresh failures.
+            // eslint-disable-next-line preserve-caught-error
+            throw new Error('Delegated sign-in could not be renewed.');
+          }
+        },
+      } : {}),
       timelineSupport: true,
       cryptoCallbacks: {
         getSecretStorageKey: async ({ keys }) => {

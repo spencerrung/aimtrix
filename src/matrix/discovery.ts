@@ -8,6 +8,7 @@ export interface LoginMethods {
   password: boolean;
   sso: boolean;
   cas: boolean;
+  oauth: boolean;
   homeserver: string;
 }
 
@@ -16,6 +17,7 @@ export function loginMethodsFromFlows(flows: Array<{ type: string }>, homeserver
     password: flows.some((flow) => flow.type === 'm.login.password'),
     sso: flows.some((flow) => flow.type === 'm.login.sso'),
     cas: flows.some((flow) => flow.type === 'm.login.cas'),
+    oauth: false,
     homeserver,
   };
 }

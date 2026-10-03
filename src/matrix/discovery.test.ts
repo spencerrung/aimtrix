@@ -3,7 +3,7 @@ import { loginMethodsFromFlows, resolveHomeserver } from './discovery';
 
 it('classifies password, SSO and CAS independently', () => {
   expect(loginMethodsFromFlows([{ type: 'm.login.sso' }], 'https://example.test')).toEqual({
-    password: false, sso: true, cas: false, homeserver: 'https://example.test',
+    password: false, sso: true, cas: false, oauth: false, homeserver: 'https://example.test',
   });
   expect(loginMethodsFromFlows([{ type: 'm.login.password' }, { type: 'm.login.cas' }], 'https://example.test')).toMatchObject({ password: true, sso: false, cas: true });
 });

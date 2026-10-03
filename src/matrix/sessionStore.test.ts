@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   createBrowserCredentialStore,
   databaseNames,
+  parseStoredMatrixSession,
+  tokenFreeRecoverySession,
   type StoredMatrixSession,
 } from './sessionStore';
 
@@ -35,5 +37,17 @@ describe('sessionStore', () => {
       expect(loaded).toBeUndefined();
       expect(localStorage.getItem('aimtrix.matrix-session.v1')).toBeNull();
     });
+  });
+
+  it('accepts complete delegated credentials and strips both tokens for recovery', () => {
+    const delegated = { ...session, oauth: {
+      clientId: 'synthetic-public-client', issuer: 'https://auth.example.com', refreshToken: 'synthetic-refresh-token',
+    } };
+    expect(parseStoredMatrixSession(delegated)).toEqual(delegated);
+    const recovery = tokenFreeRecoverySession(delegated, 'soft');
+    expect(recovery).toEqual({ ...session, accessToken: '', recovery: 'soft' });
+    expect(parseStoredMatrixSession(recovery)).toEqual(recovery);
+    expect(parseStoredMatrixSession({ ...delegated, accessToken: '', recovery: 'soft' })).toBeUndefined();
+    expect(parseStoredMatrixSession({ ...delegated, oauth: { ...delegated.oauth, issuer: 'http://remote.example.com' } })).toBeUndefined();
   });
 });

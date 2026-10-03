@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { MatrixClient, SyncState } from 'matrix-js-sdk';
+import type { ValidatedAuthMetadata } from 'matrix-js-sdk/lib/oauth/index.js';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
 import type { AimtrixPlatform } from '../platform/platform';
 import { MatrixController } from './MatrixController';
@@ -56,6 +57,7 @@ function platformFixture(stored: StoredMatrixSession | undefined = session) {
   };
   const platform = {
     capabilities: { platform: 'browser' }, credentials,
+    deepLinks: { ssoRedirectUrl: vi.fn().mockReturnValue('https://aimtrix.example.test/') },
     notifications: { setContext: vi.fn().mockResolvedValue(undefined), clearContext: vi.fn().mockResolvedValue(undefined) },
     push: { unsubscribe: vi.fn().mockResolvedValue(true) },
     sso: { load: vi.fn(), save: vi.fn(), clear: vi.fn() },
@@ -175,6 +177,62 @@ describe('MatrixController session lifecycle', () => {
     await restoring;
     expect(controller.getSnapshot()).toMatchObject({ status: 'error', issue: 'storage' });
     expect(createClient).not.toHaveBeenCalled();
+  });
+
+  it('consumes a delegated callback once and saves a renewable session before starting encrypted sync', async () => {
+    const state = 'A'.repeat(32);
+    window.history.replaceState({}, '', `/#code=synthetic-code&state=${state}`);
+    const metadata: ValidatedAuthMetadata = {
+      issuer: 'https://auth.example.test', authorization_endpoint: 'https://auth.example.test/authorize',
+      token_endpoint: 'https://auth.example.test/token', revocation_endpoint: 'https://auth.example.test/revoke',
+      registration_endpoint: 'https://auth.example.test/register', response_modes_supported: ['query', 'fragment'],
+      response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+    };
+    const fetcher = vi.fn(async () => {
+      expect(window.location.hash).toBe('');
+      return new Response(JSON.stringify({ access_token: 'synthetic-oauth-access',
+        refresh_token: 'synthetic-oauth-refresh', token_type: 'Bearer', expires_in: 3600 }), { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const client = fakeClient();
+    createClient.mockReturnValueOnce({ getAuthMetadata: vi.fn().mockResolvedValue(metadata) })
+      .mockReturnValueOnce({ whoami: vi.fn().mockResolvedValue({ user_id: session.userId, device_id: 'OAUTH-DEVICE' }) })
+      .mockReturnValueOnce(client);
+    const { controller, platform, credentials } = controllerFixture(undefined);
+    vi.mocked(platform.sso.load).mockResolvedValue({
+      kind: 'oauth', baseUrl: session.baseUrl, serverName: session.serverName,
+      clientId: 'public-client', issuer: metadata.issuer, codeVerifier: 'B'.repeat(64),
+      deviceId: 'OAUTH-DEVICE', redirectUri: 'https://aimtrix.example.test/', state,
+    });
+    await controller.initialize();
+    expect(platform.sso.clear).toHaveBeenCalledOnce();
+    expect(credentials.save).toHaveBeenCalledWith({ ...session, deviceId: 'OAUTH-DEVICE',
+      accessToken: 'synthetic-oauth-access', oauth: {
+        clientId: 'public-client', issuer: metadata.issuer, refreshToken: 'synthetic-oauth-refresh',
+      } });
+    expect(client.initRustCrypto).toHaveBeenCalledOnce();
+    expect(createClient.mock.calls[2]?.[0]).toMatchObject({ refreshToken: 'synthetic-oauth-refresh',
+      tokenRefreshFunction: expect.any(Function) });
+    expect(window.location.hash).toBe('');
+  });
+
+  it.each(['denied', 'state-mismatch'] as const)('clears a %s delegated callback without exchanging or saving credentials', async (mode) => {
+    const state = 'A'.repeat(32);
+    window.history.replaceState({}, '', `/#${mode === 'denied' ? 'error=access_denied' : 'code=synthetic-code'}&state=${state}`);
+    const { controller, platform, credentials } = controllerFixture(undefined);
+    vi.mocked(platform.sso.load).mockResolvedValue({
+      kind: 'oauth', baseUrl: session.baseUrl, serverName: session.serverName,
+      clientId: 'public-client', issuer: 'https://auth.example.test', codeVerifier: 'B'.repeat(64),
+      deviceId: 'OAUTH-DEVICE', redirectUri: 'https://aimtrix.example.test/',
+      state: mode === 'denied' ? state : 'C'.repeat(32),
+    });
+    await controller.initialize();
+    expect(platform.sso.clear).toHaveBeenCalledOnce();
+    expect(window.location.hash).toBe('');
+    expect(credentials.save).not.toHaveBeenCalled();
+    expect(createClient).not.toHaveBeenCalled();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'signed-out', error: expect.any(String) });
   });
 
   it('classifies unavailable credential storage without discarding the stored account', async () => {
@@ -396,6 +454,41 @@ describe('MatrixController session lifecycle', () => {
     expect(credentials.clear).toHaveBeenCalledOnce();
     expect(await credentials.load()).toBeUndefined();
     expect(controller.getSnapshot()).toEqual({ status: 'signed-out' });
+  });
+
+  it('revokes delegated refresh credentials and strips them from the cleanup record', async () => {
+    const delegated = { ...session, oauth: { clientId: 'public-client', issuer: 'https://auth.example.test',
+      refreshToken: 'synthetic-refresh' } };
+    const metadata: ValidatedAuthMetadata = {
+      issuer: delegated.oauth.issuer, authorization_endpoint: 'https://auth.example.test/authorize',
+      token_endpoint: 'https://auth.example.test/token', revocation_endpoint: 'https://auth.example.test/revoke',
+      registration_endpoint: 'https://auth.example.test/register', response_modes_supported: ['query', 'fragment'],
+      response_types_supported: ['code'], grant_types_supported: ['authorization_code', 'refresh_token'],
+      code_challenge_methods_supported: ['S256'],
+    };
+    const client = { ...fakeClient(), logout: vi.fn() };
+    createClient.mockImplementation((options: { accessToken?: string }) => options.accessToken
+      ? client : { getAuthMetadata: vi.fn().mockResolvedValue(metadata) });
+    const fetcher = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe(metadata.revocation_endpoint);
+      expect(new URLSearchParams(init?.body as string).get('refresh_token')).toBeNull();
+      expect(new URLSearchParams(init?.body as string).get('token')).toBe(delegated.oauth.refreshToken);
+      return new Response('', { status: 200 });
+    });
+    vi.stubGlobal('fetch', fetcher);
+    const { controller, credentials } = controllerFixture(delegated);
+    const deleteDatabase = vi.fn(() => {
+      const request = { onsuccess: undefined as (() => void) | undefined };
+      queueMicrotask(() => request.onsuccess?.());
+      return request;
+    });
+    vi.stubGlobal('indexedDB', { deleteDatabase });
+    await controller.initialize();
+    await controller.logout();
+    expect(credentials.save).toHaveBeenCalledWith({ ...session, accessToken: '', recovery: 'hard' });
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(client.logout).not.toHaveBeenCalled();
+    expect(credentials.clear).toHaveBeenCalledOnce();
   });
 
   it('stops sign-out before network and destructive cleanup if the token-free marker cannot be saved', async () => {
