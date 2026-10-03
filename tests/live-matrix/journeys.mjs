@@ -1761,6 +1761,36 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         (await elementPoll.locator('.mx_PollOption').filter({ hasText: second }).locator('.mx_PollOption_optionVoteCount').textContent())?.includes('1 vote'),
       'element-poll-replacement', 45000);
     });
+    await check('encrypted-poll-pagination', async () => {
+      const pollId = await alice.locator('.timeline-message').filter({ has: alicePoll }).getAttribute('data-event-id');
+      invariant(pollId?.startsWith('$'), 'poll-pagination-root');
+      const path = `/rooms/${encode(roomId)}/relations/${encode(pollId)}/m.reference`;
+      const matchRelation = (url) => url.pathname.includes(path);
+      let pages = 0, sawCursor = false;
+      const paginate = async (route) => {
+        const url = new URL(route.request().url());
+        url.searchParams.set('limit', '1');
+        await route.continue({ url: url.toString() });
+      };
+      const observePage = async (response) => {
+        if (!matchRelation(new URL(response.url())) || !response.ok()) return;
+        const body = await response.json();
+        if (Array.isArray(body.chunk)) { pages += 1; sawCursor ||= Boolean(body.next_batch); }
+      };
+      await alice.route(matchRelation, paginate);
+      alice.on('response', observePage);
+      try {
+        await bobPoll.getByRole('button', { name: first }).click();
+        await bobPoll.getByText('Vote saved.', { exact: true }).waitFor({ timeout: 45000 });
+        const refresh = alicePoll.getByRole('button', { name: 'Refresh results' });
+        await refresh.click();
+        await until(async () => await refresh.isEnabled() && pages >= 2 && sawCursor &&
+          (await alicePoll.getByRole('button', { name: first }).locator('b').textContent()) === '1' &&
+          (await alicePoll.getByRole('button', { name: second }).locator('b').textContent()) === '0', 'poll-pagination-pages', 45000);
+        invariant(!(await alicePoll.textContent()).includes('Partial results') &&
+          !(await alicePoll.getByRole('alert').count()), 'poll-pagination-results');
+      } finally { alice.off('response', observePage); await alice.unroute(matchRelation, paginate); }
+    });
     await check('encrypted-poll-end', async () => {
       const pollEndWireStart = wire.length;
       await alicePoll.getByRole('button', { name: 'End poll' }).click();
@@ -2438,6 +2468,39 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await until(() => refresh.isEnabled(), stage);
         invariant((await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '0' &&
           (await aimtrixPoll.textContent()).includes('Poll ended'), stage);
+        stage = 'plain-poll-competing-ends';
+        const competingQuestion = `Synthetic competing closure ${randomBytes(5).toString('hex')}`;
+        const competingOption = 'Synthetic closure choice';
+        const competingStart = await api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/send/org.matrix.msc3381.poll.start/${randomBytes(8).toString('hex')}`, {
+          token: aliceSession.accessToken, method: 'PUT', body: {
+            'org.matrix.msc1767.text': `${competingQuestion}\n1. ${competingOption}\n2. Other`,
+            'org.matrix.msc3381.poll.start': {
+              kind: 'org.matrix.msc3381.poll.disclosed', max_selections: 1,
+              question: { 'org.matrix.msc1767.text': competingQuestion },
+              answers: [{ id: 'one', 'org.matrix.msc1767.text': competingOption }, { id: 'two', 'org.matrix.msc1767.text': 'Other' }],
+            },
+          },
+        });
+        const competingId = competingStart.event_id;
+        invariant(competingId?.startsWith('$'), stage);
+        const competingCard = plainAlice.getByRole('region', { name: `Poll: ${competingQuestion}` });
+        await competingCard.waitFor({ timeout: 45000 });
+        const sendEnd = () => api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/send/org.matrix.msc3381.poll.end/${randomBytes(8).toString('hex')}`, {
+          token: aliceSession.accessToken, method: 'PUT', body: {
+            'm.relates_to': { rel_type: 'm.reference', event_id: competingId },
+            'org.matrix.msc3381.poll.end': {}, 'org.matrix.msc1767.text': 'Poll ended',
+          },
+        });
+        const ended = await Promise.all([sendEnd(), sendEnd()]);
+        invariant(ended[0].event_id !== ended[1].event_id, stage);
+        const competingRelations = await api(`/_matrix/client/v1/rooms/${encode(plainRoomId)}/relations/${encode(competingId)}/m.reference`, { token: aliceSession.accessToken });
+        invariant(ended.every(({ event_id }) => competingRelations.chunk?.some((event) => event.event_id === event_id)), stage);
+        await until(async () => {
+          await competingCard.getByRole('button', { name: 'Refresh results' }).click();
+          return (await competingCard.textContent()).includes('Poll ended');
+        }, stage, 45000);
+        const competingElement = elementPeer.locator('.mx_MPollBody').filter({ hasText: competingQuestion }).last();
+        await until(() => competingElement.getByRole('radio', { name: new RegExp(competingOption) }).isDisabled(), stage, 45000);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {

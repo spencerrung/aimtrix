@@ -51,4 +51,22 @@ describe('Matrix polls', () => {
     ];
     expect(aggregatePoll(definition, '$poll', '@alice:test', events)).toMatchObject({ counts: { a: 1, b: 1 }, closed: true, endEventId: '$end' });
   });
+
+  it('resolves competing closures independently of relation page order', () => {
+    const relation = { 'm.relates_to': { rel_type: 'm.reference', event_id: '$poll' } };
+    const close = (id: string, timestamp: number): PollRelation => ({
+      id, timestamp, senderId: '@owner:test', type: POLL_END, canEnd: true,
+      content: { ...relation, [POLL_END]: {}, [POLL_TEXT]: 'Poll ended' },
+    });
+    const events = [
+      close('$later', 11), response('$late-vote', '@alice:test', 12, ['a']),
+      close('$first', 10), response('$same-time-vote', '@bob:test', 10, ['b']),
+      close('$same-time-end', 10), response('$early-vote', '@alice:test', 9, ['a']),
+    ];
+    for (const relations of [events, [...events].reverse()]) {
+      expect(aggregatePoll(definition, '$poll', '@alice:test', relations)).toMatchObject({
+        closed: true, endEventId: '$first', counts: { a: 1, b: 1 }, totalVotes: 2,
+      });
+    }
+  });
 });
