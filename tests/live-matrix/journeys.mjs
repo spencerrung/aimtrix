@@ -743,6 +743,47 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
       } catch { throw new Error(stage); }
     });
+    if (elementPeer) await check('element-ui-incoming-sas-verification', async () => {
+      let stage = 'element-sas-login';
+      try {
+        const peer = await newPage();
+        await peer.goto(`${stack.origins.element}/#/login`);
+        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
+        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        await until(async () => !new URL(peer.url()).hash.startsWith('#/login'), stage);
+        stage = 'element-sas-request';
+        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click();
+        stage = 'element-sas-incoming';
+        const incoming = alice.getByRole('complementary', { name: 'Incoming device verification' });
+        await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
+        const challenge = alice.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
+        const elementEmoji = peer.locator('.mx_VerificationShowSas_emojiSas > div > div:first-child');
+        stage = 'element-sas-method';
+        const chooseEmoji = peer.getByRole('button', { name: /^(Compare using unique emoji|Verify by emoji)$/ });
+        const startEmoji = peer.locator('.mx_VerificationPanel_QRPhase_startOption').filter({ hasText: /Compare.*emoji/i })
+          .getByRole('button', { name: 'Start', exact: true });
+        await until(async () => {
+          if (await startEmoji.isVisible()) { await startEmoji.click(); return true; }
+          if (await chooseEmoji.isVisible()) { await chooseEmoji.click(); return true; }
+          return await elementEmoji.count() === 7;
+        }, stage, 45000);
+        stage = 'element-sas-emoji';
+        await until(async () => await elementEmoji.count() === 7, stage, 45000);
+        await challenge.waitFor({ timeout: 45000 });
+        const ownEmoji = await challenge.locator('.incoming-verification__emoji b').allTextContents();
+        invariant(ownEmoji.length === 7 && JSON.stringify(ownEmoji.map((value) => value.trim())) ===
+          JSON.stringify((await elementEmoji.allTextContents()).map((value) => value.trim())), stage);
+        stage = 'element-sas-confirm';
+        await challenge.getByRole('button', { name: 'They match', exact: true }).click();
+        const elementDialog = peer.locator('.mx_InfoDialog');
+        await elementDialog.getByRole('button', { name: 'They match', exact: true }).click();
+        stage = 'element-sas-complete';
+        await challenge.waitFor({ state: 'hidden', timeout: 45000 });
+        await elementDialog.getByRole('button', { name: 'Got it', exact: true }).click();
+        await until(() => incoming.isHidden(), stage, 45000);
+      } catch { throw new Error(stage); }
+    });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
       await until(async () => {
