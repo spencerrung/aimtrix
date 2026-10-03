@@ -1,7 +1,7 @@
 import { images, invariant } from './stack.mjs';
 export const checkNames = new Set([
   'setup', 'disposable-stack', 'application-server', 'isolated-accounts',
-  'password-login-three-devices', 'encrypted-room-create-and-join', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification',
+  'password-login-three-devices', 'encrypted-room-create-and-join', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification', 'element-ui-aimtrix-declines-verification', 'element-ui-withdraws-verification',
   'first-use-encrypted-direct-conversation',
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
@@ -30,6 +30,7 @@ failureCategories.push('element-encrypted-login', 'element-encrypted-room', 'ele
 failureCategories.push('element-back-at-login', 'element-left-room-route', 'element-room-not-rendered', 'element-composer-hidden', 'element-room-dialog', 'element-room-no-composer');
 failureCategories.push('element-sas-login', 'element-sas-request', 'element-sas-incoming', 'element-sas-incoming-method', 'element-sas-method', 'element-sas-emoji', 'element-sas-confirm', 'element-sas-complete');
 failureCategories.push('element-qr-login', 'element-qr-request', 'element-qr-incoming', 'element-qr-scan-ready', 'element-qr-code', 'element-qr-camera-decode', 'element-qr-confirm', 'element-qr-complete');
+failureCategories.push('element-cancel-login', 'element-cancel-request', 'element-cancel-incoming', 'element-cancel-aimtrix-decline', 'element-cancel-peer-notice', 'element-cancel-aimtrix-cleared', 'element-withdraw-login', 'element-withdraw-request', 'element-withdraw-incoming', 'element-withdraw-control', 'element-withdraw-aimtrix-cleared');
 failureCategories.push('sso-recovery-create-room', 'sso-recovery-encryption-state', 'sso-recovery-open-room', 'sso-recovery-send-marker', 'sso-recovery-setup', 'sso-recovery-server-backup', 'sso-recovery-second-login', 'sso-recovery-old-event', 'sso-recovery-restore', 'sso-recovery-imported-keys', 'sso-recovery-decrypted-event');
 failureCategories.push('withheld-read-ciphertext', 'withheld-post-fresh-event', 'withheld-load-fresh-event', 'withheld-send-to-device', 'withheld-actionable-guidance', 'withheld-generic-guidance', 'withheld-key-pending', 'withheld-unattempted', 'withheld-backup-pending', 'withheld-historical-backup', 'withheld-historical-no-backup', 'withheld-not-joined', 'withheld-sender-trust', 'withheld-unknown-error', 'withheld-event-gone', 'withheld-not-encrypted', 'withheld-other-guidance');
 failureCategories.push('reset-existing-backup', 'reset-confirmation', 'reset-new-key', 'reset-backup-replaced', 'reset-old-key-rejected', 'reset-new-key-restores');

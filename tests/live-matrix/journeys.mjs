@@ -881,6 +881,62 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       } catch { throw new Error(stage); }
       finally { if (recipient) await recipient.evaluate(() => window.__aimtrixQrStop?.()).catch(() => undefined); }
     });
+    if (elementPeer) await check('element-ui-aimtrix-declines-verification', async () => {
+      let stage = 'element-cancel-login';
+      try {
+        const peer = await newPage();
+        await peer.goto(`${stack.origins.element}/#/login`);
+        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
+        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        stage = 'element-cancel-request';
+        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
+        stage = 'element-cancel-incoming';
+        let recipient;
+        await until(async () => {
+          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
+            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
+              recipient = candidate; return true;
+            }
+          }
+          return false;
+        }, stage, 45000);
+        const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
+        stage = 'element-cancel-aimtrix-decline';
+        await incoming.getByRole('button', { name: 'Decline', exact: true }).click();
+        stage = 'element-cancel-peer-notice';
+        await peer.getByText('Either the request timed out, the request was denied, or there was a verification mismatch.', { exact: true }).waitFor({ timeout: 45000 });
+        stage = 'element-cancel-aimtrix-cleared';
+        await incoming.waitFor({ state: 'hidden', timeout: 45000 });
+      } catch { throw new Error(stage); }
+    });
+    if (elementPeer) await check('element-ui-withdraws-verification', async () => {
+      let stage = 'element-withdraw-login';
+      try {
+        const peer = await newPage();
+        await peer.goto(`${stack.origins.element}/#/login`);
+        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
+        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        stage = 'element-withdraw-request';
+        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
+        stage = 'element-withdraw-incoming';
+        let recipient;
+        await until(async () => {
+          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
+            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
+              recipient = candidate; return true;
+            }
+          }
+          return false;
+        }, stage, 45000);
+        const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
+        stage = 'element-withdraw-control';
+        await peer.locator('.mx_InfoDialog').getByRole('button', { name: 'Close dialog', exact: true }).click({ timeout: 45000 });
+        stage = 'element-withdraw-aimtrix-cleared';
+        await incoming.waitFor({ state: 'hidden', timeout: 45000 });
+      } catch { throw new Error(stage); }
+    });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
       const skip = elementPeer.getByRole('button', { name: /^(Skip|Skip for now)$/ }).first();
       await until(async () => {
