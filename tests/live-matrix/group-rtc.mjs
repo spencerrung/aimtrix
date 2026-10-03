@@ -31,6 +31,11 @@ try {
       name: 'RTC Proof', preset: 'private_chat', initial_state: [{ type: 'm.room.encryption', state_key: '', content: { algorithm: 'm.megolm.v1.aes-sha2' } }],
     } });
     roomId = created.room_id;
+    const powerLevelsPath = `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.power_levels/`;
+    const powerLevels = await api(powerLevelsPath, { token: aliceAccount.access_token });
+    await api(powerLevelsPath, { token: aliceAccount.access_token, method: 'PUT', body: {
+      ...powerLevels, events: { ...powerLevels.events, 'org.matrix.msc3401.call.member': 0 },
+    } });
     await api(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/invite`, { token: aliceAccount.access_token, method: 'POST', body: { user_id: bobAccount.user_id } });
     await api(`/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/join`, { token: bobAccount.access_token, method: 'POST', body: {} });
   });

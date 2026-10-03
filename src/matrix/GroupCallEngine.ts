@@ -91,6 +91,12 @@ export class GroupCallEngine {
     this.abort.abort();
     void this.release();
   };
+  private readonly onMembershipError = (): void => {
+    if (this.disposed || this.abort.signal.aborted) return;
+    this.publish({ state: 'error', error: 'The Matrix room could not accept your call membership. Check room permissions and try again.' });
+    this.abort.abort();
+    void this.release();
+  };
 
   private attachRoom(room: LiveKitRoom): void {
     for (const event of [RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.TrackSubscribed,
@@ -140,16 +146,25 @@ export class GroupCallEngine {
       };
       this.keyListener = keyChanged;
       session.on(MatrixRTCSessionEvent.EncryptionKeyChanged, keyChanged);
+      session.on(MatrixRTCSessionEvent.MembershipManagerError, this.onMembershipError);
       session.reemitEncryptionKeys();
       phase = 'membership';
       session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio' });
+      if (this.abort.signal.aborted) return;
       phase = 'key';
-      await Promise.race([ownKey, new Promise<never>((_, reject) => {
-        const timer = window.setTimeout(() => reject(new Error('The group call media key was not ready.')), 30_000);
-        const abort = () => reject(new DOMException('The call was cancelled.', 'AbortError'));
-        this.abort.signal.addEventListener('abort', abort, { once: true });
-        void ownKey.finally(() => { window.clearTimeout(timer); this.abort.signal.removeEventListener('abort', abort); });
-      })]);
+      let keyTimer!: number;
+      let keyAbort!: () => void;
+      try {
+        await Promise.race([ownKey, new Promise<never>((_, reject) => {
+          keyTimer = window.setTimeout(() => reject(new Error('The group call media key was not ready.')), 30_000);
+          keyAbort = () => reject(new DOMException('The call was cancelled.', 'AbortError'));
+          this.abort.signal.addEventListener('abort', keyAbort, { once: true });
+          if (this.abort.signal.aborted) keyAbort();
+        })]);
+      } finally {
+        window.clearTimeout(keyTimer);
+        this.abort.signal.removeEventListener('abort', keyAbort);
+      }
       if (this.abort.signal.aborted) return;
       phase = 'connection';
       await room.connect(authorization.url, authorization.jwt);
@@ -197,7 +212,7 @@ export class GroupCallEngine {
       }[phase];
       await this.release();
       if (!this.disposed && !this.abort.signal.aborted) this.publish({ state: 'error', error: message });
-      throw new Error(message, { cause });
+      throw new Error(this.state.state === 'error' && this.state.error ? this.state.error : message, { cause });
     }
   }
 
@@ -236,6 +251,7 @@ export class GroupCallEngine {
   private async releaseOnce(): Promise<void> {
     const session = this.rtcSession;
     if (session && this.keyListener) session.off(MatrixRTCSessionEvent.EncryptionKeyChanged, this.keyListener);
+    session?.off(MatrixRTCSessionEvent.MembershipManagerError, this.onMembershipError);
     this.keyListener = undefined;
     this.rtcSession = undefined;
     const room = this.room;

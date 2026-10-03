@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   connectGate: undefined as undefined | Promise<void>,
   deferE2EE: false,
   completeE2EE: undefined as undefined | (() => void),
+  rejectMembership: false,
 }));
 
 vi.mock('./groupCallTransport', () => ({ discoverGroupCallTransport: mocks.discover, authorizeGroupCall: mocks.authorize }));
@@ -52,7 +53,7 @@ import { GroupCallEngine } from './GroupCallEngine';
 function fixture() {
   const session = Object.assign(new EventEmitter(), {
     reemitEncryptionKeys: vi.fn(),
-    joinRTCSession: vi.fn(() => { queueMicrotask(() => session.emit(MatrixRTCSessionEvent.EncryptionKeyChanged, new Uint8Array(32), 0, { userId: '@alice:example.test', deviceId: 'DEVICE' }, '@alice:example.test:DEVICE')); }),
+    joinRTCSession: vi.fn(() => { queueMicrotask(() => session.emit(mocks.rejectMembership ? MatrixRTCSessionEvent.MembershipManagerError : MatrixRTCSessionEvent.EncryptionKeyChanged, ...(mocks.rejectMembership ? [new Error('private server detail')] : [new Uint8Array(32), 0, { userId: '@alice:example.test', deviceId: 'DEVICE' }, '@alice:example.test:DEVICE']))); }),
     isJoined: () => true,
     leaveRoomSession: vi.fn(async () => { mocks.events.push('membership-leave'); }),
   });
@@ -66,7 +67,7 @@ function fixture() {
   return { engine: new GroupCallEngine(client, '!room:example.test', changed), session, changed };
 }
 
-afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; mocks.deferE2EE = false; mocks.completeE2EE = undefined; vi.unstubAllGlobals(); });
+afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; mocks.deferE2EE = false; mocks.completeE2EE = undefined; mocks.rejectMembership = false; vi.unstubAllGlobals(); });
 
 describe('group call media lifecycle', () => {
   it('waits for a Matrix key and LiveKit E2EE before publishing local media, then releases both memberships', async () => {
@@ -109,6 +110,20 @@ describe('group call media lifecycle', () => {
     expect(mocks.events).toContain('microphone');
     expect(engine.summary.encrypted).toBe(true);
     await engine.leave();
+  });
+
+  it('reports a rejected Matrix membership without exposing the server error or opening capture', async () => {
+    vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
+    mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
+    mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
+    mocks.rejectMembership = true;
+    const { engine, session } = fixture();
+    await expect(engine.join(false, { microphoneId: '', cameraId: '' }, true)).rejects.toThrow('room permissions');
+    expect(engine.summary.state).toBe('error');
+    expect(engine.summary.error).toContain('room permissions');
+    expect(engine.summary.error).not.toContain('private server detail');
+    expect(mocks.events).not.toContain('microphone');
+    expect(session.listenerCount(MatrixRTCSessionEvent.MembershipManagerError)).toBe(0);
   });
 
   it('leaves Matrix membership after a terminal SFU disconnect', async () => {
