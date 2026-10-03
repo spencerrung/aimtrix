@@ -140,8 +140,8 @@ test('first-use encrypted chat evidence discards identities and message content'
 
 test('community administration evidence keeps only fixed stages', () => {
   const privateValue = randomBytes(24).toString('hex');
-  for (const name of ['room-access-and-discovery-administration', 'space-child-parent-and-recommendation-administration', 'room-knock-and-upgrade-administration']) {
-    const category = name === 'room-knock-and-upgrade-administration' ? 'upgrade-tombstone' : 'space-add-subspace';
+  for (const name of ['room-access-and-discovery-administration', 'room-moderator-permission-transition', 'space-child-parent-and-recommendation-administration', 'room-knock-and-upgrade-administration']) {
+    const category = name === 'room-knock-and-upgrade-administration' ? 'upgrade-tombstone' : name === 'room-moderator-permission-transition' ? 'moderator-demote' : 'space-add-subspace';
     const result = makeReport({ ...base, failureStage: name,
       checks: [{ name, passed: false, category, durationMs: 120,
         roomId: privateValue, alias: privateValue, serverAcl: privateValue, state: privateValue }],

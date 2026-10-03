@@ -385,6 +385,42 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await api(`/_matrix/client/v3/directory/room/${encode(alias)}`, { token: aliceSession.accessToken, status: 404 });
       } catch { throw new Error(stage); }
     });
+    await check('room-moderator-permission-transition', async () => {
+      let stage = 'moderator-grant';
+      const path = (type) => `/_matrix/client/v3/rooms/${encode(roomId)}/state/${type}`;
+      try {
+        const original = await api(path('m.room.power_levels'), { token: aliceSession.accessToken });
+        invariant((original.events?.['m.room.join_rules'] ?? original.state_default ?? 50) <= 50, 'moderator-join-rule-threshold');
+        await api(path('m.room.power_levels'), { token: aliceSession.accessToken, method: 'PUT', body: {
+          ...original, users: { ...original.users, [bobSession.userId]: 50 },
+        } });
+        await until(async () => (await api(path('m.room.power_levels'), { token: bobSession.accessToken })).users?.[bobSession.userId] === 50, stage);
+        stage = 'moderator-open-controls';
+        await bob.getByRole('navigation', { name: 'Spaces' }).getByRole('button', { name: 'All conversations' }).click();
+        await openRoom(bob, roomName);
+        const drawer = bob.getByRole('complementary', { name: 'Buddy and room drawer' });
+        if (!(await drawer.isVisible())) await bob.getByRole('button', { name: 'Toggle room details', exact: true }).click();
+        await drawer.getByRole('tab', { name: 'Manage', exact: true }).click();
+        const joinRule = drawer.getByRole('region', { name: 'Advanced room administration' }).getByLabel('Who may join');
+        await until(() => joinRule.isEnabled(), stage);
+        stage = 'moderator-change-join-rule';
+        await joinRule.selectOption('public');
+        const confirmation = bob.getByRole('dialog', { name: 'Change join rule?' });
+        await confirmation.getByRole('button', { name: 'Save join rule' }).click();
+        await confirmation.waitFor({ state: 'hidden' });
+        await until(async () => (await api(path('m.room.join_rules'), { token: aliceSession.accessToken })).join_rule === 'public', stage);
+        await until(() => joinRule.isEnabled(), 'moderator-control-ready-after-write');
+        stage = 'moderator-owner-only-denial';
+        await api(path('m.room.power_levels'), { token: bobSession.accessToken, method: 'PUT', body: {
+          ...original, users: { ...original.users, [bobSession.userId]: 50, [aliceSession.userId]: 0 },
+        }, status: 403 });
+        stage = 'moderator-demote';
+        await api(path('m.room.power_levels'), { token: aliceSession.accessToken, method: 'PUT', body: original });
+        await api(path('m.room.join_rules'), { token: aliceSession.accessToken, method: 'PUT', body: { join_rule: 'invite' } });
+        await until(async () => !(await joinRule.isEnabled()), stage);
+        invariant((await api(path('m.room.join_rules'), { token: aliceSession.accessToken })).join_rule === 'invite', stage);
+      } catch { throw new Error(stage); }
+    });
     await check('room-knock-and-upgrade-administration', async () => {
       let stage = 'upgrade-capabilities';
       try {
@@ -1501,6 +1537,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.unroute(pattern, rejectSecond);
         await retry.click();
         await alice.getByRole('region', { name: 'Attachments', exact: true }).locator('li').filter({ hasText: files[1].name }).getByText('Sent', { exact: true }).waitFor();
+        const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.isVisible()) {
+          await latest.click();
+          await latest.waitFor({ state: 'hidden' });
+        }
         for (let index = 0; index < files.length; index++) {
           await verifyAttachment(bob, files[index], captions[index]);
           await until(async () => await alice.locator('.timeline-message').filter({ has: alice.locator('.message-file').filter({ hasText: files[index].name }) }).count() === 1, 'single-accepted-attachment');
