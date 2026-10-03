@@ -20,6 +20,10 @@ const harness = vi.hoisted(() => ({
   notificationPreferences: vi.fn(),
   favorite: vi.fn(),
   resolveNavigation: vi.fn(),
+  accounts: [] as Array<{ id: string; userId: string; homeserver: string; serverName: string; active: boolean; recovery: boolean }>,
+  scope: undefined as { userId: string; homeserver: string } | undefined,
+  chooseAccount: vi.fn<(id: string | null) => Promise<void>>(),
+  registerPush: vi.fn<() => Promise<void>>(),
 }));
 vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   constructor() { return new Proxy(this, { get: (target, key) => Reflect.get(target, key) ?? (() => undefined) }); }
@@ -34,6 +38,10 @@ vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   setNotificationPreferences = (preferences: unknown) => harness.notificationPreferences(preferences);
   setRoomFavorite = (...args: unknown[]) => harness.favorite(...args);
   resolveNavigationTarget = (...args: unknown[]) => harness.resolveNavigation(...args);
+  getDraftScope = () => harness.scope;
+  listAccounts = async () => harness.accounts;
+  chooseAnotherAccount = (id: string | null) => harness.chooseAccount(id);
+  registerPushNotifications = () => harness.registerPush();
 } }));
 vi.mock('./config/runtimeConfig', async (original) => {
   const actual = await original<typeof import('./config/runtimeConfig')>();
@@ -63,6 +71,9 @@ beforeEach(() => {
   harness.listeners.clear(); harness.snapshot = ready(); harness.remote = undefined;
   harness.update.mockReset().mockResolvedValue(undefined); harness.forget.mockReset().mockResolvedValue(undefined);
   harness.notificationPreferences.mockReset();
+  harness.accounts = []; harness.scope = undefined;
+  harness.chooseAccount.mockReset().mockResolvedValue(undefined);
+  harness.registerPush.mockReset().mockResolvedValue(undefined);
   harness.favorite.mockReset().mockResolvedValue(undefined);
   harness.resolveNavigation.mockReset().mockResolvedValue({ roomId: '!lounge:test', eventId: '$event' });
   window.history.replaceState({}, '', '/');
@@ -73,6 +84,31 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('App account privacy', () => {
+  it('offers a non-destructive account switch while recovery is required', async () => {
+    harness.snapshot = { status: 'reauthentication-required', recovery: { userId: '@one:example.test', homeserver: 'https://one.test', softLogout: true } };
+    harness.accounts = [{ id: 'one', userId: '@one:example.test', homeserver: 'https://one.test', serverName: 'one.test', active: true, recovery: true },
+      { id: 'two', userId: '@two:other.test', homeserver: 'https://other.test', serverName: 'other.test', active: false, recovery: false }];
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /@two:other.test/ }));
+    await waitFor(() => expect(harness.chooseAccount).toHaveBeenCalledWith('two'));
+    expect(harness.forget).not.toHaveBeenCalled();
+  });
+
+  it('does not register push for a new account with the old account’s preference', async () => {
+    const first = JSON.stringify(['https://one.test', '@one:example.test']);
+    const second = JSON.stringify(['https://other.test', '@two:other.test']);
+    localStorage.setItem('aimtrix.preferences.migrated.v2', first);
+    localStorage.setItem(`aimtrix.preferences.v2:${first}`, JSON.stringify({ ...defaultUserPreferences, desktopNotifications: true }));
+    localStorage.setItem(`aimtrix.preferences.v2:${second}`, JSON.stringify({ ...defaultUserPreferences, desktopNotifications: false }));
+    harness.scope = { homeserver: 'https://one.test', userId: '@one:example.test' };
+    render(<App />);
+    await waitFor(() => expect(harness.registerPush).toHaveBeenCalled());
+    const before = harness.registerPush.mock.calls.length;
+    await act(async () => { harness.scope = { homeserver: 'https://other.test', userId: '@two:other.test' }; publish(ready('@two:other.test')); });
+    await waitFor(() => expect(screen.getByText('@two:other.test')).toBeVisible());
+    expect(harness.registerPush).toHaveBeenCalledTimes(before);
+  });
+
   it('uses account data and never seeds another account from the old global profile cache', async () => {
     localStorage.setItem('aimtrix.profile.v1', JSON.stringify({ ...defaultProfilePersonalization, bio: 'Legacy account profile' }));
     harness.remote = { ...defaultProfilePersonalization, bio: 'First account profile' };

@@ -1,9 +1,17 @@
 import { isMatrixEventId, isMatrixNavigationTarget, parseMatrixLink, type MatrixNavigationTarget } from '../matrix/matrixLinks';
 
 /** Event-only notifications remain valid even though standard links need a room. */
-export type PushRoute = MatrixNavigationTarget;
+export type PushRoute = MatrixNavigationTarget & { accountId?: string };
 
-const routeParameters = ['room', 'alias', 'user', 'event', 'via'] as const;
+const routeParameters = ['room', 'alias', 'user', 'event', 'via', 'account'] as const;
+
+function validAccountId(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 1024) return false;
+  try {
+    const parts: unknown = JSON.parse(value);
+    return Array.isArray(parts) && parts.length === 2 && parts.every((part) => typeof part === 'string' && part.length > 0 && part.length <= 512);
+  } catch { return false; }
+}
 
 export function parsePushRoute(url: URL): PushRoute | undefined {
   if (url.protocol === 'matrix:' || url.hostname === 'matrix.to') return parseMatrixLink(url.href);
@@ -16,6 +24,7 @@ export function parsePushRoute(url: URL): PushRoute | undefined {
     roomAlias: url.searchParams.get('alias') ?? undefined,
     userId: url.searchParams.get('user') ?? undefined,
     eventId: url.searchParams.get('event') ?? undefined,
+    accountId: url.searchParams.get('account') ?? undefined,
     via: via.length ? via : undefined,
   });
 }
@@ -23,13 +32,15 @@ export function parsePushRoute(url: URL): PushRoute | undefined {
 export function pushRouteFromMessage(value: unknown): PushRoute | undefined {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
   const candidate = value as Record<string, unknown>;
+  if (candidate.accountId !== undefined && !validAccountId(candidate.accountId)) return undefined;
   const route = {
     roomId: candidate.roomId,
     eventId: candidate.eventId,
     ...(candidate.roomAlias !== undefined ? { roomAlias: candidate.roomAlias } : {}),
     ...(candidate.userId !== undefined ? { userId: candidate.userId } : {}),
     ...(candidate.via !== undefined ? { via: candidate.via } : {}),
-  } as MatrixNavigationTarget;
+    ...(candidate.accountId !== undefined ? { accountId: candidate.accountId } : {}),
+  } as PushRoute;
   const eventOnly = route.roomId === undefined && route.roomAlias === undefined && route.userId === undefined
     && route.via === undefined && isMatrixEventId(route.eventId);
   if (!eventOnly && !isMatrixNavigationTarget(route)) return undefined;
@@ -48,6 +59,7 @@ export function routeUrl(route: PushRoute, location = window.location.origin): s
   if (validated?.roomAlias) url.searchParams.set('alias', validated.roomAlias);
   if (validated?.userId) url.searchParams.set('user', validated.userId);
   if (validated?.eventId) url.searchParams.set('event', validated.eventId);
+  if (validated?.accountId) url.searchParams.set('account', validated.accountId);
   for (const via of validated?.via ?? []) url.searchParams.append('via', via);
   return `${url.pathname || '/'}${url.search}`;
 }

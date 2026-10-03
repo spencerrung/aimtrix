@@ -9,6 +9,7 @@ import { NavigationDialogs } from './NavigationDialogs';
 import { getNavigationShortcut, type NavigationTarget } from './quickNavigation';
 import { parseMatrixLink, type MatrixNavigationTarget } from '../../matrix/matrixLinks';
 import type { VolatileDrafts } from './volatileDrafts';
+import type { StoredAccountSummary } from '../../matrix/sessionStore';
 import type { MessageDeliveryActions } from './MessageDeliveryStatus';
 import { TimelineMessage } from './TimelineMessage';
 import { HistorySearchPanel, type PrivateSearchActions } from './HistorySearchPanel';
@@ -276,6 +277,10 @@ interface WorkspaceProps extends MessageDeliveryActions {
   onSetRoomMemberPower?: (roomId: string, userId: string, level: number) => Promise<void>;
   onLeaveRoom?: (roomId: string) => Promise<void>;
   onSignOut: () => void;
+  accounts?: StoredAccountSummary[];
+  onChooseAccount?: (id: string | null) => Promise<void>;
+  onForgetAccount?: (id: string) => Promise<void>;
+  accountCleanupError?: boolean;
 }
 
 const roomGroups: RoomSummary['group'][] = ['Invites', 'Favorites', 'Direct Messages', 'Rooms'];
@@ -3203,9 +3208,14 @@ export function Workspace({
   onSetRoomMemberPower,
   onLeaveRoom,
   onSignOut,
+  accounts,
+  onChooseAccount,
+  onForgetAccount,
+  accountCleanupError,
 }: WorkspaceProps) {
   const appStage = useRef<HTMLDivElement>(null);
-  const locationKey = `aimtrix.location.v2:${workspace.user.id}`;
+  const accountScope = JSON.stringify([draftScope?.homeserver ?? '', workspace.user.id]);
+  const locationKey = `aimtrix.location.v2:${accountScope}`;
   const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem(locationKey) || '{}') as { roomId?: string };
@@ -3333,7 +3343,7 @@ export function Workspace({
   const contextMaximum = Math.max(260, Math.min(560, shellWidth - 66 - buddyWidth - 16 - 420));
   const contextWidth = Math.min(panelWidths.details, contextMaximum);
   const panelResizeStart = useRef<{ panel: 'buddies' | 'details'; x: number; width: number } | undefined>(undefined);
-  const [legacyDrafts] = useState(() => draftStore?.read(workspace.user.id));
+  const [legacyDrafts] = useState(() => draftStore?.read(accountScope));
   const draftsState = useWorkspaceDrafts({ store: workspace.mode === 'matrix' ? structuredDraftStore : undefined, scope: workspace.mode === 'matrix' ? draftScope : undefined, userId: workspace.user.id,
     initialRooms: legacyDrafts?.rooms, initialThreads: legacyDrafts?.threads,
     threadRooms: Object.fromEntries(Object.entries(workspace.threadsByRoot).flatMap(([rootId, thread]) => {
@@ -3350,8 +3360,8 @@ export function Workspace({
       if (record.context.threadRootId) threads[record.context.threadRootId] = record.value.body;
       else rooms[record.context.roomId] = record.value.body;
     }
-    draftStore?.write(workspace.user.id, rooms, threads);
-  }, [draftStore, draftsState.list, workspace.user.id]);
+    draftStore?.write(accountScope, rooms, threads);
+  }, [draftStore, draftsState.list, accountScope]);
   const [demoMessages, setDemoMessages] = useState(workspace.messagesByRoom);
   const [demoMessageOverrides, setDemoMessageOverrides] = useState<Record<string, Partial<MessageSummary> | null>>({});
   const [demoThreadMessages, setDemoThreadMessages] = useState<Record<string, MessageSummary[]>>({});
@@ -4567,6 +4577,10 @@ export function Workspace({
             matrixActions={matrixSettingsActions}
             install={install}
             onSignOut={onSignOut}
+            accounts={accounts}
+            onChooseAccount={onChooseAccount}
+            onForgetAccount={onForgetAccount}
+            accountCleanupError={accountCleanupError}
             onClose={() => setSettingsOpen(false)}
           />
         ) : null}

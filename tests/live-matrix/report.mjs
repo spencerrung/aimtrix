@@ -19,6 +19,7 @@ export const checkNames = new Set([
   'space-child-parent-and-recommendation-administration',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback', 'standard-sso-recovery-guidance',
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery', 'confirmed-recovery-reset-and-key-replacement',
+  'encrypted-account-switch-and-local-isolation',
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
   'diagnostic-failure-probe', 'cleanup',
   'cache-reload-first-login', 'cache-reload-seed', 'cache-reload-readiness-profile',

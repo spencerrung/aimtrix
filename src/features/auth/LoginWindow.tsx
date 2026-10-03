@@ -5,6 +5,7 @@ import type { LoginCredentials, MatrixControllerSnapshot } from '../../matrix/Ma
 import type { LoginMethods } from '../../matrix/discovery';
 import { ForgetSessionButton } from './SessionRecovery';
 import { BrandMark } from '../../components/BrandMark';
+import type { StoredAccountSummary } from '../../matrix/sessionStore';
 
 interface LoginWindowProps {
   config: RuntimeConfig;
@@ -15,9 +16,11 @@ interface LoginWindowProps {
   onDiscover: (credentials: Pick<LoginCredentials, 'userId' | 'homeserver'>) => Promise<LoginMethods>;
   onDemo: () => void;
   onForget?: () => Promise<void>;
+  accounts?: StoredAccountSummary[];
+  onChooseAccount?: (id: string) => Promise<void>;
 }
 
-export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDiscover, onDemo, onForget }: LoginWindowProps) {
+export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDiscover, onDemo, onForget, accounts, onChooseAccount }: LoginWindowProps) {
   const recovery = 'recovery' in snapshot ? snapshot.recovery : undefined;
   const [userId, setUserId] = useState(recovery?.userId ?? '');
   const [password, setPassword] = useState('');
@@ -69,6 +72,14 @@ export function LoginWindow({ config, snapshot, warnings, onLogin, onSso, onDisc
           </div>
         ) : null}
         {error ? <div className="form-error" role="alert">{error}</div> : null}
+
+        {accounts?.length && !recovery ? <section className="saved-accounts" aria-label="Saved Matrix accounts">
+          <strong>Accounts on this device</strong>
+          {accounts.map((account) => <button className="aqua-button" type="button" key={account.id}
+            onClick={() => void onChooseAccount?.(account.id)} disabled={busy}>
+            {account.userId} · {account.serverName}{account.recovery ? ' · Sign in again' : ''}
+          </button>)}
+        </section> : null}
 
         {recovery ? <p className="session-recovery__note">Sign in to the same account to reconnect. Your encryption keys are retained on this device.</p> : null}
         {methodsLoading ? <p role="status">Checking sign-in options for this homeserver…</p> : null}

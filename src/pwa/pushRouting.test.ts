@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { parsePushRoute, pushRouteFromMessage, routeUrl } from './pushRouting';
 
+it('keeps a locally owned notification bound to its Matrix account', () => {
+  const accountId = JSON.stringify(['https://example.test', '@alice:example.test']);
+  const route = { roomId: '!room:example.test', accountId };
+  expect(parsePushRoute(new URL(routeUrl(route), 'https://aimtrix.test'))).toEqual({ ...route, eventId: undefined });
+  expect(pushRouteFromMessage({ ...route, accountId: 'invalid' })).toBeUndefined();
+});
+
 describe('push routing', () => {
   it('accepts opaque Matrix room and event identifiers', () => {
     const route = parsePushRoute(new URL('https://aimtrix.example/?room=!room:example.org&event=$event/1'));

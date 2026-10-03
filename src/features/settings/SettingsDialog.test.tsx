@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { expect, it, vi } from 'vitest';
 import { SettingsDialog } from './SettingsDialog';
 import { demoWorkspace } from '../../demo/demoWorkspace';
@@ -20,4 +20,25 @@ it('keeps profile settings and entered values available while a save is pending 
   expect(screen.getByRole('textbox', { name: 'Display name' })).toHaveValue('Synthetic draft');
   expect(screen.getByRole('alert')).toHaveTextContent('did not accept');
   expect(screen.getByText('Decorate profile page')).toBeEnabled();
+});
+
+it('offers account switching and confirms dormant-account removal without touching the current account', async () => {
+  const choose = vi.fn().mockResolvedValue(undefined);
+  const forget = vi.fn().mockResolvedValue(undefined);
+  render(<SettingsDialog user={demoWorkspace.user} theme="aqua" preferences={defaultUserPreferences} canEditProfile
+    onThemeChange={vi.fn()} onPreferencesChange={vi.fn()} onOpenProfilePage={vi.fn()} onSignOut={vi.fn()} onClose={vi.fn()}
+    accounts={[{ id: 'a', userId: '@current:example.test', homeserver: 'https://example.test', serverName: 'example.test', active: true, recovery: false },
+      { id: 'b', userId: '@other:example.test', homeserver: 'https://other.test', serverName: 'other.test', active: false, recovery: false }]}
+    onChooseAccount={choose} onForgetAccount={forget} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Accounts' }));
+  expect(screen.getByText('@current:example.test')).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Switch' })).toBeVisible();
+  fireEvent.click(screen.getByRole('button', { name: 'Switch' }));
+  await waitFor(() => expect(choose).toHaveBeenCalledWith('b'));
+  fireEvent.click(screen.getByRole('button', { name: 'Add another account' }));
+  await waitFor(() => expect(choose).toHaveBeenCalledWith(null));
+  fireEvent.click(screen.getByRole('button', { name: 'Forget' }));
+  expect(forget).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Forget account' }));
+  await waitFor(() => expect(forget).toHaveBeenCalledWith('b'));
 });
