@@ -1345,20 +1345,24 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           } } } },
         });
         stage = 'withheld-actionable-guidance';
-        await row.getByText('This device is unverified, so the sender withheld the key. Verify this session with another trusted device, then retry.', { exact: true }).waitFor({ timeout: 45000 });
+        const guidance = row.locator('.message-kind--encrypted');
+        await until(async () => await guidance.count() > 0 && (await guidance.textContent() ?? '').includes('This device is unverified, so the sender withheld the key. Verify this session with another trusted device, then retry.'), stage);
         invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
       } catch {
         if (stage === 'withheld-actionable-guidance' && row) {
-          if (await row.getByText('The sender withheld this message key.', { exact: false }).count()) stage = 'withheld-generic-guidance';
-          else if (await row.getByText('Waiting for this message key.', { exact: false }).count()) stage = 'withheld-key-pending';
-          else if (await row.getByText('Waiting for encryption keys…', { exact: true }).count()) stage = 'withheld-unattempted';
-          else if (await row.getByText('Checking your key backup', { exact: false }).count()) stage = 'withheld-backup-pending';
-          else if (await row.getByText('This older message needs your key backup.', { exact: false }).count()) stage = 'withheld-historical-backup';
-          else if (await row.getByText('No key backup was available', { exact: false }).count()) stage = 'withheld-historical-no-backup';
-          else if (await row.getByText('This message predates your room access', { exact: false }).count()) stage = 'withheld-not-joined';
-          else if (await row.getByText('The sender’s device identity needs review', { exact: false }).count()) stage = 'withheld-sender-trust';
-          else if (await row.getByText('This encrypted message could not be opened.', { exact: false }).count()) stage = 'withheld-unknown-error';
+          const encrypted = row.locator('.message-kind--encrypted');
+          const guidance = await encrypted.count() ? await encrypted.textContent() ?? '' : '';
+          if (guidance.includes('The sender withheld this message key.')) stage = 'withheld-generic-guidance';
+          else if (guidance.includes('Waiting for this message key.')) stage = 'withheld-key-pending';
+          else if (guidance.includes('Waiting for encryption keys…')) stage = 'withheld-unattempted';
+          else if (guidance.includes('Checking your key backup')) stage = 'withheld-backup-pending';
+          else if (guidance.includes('This older message needs your key backup.')) stage = 'withheld-historical-backup';
+          else if (guidance.includes('No key backup was available')) stage = 'withheld-historical-no-backup';
+          else if (guidance.includes('This message predates your room access')) stage = 'withheld-not-joined';
+          else if (guidance.includes('The sender’s device identity needs review')) stage = 'withheld-sender-trust';
+          else if (guidance.includes('This encrypted message could not be opened.')) stage = 'withheld-unknown-error';
           else if (!await row.count()) stage = 'withheld-event-gone';
+          else if (!await encrypted.count()) stage = 'withheld-not-encrypted';
           else stage = 'withheld-other-guidance';
         }
         throw new Error(stage);
