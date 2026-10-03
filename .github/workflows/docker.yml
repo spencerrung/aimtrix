@@ -51,6 +51,11 @@ jobs:
       - name: Load the verified amd64 image
         run: skopeo copy oci-archive:/tmp/aimtrix-image.tar docker-daemon:aimtrix:verify
 
+      - name: Unpack the OCI archive for both architecture scans
+        run: |
+          mkdir /tmp/aimtrix-oci
+          tar -xf /tmp/aimtrix-image.tar -C /tmp/aimtrix-oci
+
       - name: Smoke-test the unprivileged container
         run: |
           set -eu
@@ -76,14 +81,14 @@ jobs:
       - name: Scan verified amd64 image before publication
         uses: aquasecurity/trivy-action@v0.36.0
         with:
-          input: /tmp/aimtrix-image.tar
+          input: /tmp/aimtrix-oci
           format: table
           severity: CRITICAL,HIGH
           ignore-unfixed: true
           exit-code: '1'
 
       - name: Scan verified arm64 image before publication
-        run: trivy image --input /tmp/aimtrix-image.tar --platform linux/arm64 --format table --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1
+        run: trivy image --input /tmp/aimtrix-oci --platform linux/arm64 --format table --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1
 
       - name: Log in to Docker Hub
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
