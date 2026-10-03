@@ -1319,9 +1319,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     await check('withheld-key-guidance-live', async () => {
       let stage = 'withheld-load-old-event';
+      let row;
       try {
         await charlieFresh.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(navigationHistory.secondId)}`);
-        const row = charlieFresh.locator(`[data-event-id=${JSON.stringify(navigationHistory.secondId)}]`);
+        row = charlieFresh.locator(`[data-event-id=${JSON.stringify(navigationHistory.secondId)}]`);
         await row.waitFor({ timeout: 45000 });
         invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
         stage = 'withheld-read-ciphertext';
@@ -1331,14 +1332,23 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'withheld-send-to-device';
         await api(`/_matrix/client/v3/sendToDevice/m.room_key.withheld/${randomBytes(8).toString('hex')}`, {
           token: aliceSession.accessToken, method: 'PUT', body: { messages: { [freshSession.userId]: { [freshSession.deviceId]: {
-            algorithm: 'm.megolm.v1.aes-sha2', code: 'm.unverified', reason: 'Device not verified',
+            algorithm: 'm.megolm.v1.aes-sha2', code: 'm.unverified', reason: 'The sender has disabled encrypting to unverified devices.',
             room_id: roomId, sender_key: event.content.sender_key, session_id: event.content.session_id,
           } } } },
         });
         stage = 'withheld-actionable-guidance';
         await row.getByText('This device is unverified, so the sender withheld the key. Verify this session with another trusted device, then retry.', { exact: true }).waitFor({ timeout: 45000 });
         invariant(!await row.getByText(navigationHistory.secondText, { exact: true }).count(), stage);
-      } catch { throw new Error(stage); }
+      } catch {
+        if (stage === 'withheld-actionable-guidance' && row) {
+          if (await row.getByText('The sender withheld this message key.', { exact: false }).count()) stage = 'withheld-generic-guidance';
+          else if (await row.getByText('Waiting for this message key.', { exact: false }).count()) stage = 'withheld-key-pending';
+          else if (await row.getByText('Checking your key backup', { exact: false }).count()) stage = 'withheld-backup-pending';
+          else if (!await row.count()) stage = 'withheld-event-gone';
+          else stage = 'withheld-other-guidance';
+        }
+        throw new Error(stage);
+      }
     });
     await check('standard-favorites-and-own-device-sync', async () => {
       const tagPath = `/_matrix/client/v3/user/${encode(aliceSession.userId)}/rooms/${encode(roomId)}/tags`;
