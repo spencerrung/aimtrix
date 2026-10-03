@@ -66,10 +66,11 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
     await page.goto(stack.origins.app);
     const cdp = await context.newCDPSession(page);
     await cdp.send('Performance.enable');
-    const heap = async () => {
+    const rendererMetrics = async () => {
       await cdp.send('HeapProfiler.collectGarbage');
-      return (await cdp.send('Performance.getMetrics')).metrics.find((entry) => entry.name === 'JSHeapUsedSize')?.value;
+      return Object.fromEntries((await cdp.send('Performance.getMetrics')).metrics.map(({ name, value }) => [name, value]));
     };
+    const heap = async () => (await rendererMetrics()).JSHeapUsedSize;
     const heapBefore = await heap();
     let syncResponses = 0;
     page.on('response', (response) => {
@@ -135,7 +136,11 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         await message('Synthetic large-account history 349').waitFor({ timeout: 45000 });
       });
       await check('large-account-sustained-delivery', async () => {
-        const heapStart = await heap();
+        const startingRenderer = await rendererMetrics();
+        const heapStart = startingRenderer.JSHeapUsedSize;
+        if (heapStart !== undefined) metrics.largeAccountIncrementalHeapAt0MiB = Math.round(heapStart / 2 ** 20);
+        if (startingRenderer.Nodes !== undefined) metrics.largeAccountIncrementalNodesAt0 = startingRenderer.Nodes;
+        if (startingRenderer.JSEventListeners !== undefined) metrics.largeAccountIncrementalListenersAt0 = startingRenderer.JSEventListeners;
         const latencies = [];
         const started = Date.now();
         for (let index = 0; index < 300; index += 1) {
@@ -152,13 +157,21 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
             invariant(await page.locator('.buddy-row').count() <= 101, 'large-account-bounded-rows');
           }
           await pause(Math.max(0, 2000 - (Date.now() - cycleStarted)));
+          if (index === 99 || index === 199) {
+            const sample = await rendererMetrics();
+            if (sample.JSHeapUsedSize !== undefined) metrics[`largeAccountIncrementalHeapAt${index + 1}MiB`] = Math.round(sample.JSHeapUsedSize / 2 ** 20);
+          }
         }
         await pause(Math.max(0, 600000 - (Date.now() - started)));
         metrics.largeAccountIncrementalDurationMs = Date.now() - started;
         metrics.largeAccountIncrementalP95Ms = percentile(latencies, 0.95);
         metrics.largeAccountIncrementalMaxMs = Math.round(Math.max(...latencies));
         metrics.largeAccountSyncResponses = syncResponses;
-        const heapAfter = await heap();
+        const endingRenderer = await rendererMetrics();
+        const heapAfter = endingRenderer.JSHeapUsedSize;
+        if (heapAfter !== undefined) metrics.largeAccountIncrementalHeapAt300MiB = Math.round(heapAfter / 2 ** 20);
+        if (endingRenderer.Nodes !== undefined) metrics.largeAccountIncrementalNodesAt300 = endingRenderer.Nodes;
+        if (endingRenderer.JSEventListeners !== undefined) metrics.largeAccountIncrementalListenersAt300 = endingRenderer.JSEventListeners;
         if (heapStart !== undefined && heapAfter !== undefined) {
           metrics.largeAccountIncrementalHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapStart) / 2 ** 20));
         }

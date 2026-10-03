@@ -159,6 +159,10 @@ test('large-account profile retains only numeric workload and timing evidence', 
       largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42, largeAccountHistoryPages: 7,
       largeAccountIncrementalEvents: 300, largeAccountIncrementalDurationMs: 600000,
       largeAccountIncrementalP95Ms: 325, largeAccountIncrementalMaxMs: 710, largeAccountIncrementalHeapGrowthMiB: 21,
+      largeAccountIncrementalHeapAt0MiB: 200, largeAccountIncrementalHeapAt100MiB: 207,
+      largeAccountIncrementalHeapAt200MiB: 214, largeAccountIncrementalHeapAt300MiB: 221,
+      largeAccountIncrementalNodesAt0: 12000, largeAccountIncrementalNodesAt300: 12030,
+      largeAccountIncrementalListenersAt0: 85, largeAccountIncrementalListenersAt300: 85,
       roomId: privateValue, accessToken: privateValue, responseBody: privateValue },
   });
   assert.deepEqual(result.metrics, { largeAccountRoomCount: 1000, largeAccountSeededRooms: 1000,
@@ -168,7 +172,11 @@ test('large-account profile retains only numeric workload and timing evidence', 
     largeAccountDeepRoomOpenMs: 500, largeAccountRenderedRows: 1, largeAccountDomNodes: 1200,
     largeAccountSyncResponses: 4, largeAccountHeapGrowthMiB: 42, largeAccountHistoryPages: 7,
     largeAccountIncrementalEvents: 300, largeAccountIncrementalDurationMs: 600000,
-    largeAccountIncrementalP95Ms: 325, largeAccountIncrementalMaxMs: 710, largeAccountIncrementalHeapGrowthMiB: 21 });
+    largeAccountIncrementalP95Ms: 325, largeAccountIncrementalMaxMs: 710, largeAccountIncrementalHeapGrowthMiB: 21,
+    largeAccountIncrementalHeapAt0MiB: 200, largeAccountIncrementalHeapAt100MiB: 207,
+    largeAccountIncrementalHeapAt200MiB: 214, largeAccountIncrementalHeapAt300MiB: 221,
+    largeAccountIncrementalNodesAt0: 12000, largeAccountIncrementalNodesAt300: 12030,
+    largeAccountIncrementalListenersAt0: 85, largeAccountIncrementalListenersAt300: 85 });
   assert.deepEqual(result.checks, [{ name, passed: false, category: 'large-account-ready-budget', durationMs: 180000 }]);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
