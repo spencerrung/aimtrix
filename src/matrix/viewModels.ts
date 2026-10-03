@@ -198,6 +198,30 @@ export interface CallSummary {
   error?: string;
 }
 
+export interface GroupCallParticipant {
+  id: string;
+  name: string;
+  speaking: boolean;
+  encrypted: boolean;
+  microphoneMuted: boolean;
+  videoStream?: MediaStream;
+  screenStream?: MediaStream;
+  audioStream?: MediaStream;
+  local: boolean;
+}
+
+export interface GroupCallSummary {
+  roomId: string;
+  state: 'joining' | 'connected' | 'reconnecting' | 'error';
+  encrypted: boolean;
+  microphoneMuted: boolean;
+  videoMuted: boolean;
+  screensharing: boolean;
+  audioPlaybackBlocked?: boolean;
+  participants: GroupCallParticipant[];
+  error?: string;
+}
+
 export type HistoryDirection = 'backward' | 'forward';
 export type HistoryOperation = HistoryDirection | 'context' | 'latest';
 export interface HistorySummary {
@@ -225,6 +249,9 @@ export interface WorkspaceSnapshot {
   threadsByRoot: Record<string, ThreadSummary>;
   activity?: import('./activity').ActivitySnapshot;
   call?: CallSummary;
+  groupCall?: GroupCallSummary;
+  groupCallsAvailable?: boolean;
+  groupCallRooms?: Record<string, number>;
 }
 
 export function initialsFor(value: string): string {

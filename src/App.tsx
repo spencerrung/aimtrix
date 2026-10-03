@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   loadRuntimeConfig,
   type RuntimeConfigResult,
@@ -13,7 +13,6 @@ import { LoginWindow } from './features/auth/LoginWindow';
 import { InstallPrompt } from './features/pwa/InstallPrompt';
 import { NetworkStatus } from './features/pwa/NetworkStatus';
 import { StartupScreen } from './features/auth/StartupScreen';
-import { Workspace } from './features/workspace/Workspace';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { MatrixController } from './matrix/MatrixController';
 import type { PushRegistrationResult } from './matrix/MatrixController';
@@ -32,6 +31,8 @@ import {
   saveProfilePersonalization,
   type ProfilePersonalization,
 } from './settings/profilePersonalization';
+
+const Workspace = lazy(() => import('./features/workspace/Workspace').then((module) => ({ default: module.Workspace })));
 
 const EMPTY_DRAFT_STATE: DraftStateSummary = { hasDrafts: false, volatile: false, hasAttachments: false, sending: false };
 
@@ -238,7 +239,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
 
   if (demo) {
     return (
-      <Workspace
+      <Suspense fallback={<StartupScreen message="Opening workspace…" />}><Workspace
         workspace={demoWorkspace}
         onDraftStateChange={reportDraftState}
         config={config}
@@ -249,7 +250,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onPreferencesChange={setPreferences}
         onProfilePersonalizationChange={setDemoPersonalization}
         onSignOut={() => { reportDraftState(EMPTY_DRAFT_STATE); setDemo(false); }}
-      />
+      /></Suspense>
     );
   }
 
@@ -290,7 +291,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
 
   return (
     <MediaProvider resolver={controller.resolveMedia}>
-      <Workspace
+      <Suspense fallback={<StartupScreen message="Opening workspace…" />}><Workspace
         key={JSON.stringify([draftScope?.homeserver, snapshot.workspace.user.id])}
         workspace={snapshot.workspace}
         onDraftStateChange={reportDraftState}
@@ -378,6 +379,12 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onCreateRoom={(options) => controller.createRoom(options)}
         onRejectInvite={(roomId) => controller.rejectInvite(roomId)}
         onStartCall={(roomId, video) => controller.startCall(roomId, video)}
+        onStartGroupCall={(roomId, video, devices, microphoneEnabled) => controller.startGroupCall(roomId, video, devices, microphoneEnabled)}
+        onLeaveGroupCall={() => controller.leaveGroupCall()}
+        onGroupCallMicrophone={(muted) => controller.setGroupCallMicrophoneMuted(muted)}
+        onGroupCallVideo={(muted) => controller.setGroupCallVideoMuted(muted)}
+        onGroupCallScreenshare={(enabled) => controller.setGroupCallScreensharing(enabled)}
+        onEnableGroupCallAudio={() => controller.enableGroupCallAudio()}
         onAnswerCall={(video) => controller.answerCall(video)}
         onRejectCall={() => controller.rejectCall()}
         onHangupCall={() => controller.hangupCall()}
@@ -408,7 +415,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onSetRoomMemberPower={(roomId, userId, level) => controller.setRoomMemberPower(roomId, userId, level)}
         onLeaveRoom={(roomId) => controller.leaveRoom(roomId)}
         onSignOut={() => { clearDrafts(); void controller.logout(); }}
-      />
+      /></Suspense>
     </MediaProvider>
   );
 }

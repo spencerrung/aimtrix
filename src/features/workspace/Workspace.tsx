@@ -143,6 +143,8 @@ const HomeActivity = lazy(() => import('./HomeActivity'));
 const LocationDialog = lazy(() => import('../rooms/LocationDialog').then((module) => ({ default: module.LocationDialog })));
 const PollDialog = lazy(() => import('../rooms/PollDialog').then((module) => ({ default: module.PollDialog })));
 const VoiceRecorderDialog = lazy(() => import('../rooms/VoiceRecorderDialog').then((module) => ({ default: module.VoiceRecorderDialog })));
+const GroupCallPrejoin = lazy(() => import('../calls/GroupCallPrejoin').then((module) => ({ default: module.GroupCallPrejoin })));
+const GroupCallShelf = lazy(() => import('../calls/GroupCallShelf').then((module) => ({ default: module.GroupCallShelf })));
 const upgradedSendNotice = 'Room upgraded. Send in replacement.';
 const replacementOpenError = 'Replacement unavailable. Retry or ask a moderator.';
 const roomIsUpgraded = (snapshot: WorkspaceSnapshot, roomId: string) => snapshot.mode === 'matrix' && snapshot.rooms.some((room) => room.id === roomId && room.replacementRoomId);
@@ -249,6 +251,12 @@ interface WorkspaceProps extends MessageDeliveryActions {
   }) => Promise<string>;
   onRejectInvite?: (roomId: string) => Promise<void>;
   onStartCall?: (roomId: string, video: boolean) => Promise<void>;
+  onStartGroupCall?: (roomId: string, video: boolean, devices: { microphoneId: string; cameraId: string }, microphoneEnabled: boolean) => Promise<void>;
+  onLeaveGroupCall?: () => Promise<void>;
+  onGroupCallMicrophone?: (muted: boolean) => Promise<void>;
+  onGroupCallVideo?: (muted: boolean) => Promise<void>;
+  onGroupCallScreenshare?: (enabled: boolean) => Promise<void>;
+  onEnableGroupCallAudio?: () => Promise<void>;
   onAnswerCall?: (video: boolean) => Promise<void>;
   onRejectCall?: () => void;
   onHangupCall?: () => void;
@@ -1573,6 +1581,9 @@ function Conversation({
   onSendGif,
   callsEnabled,
   onStartCall,
+  groupCallsEnabled,
+  groupCallMembers,
+  onOpenGroupCall,
   dataSaver,
   autoplayMedia,
   onLoadLinkPreview,
@@ -1672,6 +1683,9 @@ function Conversation({
   onSendGif: (gif: GifChoice, threadRootId?: string) => void | Promise<unknown>;
   callsEnabled: boolean;
   onStartCall: (video: boolean) => void;
+  groupCallsEnabled: boolean;
+  groupCallMembers: number;
+  onOpenGroupCall: () => void;
   dataSaver: boolean;
   autoplayMedia: boolean;
   onLoadLinkPreview?: (url: string) => Promise<LinkPreview | undefined>;
@@ -2320,6 +2334,7 @@ function Conversation({
               <IconButton label="Start video call" onClick={() => onStartCall(true)}><Video size={17} /></IconButton>
             </span>
           ) : null}
+          {groupCallsEnabled && room.kind !== 'direct' && room.membership === 'join' ? <span className="header-call-actions"><IconButton label={groupCallMembers ? `Join group call (${groupCallMembers} in call)` : 'Start group call'} onClick={onOpenGroupCall}><Users size={17} /></IconButton></span> : null}
           <IconButton label="Decorate conversation background" onClick={onOpenBackground}><Paintbrush size={17} /></IconButton>
           <IconButton className="conversation-header__desktop-action" label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
           <IconButton label="Toggle room details" onClick={onToggleDetails}>
@@ -3163,6 +3178,12 @@ export function Workspace({
   onCreateRoom,
   onRejectInvite,
   onStartCall,
+  onStartGroupCall,
+  onLeaveGroupCall,
+  onGroupCallMicrophone,
+  onGroupCallVideo,
+  onGroupCallScreenshare,
+  onEnableGroupCallAudio,
   onAnswerCall,
   onRejectCall,
   onHangupCall,
@@ -3210,6 +3231,7 @@ export function Workspace({
   const [query, setQuery] = useState('');
   const [navigationDialog, setNavigationDialog] = useState<'switcher' | 'link' | 'help'>();
   const [savedListOpen, setSavedListOpen] = useState(false);
+  const [groupCallPrejoin, setGroupCallPrejoin] = useState<{ roomId: string; roomName: string }>();
   const [demoSavedReferences, setDemoSavedReferences] = useState<SavedReference[]>([]);
   const [, refreshSavedReferences] = useState(0);
   const savedReferences = workspace.mode === 'matrix' ? onLoadSavedReferences?.() ?? [] : demoSavedReferences;
@@ -4407,10 +4429,13 @@ export function Workspace({
             stickerPacks={availableStickerPacks}
             defaultStickerPack={profilePersonalization.defaultStickerPack}
             onSendGif={(gif, threadRootId) => sendGif(gif, threadRootId)}
-            callsEnabled={config.features.calls}
+            callsEnabled={config.features.calls && !workspace.groupCall}
             onStartCall={(video) => {
               if (selectedRoom) void onStartCall?.(selectedRoom.id, video);
             }}
+            groupCallsEnabled={Boolean(config.features.groupCalls && workspace.mode === 'matrix' && (workspace.groupCallsAvailable || (selectedRoom && (workspace.groupCallRooms?.[selectedRoom.id] ?? 0) > 0)) && !workspace.call && !workspace.groupCall)}
+            groupCallMembers={selectedRoom ? workspace.groupCallRooms?.[selectedRoom.id] ?? 0 : 0}
+            onOpenGroupCall={() => { if (selectedRoom) setGroupCallPrejoin({ roomId: selectedRoom.id, roomName: selectedRoom.name }); }}
             dataSaver={preferences.dataSaver}
             autoplayMedia={preferences.autoplayMedia}
             onLoadLinkPreview={onLoadLinkPreview}
@@ -4460,6 +4485,28 @@ export function Workspace({
             onScreenshare={(enabled) => void onScreenshare?.(enabled)}
           />
         ) : null}
+
+        {workspace.groupCall ? <Suspense fallback={null}><GroupCallShelf
+          call={workspace.groupCall}
+          room={workspace.rooms.find((room) => room.id === workspace.groupCall?.roomId)}
+          speakerId={preferences.speakerId}
+          onLeave={() => void onLeaveGroupCall?.()}
+          onMicrophone={(muted) => void onGroupCallMicrophone?.(muted)}
+          onVideo={(muted) => void onGroupCallVideo?.(muted)}
+          onScreenshare={(enabled) => void onGroupCallScreenshare?.(enabled)}
+          onEnableAudio={() => void onEnableGroupCallAudio?.()}
+        /></Suspense> : null}
+
+        {groupCallPrejoin ? <Suspense fallback={null}><GroupCallPrejoin
+          roomName={groupCallPrejoin.roomName}
+          initialVideo={false}
+          onClose={() => setGroupCallPrejoin(undefined)}
+          onJoin={async (video, devices, microphoneEnabled) => {
+            if (!onStartGroupCall) throw new Error('Group calling is unavailable.');
+            try { await onStartGroupCall(groupCallPrejoin.roomId, video, devices, microphoneEnabled); }
+            catch (error) { await onLeaveGroupCall?.(); throw error; }
+          }}
+        /></Suspense> : null}
 
         {roomDialogOpen ? (
           <RoomDialog

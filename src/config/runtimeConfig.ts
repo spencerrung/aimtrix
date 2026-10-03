@@ -15,6 +15,7 @@ export interface RuntimeConfig {
   features: {
     demoMode: boolean;
     calls: boolean;
+    groupCalls: boolean;
     gifs: boolean;
     stickers: boolean;
   };
@@ -55,6 +56,7 @@ export const defaultRuntimeConfig: RuntimeConfig = {
   features: {
     demoMode: true,
     calls: false,
+    groupCalls: false,
     gifs: false,
     stickers: true,
   },
@@ -233,6 +235,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
       features: {
         demoMode: readBoolean(features.demoMode, defaultRuntimeConfig.features.demoMode),
         calls: readBoolean(features.calls, defaultRuntimeConfig.features.calls),
+        groupCalls: readBoolean(features.groupCalls, defaultRuntimeConfig.features.groupCalls),
         gifs: readBoolean(features.gifs, defaultRuntimeConfig.features.gifs),
         stickers: readBoolean(features.stickers, defaultRuntimeConfig.features.stickers),
       },

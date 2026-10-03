@@ -4,6 +4,7 @@ import { IncomingVerification, type IncomingVerificationActions } from './Incomi
 import type { IncomingVerificationSummary } from '../../matrix/settingsTypes';
 
 vi.mock('qrcode', () => ({ toDataURL: vi.fn().mockResolvedValue('data:image/png;base64,cXJjb2Rl') }));
+vi.mock('@zxing/browser', () => ({ BrowserQRCodeReader: class { decodeFromVideoDevice() { return new Promise(() => undefined); } } }));
 
 const request: IncomingVerificationSummary = { id: 'req', userId: '@self:example.test', deviceId: 'PHONE', selfVerification: true, timeoutMs: 60000, sasAvailable: true, qrShowAvailable: false, qrScanAvailable: false, qrConfirmAvailable: false };
 function actions(overrides: Partial<IncomingVerificationActions> = {}): IncomingVerificationActions {
