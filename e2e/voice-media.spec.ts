@@ -14,7 +14,21 @@ test.beforeEach(async ({ page }, info) => {
   await page.setViewportSize(info.project.name === 'mobile' ? { width: 412, height: 915 } : { width: 1440, height: 1000 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.route('**/voice-media-fixture', (route) => route.fulfill({ contentType: 'text/html', body: '<!doctype html><html lang="en"><head><meta name="viewport" content="width=device-width,initial-scale=1"><title>Voice and media</title></head><body><div id="root"></div></body></html>' }));
-  await page.addInitScript(() => {
+  if (info.title === 'records a playable clip with Chromium’s real MediaRecorder') await page.addInitScript(() => {
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', { configurable: true, value: async () => {
+      const audio = new AudioContext();
+      const tone = audio.createOscillator();
+      const destination = audio.createMediaStreamDestination();
+      tone.frequency.value = 440;
+      tone.connect(destination);
+      tone.start();
+      const track = destination.stream.getAudioTracks()[0];
+      const stop = track.stop.bind(track);
+      track.stop = () => { stop(); tone.stop(); void audio.close(); };
+      return destination.stream;
+    } });
+  });
+  else await page.addInitScript(() => {
     const track = { stop() {}, onended: null };
     Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: { getUserMedia: async () => ({ getTracks: () => [track], getAudioTracks: () => [track] }) } });
     class Recorder {
@@ -29,6 +43,28 @@ test.beforeEach(async ({ page }, info) => {
   });
   await page.goto('/voice-media-fixture'); await page.addStyleTag({ content: css }); await page.addScriptTag({ type: 'module', content: script });
   await page.locator('.buddy-row').filter({ hasText: 'Welcome Lounge' }).first().click();
+});
+
+test('records a playable clip with Chromium’s real MediaRecorder', async ({ page }) => {
+  await page.getByRole('button', { name: 'More message tools' }).click();
+  await page.getByRole('button', { name: 'Record a voice message' }).click();
+  await page.getByRole('button', { name: 'Start recording' }).click();
+  await expect(page.getByRole('button', { name: 'Stop recording' })).toBeVisible();
+  await page.waitForTimeout(1200);
+  await page.getByRole('button', { name: 'Stop recording' }).click();
+  const preview = page.getByLabel('Voice message preview');
+  await expect(preview).toBeVisible();
+  await expect.poll(() => preview.evaluate(async (audio: HTMLAudioElement) => {
+    const file = await fetch(audio.src).then((response) => response.blob());
+    if (file.type !== 'audio/webm' || file.size <= 1000) return false;
+    const decoder = new AudioContext();
+    try {
+      const decoded = await decoder.decodeAudioData(await file.arrayBuffer());
+      return decoded.duration > 0 && decoded.getChannelData(0).some((sample) => Math.abs(sample) > 0.01);
+    } finally { await decoder.close(); }
+  })).toBe(true);
+  await page.getByRole('button', { name: 'Discard', exact: true }).click();
+  await expect(preview).toHaveCount(0);
 });
 
 test('reviews voice before send and browses loaded images', async ({ page }, info) => {

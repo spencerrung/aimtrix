@@ -41,3 +41,27 @@ test('polls and static locations work at desktop and mobile sizes', async ({ pag
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
 });
+
+test('browser geolocation fills a preview and still requires confirmation', async ({ page, context }) => {
+  await context.setGeolocation({ latitude: 40.7128, longitude: -74.006 });
+  await context.grantPermissions(['geolocation']);
+  await page.getByRole('button', { name: 'Share a location' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Share a location' });
+  await dialog.getByRole('button', { name: 'Use my current location' }).click();
+  await expect(dialog.getByText('geo:40.7128,-74.006', { exact: true })).toBeVisible();
+  await expect(page.getByText('Shared: 40.7128,-74.006')).toHaveCount(0);
+  await dialog.getByRole('button', { name: 'Share this location' }).click();
+  await expect(page.getByText('Shared: 40.7128,-74.006')).toBeVisible();
+});
+
+test('denied browser geolocation retains manual sharing', async ({ page, context }) => {
+  await context.grantPermissions([]);
+  await page.getByRole('button', { name: 'Share a location' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Share a location' });
+  await dialog.getByRole('button', { name: 'Use my current location' }).click();
+  await expect(dialog.getByRole('alert')).toHaveText('Location access was denied or unavailable. Enter coordinates manually.');
+  await dialog.getByRole('spinbutton', { name: 'Latitude' }).fill('51.5072');
+  await dialog.getByRole('spinbutton', { name: 'Longitude' }).fill('-0.1276');
+  await dialog.getByRole('button', { name: 'Share this location' }).click();
+  await expect(page.getByText('Shared: 51.5072,-0.1276')).toBeVisible();
+});
