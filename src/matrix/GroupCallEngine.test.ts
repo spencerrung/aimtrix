@@ -9,6 +9,8 @@ const mocks = vi.hoisted(() => ({
   discover: vi.fn(),
   room: undefined as undefined | EventEmitter,
   connectGate: undefined as undefined | Promise<void>,
+  deferE2EE: false,
+  completeE2EE: undefined as undefined | (() => void),
 }));
 
 vi.mock('./groupCallTransport', () => ({ discoverGroupCallTransport: mocks.discover, authorizeGroupCall: mocks.authorize }));
@@ -28,7 +30,11 @@ vi.mock('livekit-client', async () => {
     isE2EEEnabled = false;
     canPlaybackAudio = true;
     connect = vi.fn(async () => { mocks.events.push('connect'); await mocks.connectGate; });
-    setE2EEEnabled = vi.fn(async (enabled: boolean) => { mocks.events.push('e2ee'); this.isE2EEEnabled = enabled; });
+    setE2EEEnabled = vi.fn(async (enabled: boolean) => {
+      mocks.events.push('e2ee');
+      if (mocks.deferE2EE) mocks.completeE2EE = () => { this.isE2EEEnabled = enabled; this.emit('participant-encryption'); };
+      else this.isE2EEEnabled = enabled;
+    });
     disconnect = vi.fn(async () => { mocks.events.push('disconnect'); });
     constructor() { super(); mocks.room = this; }
   }
@@ -60,7 +66,7 @@ function fixture() {
   return { engine: new GroupCallEngine(client, '!room:example.test', changed), session, changed };
 }
 
-afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; vi.unstubAllGlobals(); });
+afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; mocks.deferE2EE = false; mocks.completeE2EE = undefined; vi.unstubAllGlobals(); });
 
 describe('group call media lifecycle', () => {
   it('waits for a Matrix key and LiveKit E2EE before publishing local media, then releases both memberships', async () => {
@@ -87,6 +93,22 @@ describe('group call media lifecycle', () => {
     await vi.waitFor(() => expect(mocks.events).toContain('disconnect'));
     expect(engine.summary.state).toBe('error');
     await expect(engine.setMicrophoneMuted(false)).rejects.toThrow('unavailable');
+  });
+
+  it('waits for the encryption worker acknowledgment before opening the microphone', async () => {
+    vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
+    mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
+    mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
+    mocks.deferE2EE = true;
+    const { engine } = fixture();
+    const joining = engine.join(false, { microphoneId: '', cameraId: '' }, true);
+    await vi.waitFor(() => expect(mocks.completeE2EE).toBeTypeOf('function'));
+    expect(mocks.events).not.toContain('microphone');
+    mocks.completeE2EE?.();
+    await joining;
+    expect(mocks.events).toContain('microphone');
+    expect(engine.summary.encrypted).toBe(true);
+    await engine.leave();
   });
 
   it('leaves Matrix membership after a terminal SFU disconnect', async () => {
