@@ -1,6 +1,11 @@
-name: Build and Push
+name: Verify container and publish manually
 
 on:
+  pull_request:
+    paths:
+      - Dockerfile
+      - nginx.conf
+      - .github/workflows/docker.yml
   push:
     branches: [main]
   workflow_dispatch:
@@ -14,7 +19,7 @@ permissions:
   contents: read
 
 jobs:
-  build:
+  verify:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,13 +31,74 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+      - name: Build both release architectures into one OCI archive
+        uses: docker/build-push-action@v7
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          context: .
+          platforms: linux/amd64,linux/arm64
+          tags: aimtrix:verify
+          outputs: type=oci,dest=/tmp/aimtrix-image.tar
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Install OCI archive transport
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends skopeo
+
+      - name: Load the verified amd64 image
+        run: skopeo copy oci-archive:/tmp/aimtrix-image.tar docker-daemon:aimtrix:verify
+
+      - name: Unpack the OCI archive for both architecture scans
+        run: |
+          mkdir /tmp/aimtrix-oci
+          tar -xf /tmp/aimtrix-image.tar -C /tmp/aimtrix-oci
+
+      - name: Smoke-test the unprivileged container
+        run: |
+          set -eu
+          docker run --detach --rm --name aimtrix-verify --user 101:101 --publish 127.0.0.1:18080:8080 aimtrix:verify
+          trap 'docker rm --force aimtrix-verify' EXIT
+          ready=0
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent --show-error --dump-header /tmp/aimtrix-headers --output /tmp/aimtrix-health http://127.0.0.1:18080/_health; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs aimtrix-verify
+            exit 1
+          fi
+          test "$(cat /tmp/aimtrix-health)" = ok
+          for header in Content-Security-Policy Permissions-Policy Referrer-Policy X-Content-Type-Options X-Frame-Options Cross-Origin-Opener-Policy; do
+            grep -qi "^${header}:" /tmp/aimtrix-headers
+          done
+
+      - name: Scan verified amd64 image before publication
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          input: /tmp/aimtrix-oci
+          format: table
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Scan verified arm64 image before publication
+        run: trivy image --input /tmp/aimtrix-oci --platform linux/arm64 --format table --severity CRITICAL,HIGH --ignore-unfixed --exit-code 1
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: printf '%s' "$DOCKERHUB_TOKEN" | skopeo login docker.io --username "$DOCKERHUB_USERNAME" --password-stdin
 
       - name: Extract metadata
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
         id: meta
         uses: docker/metadata-action@v6
         with:
@@ -40,28 +106,16 @@ jobs:
           tags: |
             type=sha,prefix=sha-
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=raw,value=${{ github.ref_name }},enable=${{ startsWith(github.ref, 'refs/tags/v') }}
             type=raw,value={{date 'YYYYMMDDHHmmss' tz='UTC'}}-{{sha}},enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          provenance: mode=max
-          sbom: true
-
-      - name: Scan published image
-        uses: aquasecurity/trivy-action@v0.36.0
-        with:
-          image-ref: ${{ secrets.DOCKERHUB_USERNAME }}/aimtrix:${{ steps.meta.outputs.version }}
-          format: table
-          severity: CRITICAL,HIGH
-          ignore-unfixed: true
-          exit-code: '1'
+      - name: Publish the exact verified OCI archive
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        env:
+          IMAGE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          set -eu
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            skopeo copy --all --preserve-digests oci-archive:/tmp/aimtrix-image.tar "docker://$tag"
+          done <<< "$IMAGE_TAGS"
