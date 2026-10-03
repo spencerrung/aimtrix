@@ -216,6 +216,7 @@ jobs:
       AIMTRIX_LIVE_OWNER: ci-large-${{ github.run_id }}-${{ github.run_attempt }}
       AIMTRIX_LIVE_ROOM_COUNT: 10000
       AIMTRIX_LIVE_SUSTAINED: '1'
+      AIMTRIX_LIVE_HEAP_DIAGNOSTIC: '1'
     steps:
       - name: Checkout
         uses: actions/checkout@v7

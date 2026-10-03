@@ -13,6 +13,7 @@ const percentile = (values, percent) => {
 export async function runLargeAccountProfile({ browser, stack, check, metrics }) {
   const roomCount = Number(process.env.AIMTRIX_LIVE_ROOM_COUNT ?? 1000);
   const sustained = process.env.AIMTRIX_LIVE_SUSTAINED === '1';
+  const heapDiagnostic = process.env.AIMTRIX_LIVE_HEAP_DIAGNOSTIC === '1';
   invariant([100, 1000, 10000].includes(roomCount), 'large-account-room-count');
   const readinessLimitMs = roomCount === 10000 ? 600000 : 180000;
   const api = matrixApi(stack);
@@ -137,6 +138,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       });
       await check('large-account-sustained-delivery', async () => {
         const startingRenderer = await rendererMetrics();
+        if (heapDiagnostic) await cdp.send('HeapProfiler.startSampling', { samplingInterval: 32768 });
         const heapStart = startingRenderer.JSHeapUsedSize;
         if (heapStart !== undefined) metrics.largeAccountIncrementalHeapAt0MiB = Math.round(heapStart / 2 ** 20);
         if (startingRenderer.Nodes !== undefined) metrics.largeAccountIncrementalNodesAt0 = startingRenderer.Nodes;
@@ -174,6 +176,24 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         if (endingRenderer.JSEventListeners !== undefined) metrics.largeAccountIncrementalListenersAt300 = endingRenderer.JSEventListeners;
         if (heapStart !== undefined && heapAfter !== undefined) {
           metrics.largeAccountIncrementalHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapStart) / 2 ** 20));
+        }
+        if (heapDiagnostic) {
+          const { profile } = await cdp.send('HeapProfiler.stopSampling');
+          const allocationByFrame = new Map();
+          const visit = (node) => {
+            const frame = node.callFrame;
+            const functionName = /^[A-Za-z_$][A-Za-z0-9_$]{0,80}$/.test(frame.functionName)
+              ? frame.functionName : '(anonymous)';
+            const asset = /\/assets\/([A-Za-z0-9_-]+\.js)$/.exec(frame.url)?.[1] ?? '(browser)';
+            const key = `${asset}:${functionName}:${frame.lineNumber}`;
+            allocationByFrame.set(key, (allocationByFrame.get(key) ?? 0) + node.selfSize);
+            for (const child of node.children ?? []) visit(child);
+          };
+          visit(profile.head);
+          const top = [...allocationByFrame].sort((left, right) => right[1] - left[1]).slice(0, 20)
+            .map(([frame, bytes]) => ({ frame, sampledMiB: Math.round(bytes / 2 ** 20) }));
+          // Only static bundle/function identifiers and aggregate sizes; never heap contents.
+          process.stdout.write(`large-account-live-allocation-samples ${JSON.stringify(top)}\n`);
         }
         invariant(metrics.largeAccountIncrementalDurationMs >= 600000, 'large-account-sustained-duration');
       });
