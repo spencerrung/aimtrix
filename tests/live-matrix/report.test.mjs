@@ -128,6 +128,23 @@ test('sustained sync profile retains only bounded numeric evidence', () => {
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
 
+test('encrypted sustained sync profile discards message and crypto material', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'encrypted-sustained-sync-delivery';
+  const result = makeReport({ ...base, failureStage: name,
+    checks: [{ name, passed: false, category: 'encrypted-sync-wire', durationMs: 600000, eventBody: privateValue }],
+    metrics: { encryptedSyncRoomCount: 1, encryptedSyncEventCount: 300, encryptedSyncWireCount: 300,
+      encryptedSyncDurationMs: 600001, encryptedSyncP95Ms: 900, encryptedSyncMaxMs: 1500,
+      encryptedSyncResponses: 40, encryptedSyncHeapGrowthMiB: 4,
+      roomId: privateValue, accessToken: privateValue, recoveryKey: privateValue, eventBody: privateValue },
+  });
+  assert.deepEqual(result.metrics, { encryptedSyncRoomCount: 1, encryptedSyncEventCount: 300,
+    encryptedSyncWireCount: 300, encryptedSyncDurationMs: 600001, encryptedSyncP95Ms: 900,
+    encryptedSyncMaxMs: 1500, encryptedSyncResponses: 40, encryptedSyncHeapGrowthMiB: 4 });
+  assert.deepEqual(result.checks, [{ name, passed: false, durationMs: 600000, category: 'encrypted-sync-wire' }]);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});
+
 test('first-use encrypted chat evidence discards identities and message content', () => {
   const privateValue = randomBytes(24).toString('hex');
   const name = 'first-use-encrypted-direct-conversation';
