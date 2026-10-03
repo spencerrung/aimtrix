@@ -1680,16 +1680,21 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const pollStartWire = wire.slice(socialWireStart);
       invariant(pollStartWire.length > 0 && pollStartWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(question)), 'poll-create-decrypted');
     });
-    if (elementPeer) await check('element-ui-encrypted-poll', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: question }).last().isVisible(), 'element-poll-render', 60000);
+    const elementPoll = elementPeer?.locator('.mx_MPollBody').filter({ hasText: question }).last();
+    if (elementPoll) await check('element-ui-encrypted-poll', async () => {
+      await until(() => elementPoll.isVisible(), 'element-poll-render', 60000);
     });
-    const elementPoll = elementPeer?.locator('.mx_EventTile').filter({ hasText: question }).last().locator('.mx_MPollBody');
     if (elementPoll) await check('element-ui-poll-vote', async () => {
-      let stage = 'element-poll-vote-control';
+      let stage = 'element-poll-vote-radio';
       try {
+        const radio = elementPoll.getByRole('radio', { name: new RegExp(first) });
+        await radio.waitFor({ state: 'visible', timeout: 45000 });
+        stage = 'element-poll-vote-enabled';
+        invariant(await radio.isEnabled(), stage);
+        stage = 'element-poll-vote-control';
         const [request] = await Promise.all([
           elementPeer.waitForRequest((candidate) => candidate.method() === 'PUT' && new URL(candidate.url()).pathname.includes('/send/m.room.encrypted/'), { timeout: 45000 }),
-          elementPoll.getByRole('radio', { name: new RegExp(first) }).click(),
+          radio.click({ timeout: 45000 }),
         ]);
         stage = 'element-poll-vote-encrypted';
         const ciphertext = request.postData();
