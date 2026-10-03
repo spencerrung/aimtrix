@@ -3,6 +3,7 @@ import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
 import { randomBytes } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import { invariant, until, register, matrixApi } from './stack.mjs';
 
 export const session = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
@@ -53,8 +54,13 @@ async function installSyntheticQrCamera(page) {
       }
     };
     paint();
-    const timer = window.setInterval(paint, 100);
-    const stream = canvas.captureStream(10);
+    const stream = canvas.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    // Drive captured frames explicitly. Chromium may otherwise stop advancing
+    // an unchanged canvas before the asynchronous QR reader starts scanning.
+    const frame = () => { paint(); track.requestFrame(); };
+    frame();
+    const timer = window.setInterval(frame, 100);
     const devices = navigator.mediaDevices;
     const original = Object.getOwnPropertyDescriptor(devices, 'getUserMedia');
     Object.defineProperty(devices, 'getUserMedia', { configurable: true, value: async () => stream });
@@ -63,7 +69,7 @@ async function installSyntheticQrCamera(page) {
       next.src = source;
       await next.decode();
       image = next;
-      paint();
+      frame();
     };
     window.__aimtrixQrStop = () => {
       window.clearInterval(timer);
@@ -83,8 +89,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     for (const name of ['alice', 'bob', 'charlie']) accounts[name] = await register(api, stack, name);
   });
   const contexts = [];
-  const newPage = async () => {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
+  const newPage = async ({ element = false } = {}) => {
+    // Element's authenticated-media download path uses its service worker to
+    // rewrite legacy MXC URLs and attach the session token. Keep Aimtrix's
+    // isolated contexts worker-free while exercising Element as deployed.
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: element ? 'allow' : 'block' });
     contexts.push(context);
     // A bad default/discovery target must fail locally, never contact a real account service.
     const permitted = new Set(Object.values(stack.origins));
@@ -584,7 +593,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
       let stage = 'element-encrypted-login';
       try {
-        elementPeer = await newPage();
+        elementPeer = await newPage({ element: true });
         await elementPeer.goto(`${stack.origins.element}/#/login`);
         await elementPeer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.bob.user_id);
         await elementPeer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -789,7 +798,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPeer) await check('element-ui-incoming-sas-verification', async () => {
       let stage = 'element-sas-login';
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -843,7 +852,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       let stage = 'element-qr-login';
       let recipient;
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -867,6 +876,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await incoming.getByRole('button', { name: 'Scan QR code' }).click();
         const scan = recipient.getByRole('dialog', { name: 'Matrix verification QR code' });
         await scan.getByRole('heading', { name: 'Scan the other device’s QR code' }).waitFor({ timeout: 45000 });
+        await until(() => scan.getByLabel('Camera preview for Matrix verification QR code').evaluate((video) =>
+          video.tagName === 'VIDEO' && !video.paused && video.readyState >= 2 && video.videoWidth > 0), stage, 45000);
         stage = 'element-qr-code';
         const code = peer.locator('.mx_VerificationQRCode img').first();
         await code.waitFor({ timeout: 45000 });
@@ -874,7 +885,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(source?.startsWith('data:image/png;base64,'), stage);
         stage = 'element-qr-camera-decode';
         await recipient.evaluate(async (value) => { await window.__aimtrixQrFeed(value); }, source);
-        await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).waitFor({ timeout: 45000 });
+        await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).waitFor({ timeout: 60000 });
         stage = 'element-qr-confirm';
         await peer.locator('.mx_VerificationPanel_reciprocateButtons').getByRole('button', { name: 'Yes, I see a green shield' }).click();
         stage = 'element-qr-complete';
@@ -887,7 +898,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPeer) await check('element-ui-aimtrix-declines-verification', async () => {
       let stage = 'element-cancel-login';
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -916,7 +927,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPeer) await check('element-ui-withdraws-verification', async () => {
       let stage = 'element-withdraw-login';
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -1807,12 +1818,21 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         ]);
         invariant(response.ok() && !response.request().postData()?.includes('geo:'), stage);
         const eventId = (await response.json()).event_id;
+        // Resolve the exact event through Aimtrix's context path. A long
+        // Element journey can leave Alice's visible timeline behind the live
+        // edge even though the server accepted the event.
+        stage = 'element-location-open-context';
+        await openMatrixEvent(alice, roomId, eventId);
         stage = 'element-location-received';
         const card = alice.locator(`[data-event-id=${JSON.stringify(eventId)}] .message-location`);
         await card.waitFor({ timeout: 45000 });
         invariant(/^geo:[+-]?[\d.]+,[+-]?[\d.]+$/.test(await card.getByRole('link', { name: /Open .* in your map application/ }).getAttribute('href') || ''), stage);
+        stage = 'element-location-return-live';
+        const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
+        if (await latest.isVisible()) { await latest.click(); await latest.waitFor({ state: 'hidden' }); }
       } catch { throw new Error(stage); }
     });
+    let voiceEventId;
     await check('encrypted-voice-interop', async () => {
       const bytes = voiceBytes;
       const uploadStart = uploads.length;
@@ -1822,7 +1842,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(uploads.length === uploadStart && wire.length === voiceWireStart, 'voice-no-premature-upload');
       await voiceDialog.getByRole('button', { name: 'Start recording' }).click();
       await voiceDialog.getByRole('button', { name: 'Stop recording' }).waitFor();
-      await alice.waitForTimeout(350);
+      await alice.waitForTimeout(3050);
       await voiceDialog.getByRole('button', { name: 'Stop recording' }).click();
       await voiceDialog.getByLabel('Voice message preview').waitFor();
       invariant(uploads.length === uploadStart && wire.length === voiceWireStart, 'voice-no-premature-upload');
@@ -1830,6 +1850,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await until(() => uploads.length > uploadStart, 'voice-encrypted-upload');
       const audio = bob.locator('.message-audio-card').filter({ hasText: 'Voice message' }).last();
       await audio.waitFor({ timeout: 45000 });
+      voiceEventId = await bob.locator('.timeline-message').filter({ has: audio }).getAttribute('data-event-id');
+      invariant(voiceEventId?.startsWith('$'), 'voice-decrypted-download');
       const link = audio.getByRole('link', { name: 'Download audio' });
       await until(async () => (await link.getAttribute('href'))?.startsWith('blob:'), 'voice-decrypted-download');
       const decrypted = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
@@ -1841,6 +1863,31 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     if (elementPeer) await check('element-ui-encrypted-voice', async () => {
       await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: 'Voice message' }).last().isVisible(), 'element-voice-render', 60000);
+    });
+    if (elementPeer) await check('element-ui-encrypted-voice-playback', async () => {
+      let stage = 'element-voice-worker-ready';
+      try {
+        await until(() => elementPeer.evaluate(() => Boolean(navigator.serviceWorker?.controller)), stage, 30000);
+        stage = 'element-voice-open-event';
+        await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(voiceEventId)}`);
+        const tile = elementPeer.locator(`.mx_EventTile[data-scroll-tokens=${JSON.stringify(voiceEventId)}]`);
+        stage = 'element-voice-tile';
+        await tile.waitFor({ state: 'visible', timeout: 60000 });
+        const player = tile.locator('.mx_MVoiceMessageBody');
+        stage = 'element-voice-body';
+        await player.waitFor({ state: 'visible', timeout: 60000 });
+        const play = player.getByRole('button', { name: 'Play', exact: true });
+        stage = 'element-voice-player-ready';
+        await until(async () => await play.isVisible() || await player.locator('.mx_MediaProcessingError_Icon').count() > 0, stage, 60000);
+        if (await player.locator('.mx_MediaProcessingError_Icon').count()) { stage = 'element-voice-media-error'; throw new Error(stage); }
+        stage = 'element-voice-player-enabled';
+        await until(() => play.isEnabled(), stage, 60000);
+        stage = 'element-voice-playing';
+        await play.click();
+        await player.getByRole('button', { name: 'Pause', exact: true }).waitFor({ timeout: 10000 });
+        stage = 'element-voice-playback-complete';
+        await player.getByRole('button', { name: 'Play', exact: true }).waitFor({ timeout: 10000 });
+      } catch { throw new Error(stage); }
     });
     await check('encrypted-staged-attachments-and-retry', async () => {
       const files = ['staged-alpha.bin', 'staged-beta.bin'].map((name) => ({ name, mimeType: 'application/octet-stream', buffer: randomBytes(64) }));
@@ -2342,10 +2389,44 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           await aimtrixPoll.getByRole('button', { name: 'Refresh results' }).click();
           return (await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '1';
         }, stage);
+        stage = 'plain-poll-invalid-replacement';
+        const pollId = await plainAlice.locator('.timeline-message').filter({ has: aimtrixPoll }).getAttribute('data-event-id');
+        const root = await api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/event/${encode(pollId)}`, { token: aliceSession.accessToken });
+        const answerId = root.content?.['org.matrix.msc3381.poll.start']?.answers?.[0]?.id;
+        invariant(pollId?.startsWith('$') && typeof answerId === 'string', stage);
+        const sendResponse = (answers) => api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/send/org.matrix.msc3381.poll.response/${randomBytes(8).toString('hex')}`, {
+          token: accounts.bob.access_token, method: 'PUT', body: {
+            'm.relates_to': { rel_type: 'm.reference', event_id: pollId },
+            'org.matrix.msc3381.poll.response': { answers },
+          },
+        });
+        await sendResponse(['not-a-poll-option']);
+        await until(async () => {
+          await aimtrixPoll.getByRole('button', { name: 'Refresh results' }).click();
+          return (await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '0';
+        }, stage);
         stage = 'plain-poll-end';
         await aimtrixPoll.getByRole('button', { name: 'End poll' }).click();
         await plainAlice.getByRole('dialog', { name: 'End this poll?' }).getByRole('button', { name: 'End poll' }).click();
         await until(() => elementPoll.getByRole('radio', { name: new RegExp(option) }).isDisabled(), stage, 45000);
+        stage = 'plain-poll-late-vote';
+        const relationPath = `/_matrix/client/v1/rooms/${encode(plainRoomId)}/relations/${encode(pollId)}/m.reference`;
+        const beforeLate = await api(relationPath, { token: aliceSession.accessToken });
+        const endEvent = beforeLate.chunk?.find((event) => event.type === 'org.matrix.msc3381.poll.end');
+        invariant(Number.isFinite(endEvent?.origin_server_ts), stage);
+        await delay(25);
+        const late = await sendResponse([answerId]);
+        const relations = await api(relationPath, { token: aliceSession.accessToken });
+        const lateEvent = relations.chunk?.find((event) => event.event_id === late.event_id);
+        invariant(lateEvent?.origin_server_ts > endEvent.origin_server_ts, stage);
+        const refresh = aimtrixPoll.getByRole('button', { name: 'Refresh results' });
+        await Promise.all([
+          plainAlice.waitForResponse((response) => response.url().includes(`/rooms/${encode(plainRoomId)}/relations/${encode(pollId)}/m.reference`) && response.ok(), { timeout: 45000 }),
+          refresh.click(),
+        ]);
+        await until(() => refresh.isEnabled(), stage);
+        invariant((await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '0' &&
+          (await aimtrixPoll.textContent()).includes('Poll ended'), stage);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {
