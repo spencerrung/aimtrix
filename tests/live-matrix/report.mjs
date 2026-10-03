@@ -67,6 +67,10 @@ failureCategories.push('delegated-recovery-room-created', 'delegated-recovery-ro
   'delegated-recovery-outcome', 'delegated-recovery-passphrase-retained', 'delegated-recovery-no-key-export',
   'delegated-recovery-key-generated', 'delegated-recovery-server-backup', 'delegated-recovery-distinct-device',
   'delegated-recovery-old-event-unavailable', 'delegated-recovery-imported-keys', 'delegated-recovery-key-cleared');
+failureCategories.push('delegated-recovery-open-create', 'delegated-recovery-create-form', 'delegated-recovery-room-submit',
+  'delegated-recovery-room-encryption', 'delegated-recovery-room-open', 'delegated-recovery-send',
+  'delegated-recovery-settings', 'delegated-recovery-setup-action', 'delegated-recovery-backup',
+  'delegated-recovery-dismiss-key', 'delegated-recovery-close-settings');
 failureCategories.push('mas-config-invalid', 'mas-compose-start', 'mas-synapse-readiness', 'mas-container-missing',
   'mas-container-exited', 'mas-discovery-404', 'mas-discovery-5xx', 'mas-discovery-unreachable');
 failureCategories.push('mas-runtime-permission', 'mas-runtime-database', 'mas-runtime-policy', 'mas-runtime-homeserver',

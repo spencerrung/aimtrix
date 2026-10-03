@@ -77,60 +77,74 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
     let recoveryMarker;
     let recoveryEventId;
     await check('delegated-auth-recovery-setup', async () => {
-      recoveryRoomName = `Delegated recovery ${randomBytes(5).toString('hex')}`;
-      recoveryMarker = `Synthetic delegated history ${randomBytes(8).toString('hex')}`;
-      await page.getByRole('button', { name: 'Join or create room' }).click();
-      const createDialog = page.getByRole('dialog', { name: 'Add a conversation' });
-      await createDialog.getByRole('button', { name: 'Create room', exact: true }).first().click();
-      await createDialog.getByLabel('Room name', { exact: true }).fill(recoveryRoomName);
-      await createDialog.getByLabel('Encrypt this room').check();
-      const creation = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith('/createRoom') &&
-        response.request().method() === 'POST');
-      await createDialog.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
-      const created = await creation;
-      invariant(created.ok(), 'delegated-recovery-room-created');
-      const roomId = (await created.json()).room_id;
-      const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
-      const encryption = await fetch(`${stored.baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
-        { headers: { Authorization: `Bearer ${stored.accessToken}` } });
-      invariant(encryption.ok() && (await encryption.json()).algorithm === 'm.megolm.v1.aes-sha2',
-        'delegated-recovery-room-encrypted');
-      await createDialog.waitFor({ state: 'hidden' });
-      await page.locator('.buddy-row').filter({ hasText: recoveryRoomName }).first().click();
-      await page.getByRole('main', { name: recoveryRoomName }).waitFor();
-      await page.getByRole('textbox', { name: `Message ${recoveryRoomName}`, exact: true }).fill(recoveryMarker);
-      await page.getByRole('button', { name: 'Send message', exact: true }).click();
-      const sent = page.locator('.timeline-message').filter({ hasText: recoveryMarker });
-      await until(async () => (await sent.getAttribute('data-event-id'))?.startsWith('$'), 'delegated-recovery-event-accepted');
-      recoveryEventId = await sent.getAttribute('data-event-id');
-      await page.getByRole('button', { name: 'Open settings' }).click();
-      const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
-      await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
-      await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic delegated recovery ${randomBytes(12).toString('hex')}`);
-      await settings.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
-      const guidance = settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' });
-      const output = settings.locator('.recovery-key-output code');
-      await until(async () => Boolean(await guidance.count() || await output.count()), 'delegated-recovery-outcome', 60000);
-      if (await guidance.count()) {
-        invariant(await settings.getByLabel('New recovery passphrase', { exact: true }).inputValue() !== '',
-          'delegated-recovery-passphrase-retained');
-        invariant(await output.count() === 0, 'delegated-recovery-no-key-export');
-        metrics.delegatedRecoverySupported = 0;
-      } else {
-        recoveryKey = await output.textContent();
-        invariant(Boolean(recoveryKey), 'delegated-recovery-key-generated');
-        await until(async () => {
-          const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
-          const response = await fetch(`${stored.baseUrl}/_matrix/client/v3/room_keys/version`,
-            { headers: { Authorization: `Bearer ${stored.accessToken}` } });
-          if (!response.ok) return false;
-          const backup = await response.json();
-          return Boolean(backup.version && backup.count > 0);
-        }, 'delegated-recovery-server-backup', 60000);
-        metrics.delegatedRecoverySupported = 1;
-        await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
-      }
-      await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      let stage = 'delegated-recovery-open-create';
+      try {
+        recoveryRoomName = `Delegated recovery ${randomBytes(5).toString('hex')}`;
+        recoveryMarker = `Synthetic delegated history ${randomBytes(8).toString('hex')}`;
+        await page.getByRole('button', { name: 'Join or create room' }).click();
+        stage = 'delegated-recovery-create-form';
+        const createDialog = page.getByRole('dialog', { name: 'Add a conversation' });
+        await createDialog.getByRole('button', { name: 'Create room', exact: true }).first().click();
+        await createDialog.getByLabel('Room name', { exact: true }).fill(recoveryRoomName);
+        await createDialog.getByLabel('Encrypt this room').check();
+        stage = 'delegated-recovery-room-submit';
+        const creation = page.waitForResponse((response) => new URL(response.url()).pathname.endsWith('/createRoom') &&
+          response.request().method() === 'POST');
+        await createDialog.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
+        const created = await creation;
+        invariant(created.ok(), 'delegated-recovery-room-created');
+        stage = 'delegated-recovery-room-encryption';
+        const roomId = (await created.json()).room_id;
+        const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+        const encryption = await fetch(`${stored.baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
+          { headers: { Authorization: `Bearer ${stored.accessToken}` } });
+        invariant(encryption.ok() && (await encryption.json()).algorithm === 'm.megolm.v1.aes-sha2',
+          'delegated-recovery-room-encrypted');
+        stage = 'delegated-recovery-room-open';
+        await createDialog.waitFor({ state: 'hidden' });
+        await page.locator('.buddy-row').filter({ hasText: recoveryRoomName }).first().click();
+        await page.getByRole('main', { name: recoveryRoomName }).waitFor();
+        stage = 'delegated-recovery-send';
+        await page.getByRole('textbox', { name: `Message ${recoveryRoomName}`, exact: true }).fill(recoveryMarker);
+        await page.getByRole('button', { name: 'Send message', exact: true }).click();
+        const sent = page.locator('.timeline-message').filter({ hasText: recoveryMarker });
+        await until(async () => (await sent.getAttribute('data-event-id'))?.startsWith('$'), 'delegated-recovery-event-accepted');
+        recoveryEventId = await sent.getAttribute('data-event-id');
+        stage = 'delegated-recovery-settings';
+        await page.getByRole('button', { name: 'Open settings' }).click();
+        const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
+        await settings.getByLabel('New recovery passphrase', { exact: true }).fill(`Synthetic delegated recovery ${randomBytes(12).toString('hex')}`);
+        stage = 'delegated-recovery-setup-action';
+        await settings.getByRole('button', { name: 'Set up new recovery', exact: true }).click();
+        const guidance = settings.getByRole('alert').filter({ hasText: 'trusted Matrix client' });
+        const output = settings.locator('.recovery-key-output code');
+        stage = 'delegated-recovery-outcome';
+        await until(async () => Boolean(await guidance.count() || await output.count()), 'delegated-recovery-outcome', 60000);
+        if (await guidance.count()) {
+          invariant(await settings.getByLabel('New recovery passphrase', { exact: true }).inputValue() !== '',
+            'delegated-recovery-passphrase-retained');
+          invariant(await output.count() === 0, 'delegated-recovery-no-key-export');
+          metrics.delegatedRecoverySupported = 0;
+        } else {
+          recoveryKey = await output.textContent();
+          invariant(Boolean(recoveryKey), 'delegated-recovery-key-generated');
+          stage = 'delegated-recovery-backup';
+          await until(async () => {
+            const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+            const response = await fetch(`${stored.baseUrl}/_matrix/client/v3/room_keys/version`,
+              { headers: { Authorization: `Bearer ${stored.accessToken}` } });
+            if (!response.ok) return false;
+            const backup = await response.json();
+            return Boolean(backup.version && backup.count > 0);
+          }, 'delegated-recovery-server-backup', 60000);
+          metrics.delegatedRecoverySupported = 1;
+          stage = 'delegated-recovery-dismiss-key';
+          await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
+        }
+        stage = 'delegated-recovery-close-settings';
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
     });
     if (recoveryKey) await check('delegated-auth-recovery-restore', async () => {
       const secondContext = await browser.newContext({ serviceWorkers: 'block' });
