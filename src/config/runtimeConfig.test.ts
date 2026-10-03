@@ -24,6 +24,7 @@ describe('parseRuntimeConfig', () => {
     });
     expect(result.config.defaultTheme).toBe('midnight');
     expect(result.config.features.demoMode).toBe(false);
+    expect(result.config.features.groupCalls).toBe(false);
     expect(result.config.features.stickers).toBe(true);
     expect(result.config.emojiPacks.standard).toBe(true);
     expect(result.config.emojiPacks.bufo).toBe(true);

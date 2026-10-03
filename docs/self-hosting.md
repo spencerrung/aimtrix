@@ -146,7 +146,11 @@ Aimtrix's shared backdrop permission selector writes a threshold for `dev.alucar
 
 Calling controls appear only when `features.calls` is true. Aimtrix currently supports interoperable one-to-one Matrix VoIP calls: incoming/outgoing state, answer/reject, voice/video, mute, selected camera/microphone/speaker, screen sharing, hangup, notifications, and browser picture-in-picture through video controls.
 
-A homeserver should provide working TURN credentials through the Matrix Client-Server API; direct peer connectivity is not reliable across NAT. Aimtrix displays discovered `org.matrix.msc4143.rtc_foci` entries in Matrix settings, but group MatrixRTC/LiveKit calls are not yet started by this release. Operators needing group calls should provide a LiveKit/JWT focus and retain another MatrixRTC client until that TODO is complete.
+A homeserver should provide working TURN credentials through the Matrix Client-Server API; direct peer connectivity is not reliable across NAT.
+
+Group calls are an optional, browser-only MatrixRTC feature. To expose them, set `features.groupCalls` to `true` in the public runtime `config.json`, provide a LiveKit SFU and MatrixRTC authorization service, and advertise a `livekit` transport with `livekit_service_url` through the homeserver's MSC4143 `/rtc/transports` endpoint or `org.matrix.msc4143.rtc_foci` in client well-known. The authorization service must support the standalone `/get_token` OpenID flow and return a secure `wss://` SFU URL plus a JWT. The browser needs cross-origin access to that service and WebSocket access to the SFU. Aimtrix only displays the join control when the feature is enabled and transport discovery succeeds or an active room call is visible. It loads LiveKit and its E2EE worker only when joining.
+
+Group prejoin leaves camera and microphone off by default and enables media only after the MatrixRTC media key and LiveKit E2EE are ready. Leaving releases the MatrixRTC membership, SFU connection, worker, and local tracks. This implementation follows the currently deployed standalone MSC4195 flow used by Element Call; the newer homeserver-mediated `/_matrix/client/v1/rtc/livekit/get_token` flow is not yet supported. Keep `features.groupCalls` disabled for deployments that offer only that flow. A real multi-party call across two clients, including encrypted media and TURN/NAT traversal, remains the release interoperability gate; mocked authorization and browser UI checks alone do not establish it.
 
 ## Content Security Policy
 

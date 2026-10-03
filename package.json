@@ -44,6 +44,7 @@
     "@tauri-apps/plugin-updater": "^2.10.1",
     "@zxing/browser": "^0.1.5",
     "@zxing/library": "^0.21.3",
+    "livekit-client": "^2.22.3",
     "lucide-react": "^1.33.0",
     "matrix-encrypt-attachment": "^1.0.3",
     "matrix-js-sdk": "^42.2.0",

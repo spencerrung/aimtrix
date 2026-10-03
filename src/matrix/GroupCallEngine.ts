@@ -1,0 +1,216 @@
+import type { MatrixClient } from 'matrix-js-sdk';
+import { MatrixRTCSessionEvent, type MatrixRTCSession } from 'matrix-js-sdk/lib/matrixrtc/index.js';
+import { BaseKeyProvider, isE2EESupported, Room as LiveKitRoom, RoomEvent, Track, type Participant } from 'livekit-client';
+import E2EEWorker from 'livekit-client/e2ee-worker?worker&inline';
+import type { GroupCallParticipant, GroupCallSummary } from './viewModels';
+import { authorizeGroupCall, discoverGroupCallTransport } from './groupCallTransport';
+
+class MatrixMediaKeys extends BaseKeyProvider {
+  public constructor() { super({ ratchetWindowSize: 10, keyringSize: 256 }); }
+
+  public async receive(bytes: Uint8Array<ArrayBuffer>, index: number, identity: string): Promise<void> {
+    const material = await crypto.subtle.importKey('raw', bytes, 'HKDF', false, ['deriveBits', 'deriveKey']);
+    this.onSetEncryptionKey(material, identity, index);
+  }
+}
+
+function trackStream(participant: Participant, source: Track.Source): MediaStream | undefined {
+  const publication = participant.getTrackPublication(source);
+  if (!publication?.track || publication.isMuted || !publication.isEncrypted) return;
+  const track = publication.track.mediaStreamTrack;
+  let stream = streamByTrack.get(track);
+  if (!stream) { stream = new MediaStream([track]); streamByTrack.set(track, stream); }
+  return stream;
+}
+
+const streamByTrack = new WeakMap<MediaStreamTrack, MediaStream>();
+
+export class GroupCallEngine {
+  private readonly abort = new AbortController();
+  private room?: LiveKitRoom;
+  private rtcSession?: MatrixRTCSession;
+  private worker?: Worker;
+  private keyListener?: (bytes: Uint8Array<ArrayBuffer>, index: number, member: { userId: string; deviceId: string }, backendIdentity: string) => void;
+  private state: GroupCallSummary;
+  private disposed = false;
+  private releasing?: Promise<void>;
+
+  public constructor(
+    private readonly client: MatrixClient,
+    roomId: string,
+    private readonly changed: (summary: GroupCallSummary) => void,
+  ) {
+    this.state = { roomId, state: 'joining', encrypted: false, microphoneMuted: true, videoMuted: true, screensharing: false, participants: [] };
+    this.changed(this.state);
+  }
+
+  public get summary(): GroupCallSummary { return this.state; }
+
+  private publish(update: Partial<GroupCallSummary> = {}): void {
+    if (this.disposed) return;
+    const room = this.room;
+    const participants: GroupCallParticipant[] = [];
+    if (room) for (const [participant, local] of [[room.localParticipant, true], ...Array.from(room.remoteParticipants.values(), (value) => [value, false] as const)] as Array<readonly [Participant, boolean]>) {
+      participants.push({
+        id: participant.identity,
+        name: participant.name || (local ? 'You' : participant.identity),
+        speaking: participant.isSpeaking,
+        encrypted: participant.isEncrypted,
+        microphoneMuted: !participant.isMicrophoneEnabled,
+        videoStream: trackStream(participant, Track.Source.Camera),
+        screenStream: trackStream(participant, Track.Source.ScreenShare),
+        audioStream: local ? undefined : trackStream(participant, Track.Source.Microphone),
+        local,
+      });
+    }
+    this.state = {
+      ...this.state,
+      ...update,
+      participants,
+      encrypted: Boolean(room?.isE2EEEnabled) && participants.every((participant) => participant.encrypted),
+      microphoneMuted: room ? !room.localParticipant.isMicrophoneEnabled : this.state.microphoneMuted,
+      videoMuted: room ? !room.localParticipant.isCameraEnabled : this.state.videoMuted,
+      screensharing: Boolean(room?.localParticipant.isScreenShareEnabled),
+      audioPlaybackBlocked: Boolean(room && !room.canPlaybackAudio),
+    };
+    this.changed(this.state);
+  }
+
+  private readonly onRoomChange = (): void => this.publish();
+  private readonly onReconnecting = (): void => this.publish({ state: 'reconnecting' });
+  private readonly onReconnected = (): void => this.publish({ state: 'connected' });
+  private readonly onDisconnected = (): void => {
+    if (this.disposed || this.abort.signal.aborted) return;
+    this.publish({ state: 'error', error: 'The call disconnected. Leave and try joining again.' });
+    this.abort.abort();
+    void this.release();
+  };
+  private readonly onEncryptionError = (): void => {
+    if (this.disposed) return;
+    this.publish({ state: 'error', error: 'Call media encryption failed. Leave this call and try again.' });
+    this.abort.abort();
+    void this.release();
+  };
+
+  private attachRoom(room: LiveKitRoom): void {
+    for (const event of [RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.TrackSubscribed,
+      RoomEvent.TrackUnsubscribed, RoomEvent.TrackMuted, RoomEvent.TrackUnmuted, RoomEvent.LocalTrackPublished,
+      RoomEvent.LocalTrackUnpublished, RoomEvent.ActiveSpeakersChanged, RoomEvent.ParticipantEncryptionStatusChanged]) {
+      room.on(event, this.onRoomChange);
+    }
+    room.on(RoomEvent.AudioPlaybackStatusChanged, this.onRoomChange);
+    room.on(RoomEvent.Reconnecting, this.onReconnecting);
+    room.on(RoomEvent.Reconnected, this.onReconnected);
+    room.on(RoomEvent.Disconnected, this.onDisconnected);
+    room.on(RoomEvent.EncryptionError, this.onEncryptionError);
+  }
+
+  public async join(video: boolean, devices: { microphoneId: string; cameraId: string }, microphoneEnabled: boolean): Promise<void> {
+    try {
+      if (!isE2EESupported()) throw new Error('Encrypted group calling is not supported by this browser.');
+      const matrixRoom = this.client.getRoom(this.state.roomId);
+      if (!matrixRoom || matrixRoom.getMyMembership() !== 'join') throw new Error('Join this Matrix room before starting a group call.');
+      const session = this.client.matrixRTC.getRoomSession(matrixRoom);
+      const transport = await discoverGroupCallTransport(this.client, session);
+      if (!transport) throw new Error('This homeserver has no supported MatrixRTC LiveKit service.');
+      const userId = this.client.getSafeUserId();
+      const deviceId = this.client.getDeviceId();
+      if (!deviceId) throw new Error('A Matrix device is required for encrypted group calls.');
+      const identity = { userId, deviceId, memberId: `${userId}:${deviceId}` };
+      const authorization = await authorizeGroupCall(this.client, transport, identity, this.state.roomId, this.abort.signal);
+      if (this.abort.signal.aborted) return;
+
+      const keys = new MatrixMediaKeys();
+      this.worker = new E2EEWorker();
+      const room = new LiveKitRoom({ encryption: { keyProvider: keys, worker: this.worker } });
+      this.room = room;
+      this.attachRoom(room);
+      this.rtcSession = session;
+      let ownKeyReady!: () => void;
+      const ownKey = new Promise<void>((resolve) => { ownKeyReady = resolve; });
+      const keyChanged = (bytes: Uint8Array<ArrayBuffer>, index: number, member: { userId: string; deviceId: string }, backendIdentity: string): void => {
+        void keys.receive(bytes, index, backendIdentity).then(() => {
+          if (member.userId === userId && member.deviceId === deviceId) ownKeyReady();
+        }).catch(() => this.onEncryptionError());
+      };
+      this.keyListener = keyChanged;
+      session.on(MatrixRTCSessionEvent.EncryptionKeyChanged, keyChanged);
+      session.reemitEncryptionKeys();
+      session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio' });
+      await Promise.race([ownKey, new Promise<never>((_, reject) => {
+        const timer = window.setTimeout(() => reject(new Error('The group call media key was not ready.')), 30_000);
+        const abort = () => reject(new DOMException('The call was cancelled.', 'AbortError'));
+        this.abort.signal.addEventListener('abort', abort, { once: true });
+        void ownKey.finally(() => { window.clearTimeout(timer); this.abort.signal.removeEventListener('abort', abort); });
+      })]);
+      if (this.abort.signal.aborted) return;
+      await room.connect(authorization.url, authorization.jwt);
+      if (this.abort.signal.aborted) { await this.release(); return; }
+      await room.setE2EEEnabled(true);
+      if (this.abort.signal.aborted) { await this.release(); return; }
+      if (!room.isE2EEEnabled) throw new Error('The group call could not enable media encryption.');
+      if (microphoneEnabled) await room.localParticipant.setMicrophoneEnabled(true, devices.microphoneId ? { deviceId: { exact: devices.microphoneId } } : undefined);
+      if (this.abort.signal.aborted) { await this.release(); return; }
+      if (video) await room.localParticipant.setCameraEnabled(true, devices.cameraId ? { deviceId: { exact: devices.cameraId } } : undefined);
+      if (this.abort.signal.aborted) { await this.release(); return; }
+      this.publish({ state: 'connected' });
+    } catch (cause) {
+      const message = cause instanceof Error && cause.name !== 'AbortError' ? cause.message : 'The group call could not start.';
+      await this.release();
+      if (!this.disposed && !this.abort.signal.aborted) this.publish({ state: 'error', error: message });
+      throw cause;
+    }
+  }
+
+  public async setMicrophoneMuted(muted: boolean, microphoneId = ''): Promise<void> {
+    if (this.abort.signal.aborted || !this.room?.isE2EEEnabled) throw new Error('Encrypted group calling is unavailable.');
+    await this.room.localParticipant.setMicrophoneEnabled(!muted, !muted && microphoneId ? { deviceId: { exact: microphoneId } } : undefined);
+    this.publish();
+  }
+
+  public async setVideoMuted(muted: boolean, cameraId = ''): Promise<void> {
+    if (this.abort.signal.aborted || !this.room?.isE2EEEnabled) throw new Error('Encrypted group calling is unavailable.');
+    await this.room.localParticipant.setCameraEnabled(!muted, !muted && cameraId ? { deviceId: { exact: cameraId } } : undefined);
+    this.publish();
+  }
+
+  public async setScreensharing(enabled: boolean): Promise<void> {
+    if (this.abort.signal.aborted || !this.room?.isE2EEEnabled) throw new Error('Encrypted group calling is unavailable.');
+    await this.room.localParticipant.setScreenShareEnabled(enabled);
+    this.publish();
+  }
+
+  public async setDevices(devices: { microphoneId: string; cameraId: string }): Promise<void> {
+    if (!this.room) return;
+    if (devices.microphoneId) await this.room.switchActiveDevice('audioinput', devices.microphoneId);
+    if (devices.cameraId) await this.room.switchActiveDevice('videoinput', devices.cameraId);
+    this.publish();
+  }
+
+  public async enableAudio(): Promise<void> {
+    await this.room?.startAudio();
+    this.publish();
+  }
+
+  private release(): Promise<void> { return this.releasing ??= this.releaseOnce(); }
+
+  private async releaseOnce(): Promise<void> {
+    const session = this.rtcSession;
+    if (session && this.keyListener) session.off(MatrixRTCSessionEvent.EncryptionKeyChanged, this.keyListener);
+    this.keyListener = undefined;
+    this.rtcSession = undefined;
+    const room = this.room;
+    this.room = undefined;
+    if (room) await room.disconnect().catch(() => undefined);
+    if (session?.isJoined()) await session.leaveRoomSession(5000).catch(() => undefined);
+    this.worker?.terminate();
+    this.worker = undefined;
+  }
+
+  public async leave(): Promise<void> {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.abort.abort();
+    await this.release();
+  }
+}

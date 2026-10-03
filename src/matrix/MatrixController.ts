@@ -96,11 +96,14 @@ import type {
 } from './settingsTypes';
 import type {
   CallSummary,
+  GroupCallSummary,
   ConnectionState,
   PresenceState,
   SpaceSummary,
   WorkspaceSnapshot,
 } from './viewModels';
+import type { GroupCallEngine } from './GroupCallEngine';
+import type { GroupCallActivity } from './GroupCallActivity';
 
 export interface LoginCredentials {
   userId: string;
@@ -277,6 +280,11 @@ export class MatrixController {
   private readonly inlineEmoteUploads = new Map<string, Promise<string>>();
   private activeCall?: MatrixCall;
   private callSummary?: CallSummary;
+  private groupCallEngine?: GroupCallEngine;
+  private groupCallSummary?: GroupCallSummary;
+  private groupCallStarting = false;
+  private groupCallStartRevision = 0;
+  private groupCallActivity?: GroupCallActivity;
   private callDevices = { microphoneId: '', cameraId: '' };
   private readonly attachmentSender: AttachmentSender;
   private inMemoryRecoveryKey?: Uint8Array<ArrayBuffer>;
@@ -2014,6 +2022,71 @@ export class MatrixController {
 
   public setCallDevices(devices: { microphoneId: string; cameraId: string }): void {
     this.callDevices = devices;
+    void this.groupCallEngine?.setDevices(devices).catch(() => {
+      if (this.groupCallSummary) {
+        this.groupCallSummary = { ...this.groupCallSummary, error: 'The selected call device could not be opened.' };
+        this.scheduleWorkspacePublish();
+      }
+    });
+  }
+
+  public async startGroupCall(roomId: string, video: boolean, devices: { microphoneId: string; cameraId: string }, microphoneEnabled: boolean): Promise<void> {
+    if (!this.config.features.groupCalls) throw new Error('Group calling is disabled by this Aimtrix host.');
+    const client = this.client;
+    if (!client) throw new Error('Matrix is not connected.');
+    if (this.activeCall || this.groupCallEngine || this.groupCallStarting) throw new Error('Leave the current call before joining another.');
+    this.groupCallStarting = true;
+    const startRevision = this.groupCallStartRevision;
+    try {
+      const { GroupCallEngine } = await import('./GroupCallEngine');
+      if (this.client !== client || startRevision !== this.groupCallStartRevision) return;
+      const holder: { engine?: GroupCallEngine } = {};
+      holder.engine = new GroupCallEngine(client, roomId, (summary) => {
+        if (this.client !== client || (this.groupCallEngine && this.groupCallEngine !== holder.engine)) return;
+        this.groupCallSummary = summary;
+        this.scheduleWorkspacePublish();
+      });
+      const engine = holder.engine;
+      this.groupCallEngine = engine;
+      this.callDevices = devices;
+      await engine.join(video, devices, microphoneEnabled);
+    } finally { this.groupCallStarting = false; }
+  }
+
+  public async leaveGroupCall(): Promise<void> {
+    this.groupCallStartRevision += 1;
+    const engine = this.groupCallEngine;
+    this.groupCallEngine = undefined;
+    this.groupCallSummary = undefined;
+    this.scheduleWorkspacePublish();
+    await engine?.leave();
+  }
+
+  public async setGroupCallMicrophoneMuted(muted: boolean): Promise<void> {
+    await this.runGroupCallAction((engine) => engine.setMicrophoneMuted(muted, this.callDevices.microphoneId), 'The microphone could not be changed.');
+  }
+
+  public async setGroupCallVideoMuted(muted: boolean): Promise<void> {
+    await this.runGroupCallAction((engine) => engine.setVideoMuted(muted, this.callDevices.cameraId), 'The camera could not be changed.');
+  }
+
+  public async setGroupCallScreensharing(enabled: boolean): Promise<void> {
+    await this.runGroupCallAction((engine) => engine.setScreensharing(enabled), 'Screen sharing could not be changed.');
+  }
+
+  public async enableGroupCallAudio(): Promise<void> {
+    await this.runGroupCallAction((engine) => engine.enableAudio(), 'Call audio could not be started.');
+  }
+
+  private async runGroupCallAction(action: (engine: GroupCallEngine) => Promise<void>, message: string): Promise<void> {
+    const engine = this.groupCallEngine;
+    if (!engine) return;
+    try { await action(engine); }
+    catch {
+      if (this.groupCallEngine !== engine || !this.groupCallSummary) return;
+      this.groupCallSummary = { ...this.groupCallSummary, error: message };
+      this.scheduleWorkspacePublish();
+    }
   }
 
   public async startCall(roomId: string, video: boolean): Promise<void> {
@@ -2021,7 +2094,7 @@ export class MatrixController {
     const client = this.client;
     const sdk = this.sdk;
     if (!client || !sdk) throw new Error('Matrix is not connected.');
-    if (this.activeCall) throw new Error('Another call is already active.');
+    if (this.activeCall || this.groupCallEngine || this.groupCallStarting) throw new Error('Another call is already active.');
     const call = sdk.createNewMatrixCall(client, roomId);
     if (!call) throw new Error('Calling is not supported in this browser.');
     this.attachCall(call);
@@ -3752,6 +3825,15 @@ export class MatrixController {
         threadSupport: true,
       });
       if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
+      if (this.config.features.groupCalls) {
+        const activityRevision = this.groupCallStartRevision;
+        void import('./GroupCallActivity').then(({ GroupCallActivity }) => {
+          if (this.client !== client || activityRevision !== this.groupCallStartRevision) return;
+          const activity = new GroupCallActivity(client, () => this.scheduleWorkspacePublish());
+          this.groupCallActivity = activity;
+          void activity.start();
+        }).catch(() => undefined);
+      }
       if (this.pushRefreshPending) {
         this.pushRefreshPending = false;
         client.retryImmediately();
@@ -3780,6 +3862,7 @@ export class MatrixController {
   }
 
   private async stopCurrentClient(): Promise<void> {
+    this.groupCallStartRevision += 1;
     const privateWrites = [...this.privateSearchRoomWrites.values()];
     this.privateSearch?.close();
     this.privateSearch = undefined;
@@ -3802,6 +3885,12 @@ export class MatrixController {
     this.activeCall = undefined;
     this.callSummary = undefined;
     const client = this.client;
+    const groupCall = this.groupCallEngine;
+    this.groupCallEngine = undefined;
+    this.groupCallSummary = undefined;
+    if (groupCall) await groupCall.leave();
+    this.groupCallActivity?.stop();
+    this.groupCallActivity = undefined;
     this.detachClientListeners();
     for (const { request, onChange } of this.incomingVerificationRequests.values()) request.off(VerificationRequestEvent.Change, onChange);
     this.incomingVerificationRequests.clear();
@@ -3840,7 +3929,7 @@ export class MatrixController {
   }
 
   private readonly handleIncomingCall = (call: MatrixCall): void => {
-    if (!this.config.features.calls || this.activeCall) {
+    if (!this.config.features.calls || this.activeCall || this.groupCallEngine || this.groupCallStarting) {
       call.reject();
       return;
     }
@@ -4389,7 +4478,7 @@ export class MatrixController {
           status: 'ready',
           issue: this.currentIssue,
           incomingVerification: this.incomingVerificationSummaries(),
-          workspace: { ...workspace, call: this.callSummary, activity: this.activity.snapshot(), threadsByRoot: Object.fromEntries(Object.entries(workspace.threadsByRoot).map(([id, thread]) => [id, { ...thread, followed: thread.roomId ? this.activity.followState(thread.roomId, id) : undefined }])) },
+          workspace: { ...workspace, call: this.callSummary, groupCall: this.groupCallSummary, groupCallsAvailable: this.groupCallActivity?.available, groupCallRooms: this.groupCallActivity?.rooms, activity: this.activity.snapshot(), threadsByRoot: Object.fromEntries(Object.entries(workspace.threadsByRoot).map(([id, thread]) => [id, { ...thread, followed: thread.roomId ? this.activity.followState(thread.roomId, id) : undefined }])) },
         });
       } catch {
         this.setSnapshot({
