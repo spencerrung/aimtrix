@@ -23,6 +23,7 @@
     "check": "npm run lint && npm run test && npm run build",
     "preview": "vite preview",
     "test:matrix": "node tests/live-matrix/run.mjs",
+    "test:matrix:rtc": "node tests/live-matrix/group-rtc.mjs",
     "test:matrix:privacy": "node --test tests/live-matrix/report.test.mjs"
   },
   "engines": {

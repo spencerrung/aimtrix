@@ -54,11 +54,19 @@ async function installSyntheticQrCamera(page) {
       }
     };
     paint();
-    const stream = canvas.captureStream(0);
+    const stream = canvas.captureStream(15);
     const track = stream.getVideoTracks()[0];
-    // Drive captured frames explicitly. Chromium may otherwise stop advancing
-    // an unchanged canvas before the asynchronous QR reader starts scanning.
-    const frame = () => { paint(); track.requestFrame(); };
+    // Keep the synthetic camera advancing even if the QR image is unchanged.
+    // A corner pixel outside the QR alternates so Chromium has a changed frame
+    // to deliver to the asynchronous reader under CI load.
+    let marker = false;
+    const frame = () => {
+      paint();
+      context.fillStyle = marker ? '#fff' : '#000';
+      context.fillRect(0, 0, 2, 2);
+      marker = !marker;
+      track.requestFrame?.();
+    };
     frame();
     const timer = window.setInterval(frame, 100);
     const devices = navigator.mediaDevices;
@@ -828,8 +836,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const startEmoji = peer.locator('.mx_VerificationPanel_QRPhase_startOption').filter({ hasText: /Compare.*emoji/i })
           .getByRole('button', { name: 'Start', exact: true });
         await until(async () => {
-          if (await startEmoji.isVisible()) { await startEmoji.click(); return true; }
-          if (await chooseEmoji.isVisible()) { await chooseEmoji.click(); return true; }
+          for (const control of [startEmoji, chooseEmoji]) {
+            if (!await control.isVisible()) continue;
+            try { await control.click({ timeout: 5000 }); return true; }
+            catch { return false; } // Element may replace the method picker between visibility and click.
+          }
           return await elementEmoji.count() === 7;
         }, stage, 45000);
         stage = 'element-sas-emoji';
