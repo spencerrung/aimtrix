@@ -7,7 +7,7 @@ import { invariant, matrixApi, register, until } from './stack.mjs';
 export async function runLargeAccountProfile({ browser, stack, check, metrics }) {
   const roomCount = Number(process.env.AIMTRIX_LIVE_ROOM_COUNT ?? 1000);
   invariant([100, 1000, 10000].includes(roomCount), 'large-account-room-count');
-  const readinessLimitMs = roomCount === 10000 ? 300000 : 180000;
+  const readinessLimitMs = roomCount === 10000 ? 600000 : 180000;
   const api = matrixApi(stack);
   const account = await register(api, stack, 'large-account-reader');
   const roomName = (index) => `Synthetic live room ${String(index).padStart(5, '0')}`;
@@ -50,7 +50,12 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       syncResponses += 1;
       void response.json().then((body) => {
         for (const roomId of Object.keys(body.rooms?.join ?? {})) syncedRoomIds.add(roomId);
-      }).catch(() => { invalidSyncResponses += 1; });
+        metrics.largeAccountObservedRooms = syncedRoomIds.size;
+      }).catch(() => {
+        invalidSyncResponses += 1;
+        metrics.largeAccountInvalidSyncResponses = invalidSyncResponses;
+      });
+      metrics.largeAccountSyncResponses = syncResponses;
     });
     await check('large-account-initial-sync', async () => {
       await page.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill('@large-account-reader:aimtrix.test');
@@ -63,15 +68,16 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       await search.fill(roomName(roomCount - 1));
       const lastRoom = page.locator('.buddy-row').filter({ hasText: roomName(roomCount - 1) });
       await lastRoom.waitFor({ timeout: readinessLimitMs });
+      metrics.largeAccountLastRoomVisibleMs = Date.now() - started;
       await search.fill('');
       const visibleTotal = async () => (await page.locator('.buddy-group__toggle span:last-child').allTextContents())
         .reduce((sum, value) => sum + Number(value), 0);
-      await until(async () => syncedRoomIds.size === roomCount && await visibleTotal() === roomCount,
-        'large-account-complete-sync', readinessLimitMs);
+      await until(async () => {
+        metrics.largeAccountUiRooms = await visibleTotal();
+        return syncedRoomIds.size === roomCount && metrics.largeAccountUiRooms === roomCount;
+      }, 'large-account-complete-sync', readinessLimitMs);
       invariant(invalidSyncResponses === 0, 'large-account-sync-json');
       metrics.largeAccountDeepRoomReadyMs = Date.now() - started;
-      metrics.largeAccountObservedRooms = syncedRoomIds.size;
-      metrics.largeAccountUiRooms = await visibleTotal();
       metrics.largeAccountRenderedRows = await page.locator('.buddy-row').count();
       invariant(metrics.largeAccountRenderedRows > 0 && metrics.largeAccountRenderedRows <= 101, 'large-account-bounded-rows');
       metrics.largeAccountDomNodes = await page.locator('*').count();

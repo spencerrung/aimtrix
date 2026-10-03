@@ -78,7 +78,7 @@ export function makeReport({ revision, platform, browserVersion, cpuCount, memor
       'cacheReloadSeedMs', 'cacheReloadMessages', 'cacheReloadReadyMs', 'cacheReloadSyncResponses', 'cacheReloadReadyWithin90s',
       'sustainedSyncRoomCount', 'sustainedSyncEventCount', 'sustainedSyncDurationMs', 'sustainedSyncP95Ms', 'sustainedSyncMaxMs', 'sustainedSyncResponses', 'sustainedSyncHeapGrowthMiB',
       'encryptedSyncRoomCount', 'encryptedSyncEventCount', 'encryptedSyncWireCount', 'encryptedSyncDurationMs', 'encryptedSyncP95Ms', 'encryptedSyncMaxMs', 'encryptedSyncResponses', 'encryptedSyncHeapGrowthMiB',
-      'largeAccountRoomCount', 'largeAccountSeededRooms', 'largeAccountSeedMs', 'largeAccountShellReadyMs', 'largeAccountDeepRoomReadyMs', 'largeAccountObservedRooms', 'largeAccountUiRooms', 'largeAccountDeepRoomOpenMs', 'largeAccountRenderedRows', 'largeAccountDomNodes', 'largeAccountSyncResponses', 'largeAccountHeapGrowthMiB',
+      'largeAccountRoomCount', 'largeAccountSeededRooms', 'largeAccountSeedMs', 'largeAccountShellReadyMs', 'largeAccountLastRoomVisibleMs', 'largeAccountDeepRoomReadyMs', 'largeAccountObservedRooms', 'largeAccountUiRooms', 'largeAccountDeepRoomOpenMs', 'largeAccountRenderedRows', 'largeAccountDomNodes', 'largeAccountSyncResponses', 'largeAccountInvalidSyncResponses', 'largeAccountHeapGrowthMiB',
       'communityBeforeDirectoryMs',
     ].filter((key) => finite(metrics[key])).map((key) => [key, Math.round(metrics[key])])),
   };
