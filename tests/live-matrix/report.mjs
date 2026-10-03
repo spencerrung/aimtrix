@@ -63,6 +63,8 @@ failureCategories.push('upgrade-capabilities', 'upgrade-create-room', 'upgrade-o
 failureCategories.push('delegated-session', 'delegated-callback-cleanup', 'delegated-whoami', 'delegated-metadata', 'delegated-local-cleanup', 'delegated-revocation');
 failureCategories.push('mas-config-invalid', 'mas-compose-start', 'mas-synapse-readiness', 'mas-container-missing',
   'mas-container-exited', 'mas-discovery-404', 'mas-discovery-5xx', 'mas-discovery-unreachable');
+failureCategories.push('mas-runtime-permission', 'mas-runtime-database', 'mas-runtime-policy', 'mas-runtime-homeserver',
+  'mas-runtime-assets', 'mas-runtime-bind', 'mas-runtime-config', 'mas-runtime-unknown', 'mas-start-probe-timeout');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, delegatedAuth, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

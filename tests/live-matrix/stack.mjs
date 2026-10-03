@@ -24,15 +24,16 @@ export async function until(check, code, timeout = 45000) {
   throw new Error(code);
 }
 // Never forward subprocess output: even disposable server logs can contain tokens.
-export function command(binary, args, { input, timeout = 180000 } = {}) {
+export function command(binary, args, { input, timeout = 180000, classifyFailure } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-    let stdout = ''; let bytes = 0;
-    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error('subprocess-timeout')); }, timeout);
+    let stdout = ''; let stderr = ''; let bytes = 0; let errorBytes = 0;
+    const timer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(classifyFailure ? 'mas-start-probe-timeout' : 'subprocess-timeout')); }, timeout);
     child.stdout.on('data', (chunk) => { bytes += chunk.length; if (bytes < 1024 * 1024) stdout += chunk; });
-    child.stderr.resume();
+    if (classifyFailure) child.stderr.on('data', (chunk) => { errorBytes += chunk.length; if (errorBytes < 65536) stderr += chunk; });
+    else child.stderr.resume();
     child.on('error', () => { clearTimeout(timer); reject(new Error('subprocess-start')); });
-    child.on('close', (code) => { clearTimeout(timer); if (code === 0) resolve(stdout.trim()); else reject(new Error('subprocess-exit')); });
+    child.on('close', (code) => { clearTimeout(timer); if (code === 0) resolve(stdout.trim()); else reject(new Error(classifyFailure?.(`${stdout}\n${stderr}`) || 'subprocess-exit')); });
     child.stdin.on('error', () => {});
     child.stdin.end(input);
   });
@@ -62,6 +63,17 @@ export async function createStack({ elementUi = false, syncResponseCache = false
   const composePath = join(directory, 'compose.json');
   let prepared = false;
   const compose = (...args) => command('docker', ['compose', '--project-name', project, '--file', composePath, ...args]);
+  const masFailureCategory = (output) => {
+    const sample = output.toLowerCase();
+    if (sample.includes('permission denied')) return 'mas-runtime-permission';
+    if (/database|postgres|sqlx/.test(sample)) return 'mas-runtime-database';
+    if (/policy|rego|\bopa\b/.test(sample)) return 'mas-runtime-policy';
+    if (/synapse|homeserver/.test(sample)) return 'mas-runtime-homeserver';
+    if (/template|assets|file not found/.test(sample)) return 'mas-runtime-assets';
+    if (/bind|listen|address already in use/.test(sample)) return 'mas-runtime-bind';
+    if (/config|invalid|missing/.test(sample)) return 'mas-runtime-config';
+    return 'mas-runtime-unknown';
+  };
   const write = async (name, value) => {
     const target = name === 'compose.json' ? composePath : join(configDirectory, name);
     await writeFile(target, JSON.stringify(value, null, 2), { mode: 0o600 });
@@ -222,7 +234,13 @@ http {
       const id = await compose('ps', '--all', '-q', 'mas');
       if (!id) throw new Error('mas-container-missing', { cause: error });
       const [info] = JSON.parse(await command('docker', ['inspect', id]));
-      if (info.State?.Status !== 'running') throw new Error('mas-container-exited', { cause: error });
+      if (info.State?.Status !== 'running') {
+        try {
+          await command('docker', ['compose', '--project-name', project, '--file', composePath,
+            'run', '--rm', '--no-deps', 'mas', 'server'], { timeout: 15000, classifyFailure: masFailureCategory });
+        } catch (probe) { throw new Error(probe instanceof Error ? probe.message : 'mas-runtime-unknown', { cause: probe }); }
+        throw new Error('mas-container-exited', { cause: error });
+      }
       let status = 0;
       try { status = (await fetch(`${origins.mas}/.well-known/openid-configuration`, { signal: AbortSignal.timeout(2000) })).status; } catch { /* no response */ }
       throw new Error(status === 404 ? 'mas-discovery-404' : status >= 500 ? 'mas-discovery-5xx' : 'mas-discovery-unreachable', { cause: error });
