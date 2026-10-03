@@ -54,8 +54,13 @@ async function installSyntheticQrCamera(page) {
       }
     };
     paint();
-    const timer = window.setInterval(paint, 100);
-    const stream = canvas.captureStream(10);
+    const stream = canvas.captureStream(0);
+    const track = stream.getVideoTracks()[0];
+    // Drive captured frames explicitly. Chromium may otherwise stop advancing
+    // an unchanged canvas before the asynchronous QR reader starts scanning.
+    const frame = () => { paint(); track.requestFrame(); };
+    frame();
+    const timer = window.setInterval(frame, 100);
     const devices = navigator.mediaDevices;
     const original = Object.getOwnPropertyDescriptor(devices, 'getUserMedia');
     Object.defineProperty(devices, 'getUserMedia', { configurable: true, value: async () => stream });
@@ -64,7 +69,7 @@ async function installSyntheticQrCamera(page) {
       next.src = source;
       await next.decode();
       image = next;
-      paint();
+      frame();
     };
     window.__aimtrixQrStop = () => {
       window.clearInterval(timer);
