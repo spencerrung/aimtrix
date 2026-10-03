@@ -1687,14 +1687,16 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPoll) await check('element-ui-poll-vote', async () => {
       let stage = 'element-poll-vote-radio';
       try {
-        const radio = elementPoll.getByRole('radio', { name: new RegExp(first) });
-        await radio.waitFor({ state: 'visible', timeout: 45000 });
+        const option = elementPoll.locator('.mx_PollOption .mx_StyledRadioButton').filter({ hasText: first });
+        await option.waitFor({ state: 'visible', timeout: 45000 });
+        const radio = option.getByRole('radio');
+        invariant(await radio.count() === 1, stage);
         stage = 'element-poll-vote-enabled';
         invariant(await radio.isEnabled(), stage);
         stage = 'element-poll-vote-control';
         const [request] = await Promise.all([
           elementPeer.waitForRequest((candidate) => candidate.method() === 'PUT' && new URL(candidate.url()).pathname.includes('/send/m.room.encrypted/'), { timeout: 45000 }),
-          radio.click({ timeout: 45000 }),
+          option.click({ timeout: 45000 }),
         ]);
         stage = 'element-poll-vote-encrypted';
         const ciphertext = request.postData();
