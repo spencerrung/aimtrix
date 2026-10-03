@@ -34,7 +34,7 @@ function fixture(encrypted = false) {
   internal.client = client as unknown as MatrixClient;
   internal.sdk = { EventType: { RoomMessage: 'm.room.message' }, MsgType: { Location: 'm.location' } };
   internal.scheduleWorkspacePublish = vi.fn();
-  return { controller, client, room, root, vote };
+  return { controller, client, room, root, vote, end };
 }
 
 describe('social event sends and reads', () => {
@@ -71,5 +71,18 @@ describe('social event sends and reads', () => {
     client.relations.mockResolvedValue({ originalEvent: root, events: [vote] });
     await controller.endPoll('!room:test', '$poll');
     expect(client.sendEvent).toHaveBeenCalledWith('!room:test', POLL_END, expect.objectContaining({ [POLL_END]: {}, [POLL_TEXT]: expect.any(String) }), 'transaction');
+  });
+
+  it('loads every relation page before deciding that an encrypted poll is closed', async () => {
+    const { controller, client, root, vote, end } = fixture(true);
+    client.relations.mockResolvedValueOnce({ originalEvent: root, events: [vote], nextBatch: 'more' });
+    client.relations.mockResolvedValueOnce({ originalEvent: root, events: [end], nextBatch: null });
+    await expect(controller.loadPoll('!room:test', '$poll')).resolves.toMatchObject({
+      results: { counts: { a: 1, b: 0 }, closed: true, incomplete: false },
+    });
+    expect(client.relations).toHaveBeenNthCalledWith(1, '!room:test', '$poll', 'm.reference', undefined, { from: undefined });
+    expect(client.relations).toHaveBeenNthCalledWith(2, '!room:test', '$poll', 'm.reference', undefined, { from: 'more' });
+    expect(client.decryptEventIfNeeded).toHaveBeenCalledWith(vote);
+    expect(client.decryptEventIfNeeded).toHaveBeenCalledWith(end);
   });
 });
