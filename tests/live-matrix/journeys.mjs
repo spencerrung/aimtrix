@@ -1755,6 +1755,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await until(() => elementPoll.getByRole('radio', { name: new RegExp(first) }).isDisabled(), 'element-poll-ended', 45000);
     });
     const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;
+    let locationEventId;
     await check('encrypted-location-interop', async () => {
       const locationWireStart = wire.length;
       await safeAction('location-open-control', () => openTool('Share a location'));
@@ -1767,20 +1768,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await safeAction('location-submit', () => locationDialog.getByRole('button', { name: 'Share this location' }).click());
       const receivedLocation = bob.locator('.message-location').filter({ hasText: location });
       await safeAction('location-render', () => receivedLocation.waitFor({ timeout: 45000 }));
+      locationEventId = await bob.locator('.timeline-message').filter({ has: receivedLocation }).getAttribute('data-event-id');
+      invariant(locationEventId?.startsWith('$'), 'location-decrypted');
       const locationWire = wire.slice(locationWireStart);
       invariant((await receivedLocation.textContent()).includes('40.7128, -74.006') &&
         (await receivedLocation.getByRole('link', { name: `Open ${location} in your map application` }).getAttribute('href')) === 'geo:40.7128,-74.006' &&
         locationWire.length > 0 && locationWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(location)), 'location-decrypted');
     });
     if (elementPeer) await check('element-ui-encrypted-location', async () => {
-      const tile = elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last();
-      const jump = elementPeer.locator('.mx_JumpToBottomButton_scrollDown');
-      await until(async () => {
-        // Voting in an older poll can leave Element's timeline detached from
-        // live messages, even though its sync has received this location.
-        if (await jump.isVisible()) await jump.click({ timeout: 1500 }).catch(() => {});
-        return tile.isVisible();
-      }, 'element-location-render', 60000);
+      // Voting in an older poll can detach Element's visible timeline. Open
+      // the exact server-accepted location event and require its decrypted UI.
+      await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(locationEventId)}`);
+      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last().isVisible(), 'element-location-render', 60000);
     });
     if (elementPeer) await check('element-ui-location-to-aimtrix', async () => {
       let stage = 'element-location-open-menu';
