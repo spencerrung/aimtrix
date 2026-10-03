@@ -46,6 +46,7 @@ test.beforeEach(async ({ page }, info) => {
 });
 
 test('records a playable clip with Chromium’s real MediaRecorder', async ({ page }) => {
+  expect(await page.evaluate(() => Function.prototype.toString.call(MediaRecorder).includes('[native code]'))).toBe(true);
   await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Record a voice message' }).click();
   await page.getByRole('button', { name: 'Start recording' }).click();
