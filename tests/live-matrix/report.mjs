@@ -1,7 +1,7 @@
 import { images, invariant } from './stack.mjs';
 export const checkNames = new Set([
   'setup', 'disposable-stack', 'application-server', 'isolated-accounts',
-  'password-login-three-devices', 'encrypted-room-create-and-join', 'element-ui-encrypted-room', 'element-ui-encrypted-message',
+  'password-login-three-devices', 'encrypted-room-create-and-join', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification',
   'first-use-encrypted-direct-conversation',
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
@@ -28,6 +28,8 @@ export const failureCategories = ['strict mode violation', 'Timeout', 'not a fil
 failureCategories.push('poll-open-control', 'poll-dialog-input', 'poll-submit', 'poll-render', 'poll-vote-control', 'poll-vote-confirm', 'poll-create-decrypted', 'poll-vote-reconciled', 'poll-end-reconciled', 'location-open-control', 'location-dialog-input', 'location-submit', 'location-render', 'location-decrypted', 'voice-no-premature-upload', 'voice-encrypted-upload', 'voice-decrypted-download');
 failureCategories.push('element-encrypted-login', 'element-encrypted-room', 'element-encrypted-composer', 'element-encrypted-fill', 'element-encrypted-send', 'element-encrypted-receive', 'element-encrypted-message', 'element-poll-render', 'element-location-render', 'element-voice-render');
 failureCategories.push('element-back-at-login', 'element-left-room-route', 'element-room-not-rendered', 'element-composer-hidden', 'element-room-dialog', 'element-room-no-composer');
+failureCategories.push('element-sas-login', 'element-sas-request', 'element-sas-incoming', 'element-sas-incoming-method', 'element-sas-method', 'element-sas-emoji', 'element-sas-confirm', 'element-sas-complete');
+failureCategories.push('sso-recovery-create-room', 'sso-recovery-encryption-state', 'sso-recovery-open-room', 'sso-recovery-send-marker', 'sso-recovery-setup', 'sso-recovery-server-backup', 'sso-recovery-second-login', 'sso-recovery-old-event', 'sso-recovery-restore', 'sso-recovery-imported-keys', 'sso-recovery-decrypted-event');
 failureCategories.push('saved-open-source', 'saved-write', 'saved-own-device', 'saved-exact-context', 'saved-remove-own-device', 'saved-removal-sync', 'saved-access-loss', 'saved-remove-after-leave',
   'pin-source', 'pin-server-state', 'pin-peer-collection', 'pin-member-denied', 'pin-remove-sync',
   'search-create-peer', 'search-old-history', 'search-query', 'search-exact-context');

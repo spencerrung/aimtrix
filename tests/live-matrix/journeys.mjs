@@ -608,9 +608,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       await aliceSecond.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
     });
+    let recoveryDevice;
     await check('password-two-device-recovery-setup-and-restore', async () => {
       let stage = 'recovery-open-first-settings';
-      let recoveryDevice;
       try {
       await alice.bringToFront();
       await alice.getByRole('button', { name: 'Open settings', exact: true }).click();
@@ -699,10 +699,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         throw new Error(stage);
       }
     });
+    let verifyPeer;
     await check('incoming-two-device-sas-verification', async () => {
       let stage = 'verification-new-device';
       try {
-        const verifyPeer = await newPage();
+        verifyPeer = await newPage();
         await login(verifyPeer, stack.origins.app, 'alice', stack.credentials.password);
         const verifySession = await session(verifyPeer);
         invariant(verifySession?.deviceId && verifySession.deviceId !== aliceSession.deviceId, 'verification-distinct-device');
@@ -741,6 +742,59 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await incomingChallenge.waitFor({ state: 'hidden', timeout: 45000 });
         await settings.getByText('Device verified.', { exact: true }).waitFor({ timeout: 45000 });
         await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
+    });
+    if (elementPeer) await check('element-ui-incoming-sas-verification', async () => {
+      let stage = 'element-sas-login';
+      try {
+        const peer = await newPage();
+        await peer.goto(`${stack.origins.element}/#/login`);
+        await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
+        await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
+        await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
+        stage = 'element-sas-request';
+        await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
+        stage = 'element-sas-incoming';
+        await alice.bringToFront();
+        let recipient;
+        await until(async () => {
+          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
+            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
+              recipient = candidate;
+              return true;
+            }
+          }
+          return false;
+        }, stage, 45000);
+        await recipient.bringToFront();
+        const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
+        stage = 'element-sas-incoming-method';
+        await incoming.getByRole('button', { name: 'Compare emoji', exact: true }).click();
+        const challenge = recipient.getByRole('dialog', { name: 'Compare incoming verification emoji', exact: true });
+        const elementEmoji = peer.locator('.mx_VerificationShowSas_emojiSas > div > div:first-child');
+        stage = 'element-sas-method';
+        const chooseEmoji = peer.getByRole('button', { name: /^(Compare using unique emoji|Verify by emoji)$/ });
+        const startEmoji = peer.locator('.mx_VerificationPanel_QRPhase_startOption').filter({ hasText: /Compare.*emoji/i })
+          .getByRole('button', { name: 'Start', exact: true });
+        await until(async () => {
+          if (await startEmoji.isVisible()) { await startEmoji.click(); return true; }
+          if (await chooseEmoji.isVisible()) { await chooseEmoji.click(); return true; }
+          return await elementEmoji.count() === 7;
+        }, stage, 45000);
+        stage = 'element-sas-emoji';
+        await until(async () => await elementEmoji.count() === 7, stage, 45000);
+        await challenge.waitFor({ timeout: 45000 });
+        const ownEmoji = await challenge.locator('.incoming-verification__emoji b').allTextContents();
+        invariant(ownEmoji.length === 7 && JSON.stringify(ownEmoji.map((value) => value.trim())) ===
+          JSON.stringify((await elementEmoji.allTextContents()).map((value) => value.trim())), stage);
+        stage = 'element-sas-confirm';
+        await challenge.getByRole('button', { name: 'They match', exact: true }).click();
+        const elementDialog = peer.locator('.mx_InfoDialog');
+        await elementDialog.getByRole('button', { name: 'They match', exact: true }).click();
+        stage = 'element-sas-complete';
+        await challenge.waitFor({ state: 'hidden', timeout: 45000 });
+        await elementDialog.getByRole('button', { name: 'Got it', exact: true }).click();
+        await until(() => incoming.isHidden(), stage, 45000);
       } catch { throw new Error(stage); }
     });
     if (elementPeer) await check('element-ui-encrypted-message', async () => {
@@ -2135,6 +2189,32 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant((await api('/_matrix/client/v3/account/whoami', { token: saved.accessToken })).user_id === saved.userId, 'sso-valid-session');
     });
     await check('standard-sso-recovery-guidance', async () => {
+      let stage = 'sso-recovery-create-room';
+      try {
+      const ssoRoomName = `SSO recovery ${randomBytes(5).toString('hex')}`;
+      const ssoMarker = `Synthetic SSO recovery event ${randomBytes(8).toString('hex')}`;
+      await sso.getByRole('button', { name: 'Join or create room' }).click();
+      const createDialog = sso.getByRole('dialog', { name: 'Add a conversation' });
+      await createDialog.getByRole('button', { name: 'Create room', exact: true }).first().click();
+      await createDialog.getByLabel('Room name', { exact: true }).fill(ssoRoomName);
+      await createDialog.getByLabel('Encrypt this room').check();
+      const creation = sso.waitForResponse((response) => new URL(response.url()).pathname.endsWith('/createRoom') && response.request().method() === 'POST');
+      await createDialog.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
+      const created = await creation;
+      invariant(created.ok(), 'sso-recovery-room-created');
+      const ssoRoomId = (await created.json()).room_id;
+      stage = 'sso-recovery-encryption-state';
+      invariant((await api(`/_matrix/client/v3/rooms/${encode(ssoRoomId)}/state/m.room.encryption`, { token: (await session(sso)).accessToken })).algorithm === 'm.megolm.v1.aes-sha2', 'sso-recovery-room-encrypted');
+      stage = 'sso-recovery-open-room';
+      await createDialog.waitFor({ state: 'hidden' });
+      await openRoom(sso, ssoRoomName);
+      stage = 'sso-recovery-send-marker';
+      await sso.getByRole('textbox', { name: `Message ${ssoRoomName}`, exact: true }).fill(ssoMarker);
+      await sso.getByRole('button', { name: 'Send message', exact: true }).click();
+      const sentMarker = sso.locator('.timeline-message').filter({ hasText: ssoMarker });
+      await until(async () => (await sentMarker.getAttribute('data-event-id'))?.startsWith('$'), 'sso-recovery-marker-accepted');
+      const ssoMarkerId = await sentMarker.getAttribute('data-event-id');
+      stage = 'sso-recovery-setup';
       await sso.getByRole('button', { name: 'Open settings', exact: true }).click();
       const settings = sso.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
@@ -2149,8 +2229,17 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
         return;
       }
+      stage = 'sso-recovery-second-login';
       const key = await output.textContent();
       invariant(Boolean(key), 'sso-recovery-key-generated');
+      stage = 'sso-recovery-server-backup';
+      await until(async () => {
+        try {
+          const info = await api('/_matrix/client/v3/room_keys/version', { token: (await session(sso)).accessToken });
+          return Boolean(info.version && info.count > 0);
+        } catch { return false; }
+      }, stage, 60000);
+      stage = 'sso-recovery-second-login';
       await settings.getByRole('button', { name: 'I saved the recovery key', exact: true }).click();
       await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
       const ssoSecond = await newPage();
@@ -2161,14 +2250,26 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await ssoSecond.getByRole('button', { name: 'Login', exact: true }).click();
       await ssoSecond.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
       invariant((await session(ssoSecond))?.deviceId !== (await session(sso))?.deviceId, 'sso-recovery-distinct-device');
+      stage = 'sso-recovery-old-event';
+      await openRoom(ssoSecond, ssoRoomName);
+      const oldEvent = ssoSecond.locator(`.timeline-message[data-event-id="${ssoMarkerId}"]`);
+      await oldEvent.waitFor({ timeout: 45000 });
+      invariant(!await oldEvent.getByText(ssoMarker, { exact: true }).count(), 'sso-recovery-old-event-unavailable');
+      stage = 'sso-recovery-restore';
       await ssoSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
       const secondSettings = ssoSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await secondSettings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
       await secondSettings.getByLabel('Existing recovery key', { exact: true }).fill(key);
       await secondSettings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
-      await secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 60000 });
+      const restored = secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' });
+      await restored.waitFor({ timeout: 60000 });
+      stage = 'sso-recovery-imported-keys';
+      invariant(Number((await restored.textContent())?.match(/Imported (\d+) room keys/)?.[1] ?? 0) > 0, stage);
       invariant(await secondSettings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'sso-recovery-key-cleared');
       await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      stage = 'sso-recovery-decrypted-event';
+      await oldEvent.getByText(ssoMarker, { exact: true }).waitFor({ timeout: 45000 });
+      } catch { throw new Error(stage); }
     });
     const assertExpired = async (page) => {
       await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });
