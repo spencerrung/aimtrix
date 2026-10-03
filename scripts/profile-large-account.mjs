@@ -103,7 +103,12 @@ try {
     domNodes: document.querySelectorAll('*').length,
     longTasks: window.__profileLongTasks.length,
     longTaskTotalMs: Math.round(window.__profileLongTasks.reduce((sum, duration) => sum + duration, 0)),
+    snapshotsCreated: window.largeAccountSnapshotRefs.length,
+    snapshotsLive: window.largeAccountSnapshotRefs.filter((reference) => reference.deref()).length,
   }));
+  if (rooms === 10_000 && cycles >= 100 && browserMeasurements.snapshotsLive > 8) {
+    throw new Error(`Old large-account snapshots retained after collection: ${browserMeasurements.snapshotsLive}`);
+  }
   console.log(JSON.stringify({
     date: new Date().toISOString(),
     workload: { rooms, selectedTimelineEvents: 250, hiddenPublishCycles: cycles, visiblePublishCycles: cycles, largeSpace, synthetic: true },

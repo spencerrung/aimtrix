@@ -13,7 +13,6 @@ const percentile = (values, percent) => {
 export async function runLargeAccountProfile({ browser, stack, check, metrics }) {
   const roomCount = Number(process.env.AIMTRIX_LIVE_ROOM_COUNT ?? 1000);
   const sustained = process.env.AIMTRIX_LIVE_SUSTAINED === '1';
-  const heapDiagnostic = process.env.AIMTRIX_LIVE_HEAP_DIAGNOSTIC === '1';
   invariant([100, 1000, 10000].includes(roomCount), 'large-account-room-count');
   const readinessLimitMs = roomCount === 10000 ? 600000 : 180000;
   const api = matrixApi(stack);
@@ -61,12 +60,6 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
   try {
     const permitted = new Set(Object.values(stack.origins));
     await context.route('**/*', (route) => permitted.has(new URL(route.request().url()).origin) ? route.continue() : route.abort());
-    if (heapDiagnostic) await context.addInitScript(() => {
-      globalThis.__aimtrixSnapshotRefs = [];
-      globalThis.__aimtrixCaptureSnapshot = (snapshot) => {
-        if (snapshot.status === 'ready') globalThis.__aimtrixSnapshotRefs.push(new WeakRef(snapshot.workspace));
-      };
-    });
     const page = await context.newPage();
     page.setDefaultTimeout(20000);
     page.setDefaultNavigationTimeout(30000);
@@ -143,19 +136,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         await message('Synthetic large-account history 349').waitFor({ timeout: 45000 });
       });
       await check('large-account-sustained-delivery', async () => {
-        if (heapDiagnostic) await page.evaluate(() => { globalThis.__aimtrixSnapshotRefs.length = 0; });
-        const snapshotRefs = async (at) => {
-          if (!heapDiagnostic) return;
-          const counts = await page.evaluate(() => ({
-            created: globalThis.__aimtrixSnapshotRefs.length,
-            live: globalThis.__aimtrixSnapshotRefs.filter((reference) => reference.deref()).length,
-          }));
-          metrics[`largeAccountSnapshotsCreatedAt${at}`] = counts.created;
-          metrics[`largeAccountSnapshotsLiveAt${at}`] = counts.live;
-        };
         const startingRenderer = await rendererMetrics();
-        await snapshotRefs(0);
-        if (heapDiagnostic) await cdp.send('HeapProfiler.startSampling', { samplingInterval: 32768 });
         const heapStart = startingRenderer.JSHeapUsedSize;
         if (heapStart !== undefined) metrics.largeAccountIncrementalHeapAt0MiB = Math.round(heapStart / 2 ** 20);
         if (startingRenderer.Nodes !== undefined) metrics.largeAccountIncrementalNodesAt0 = startingRenderer.Nodes;
@@ -179,7 +160,6 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
           if (index === 99 || index === 199) {
             const sample = await rendererMetrics();
             if (sample.JSHeapUsedSize !== undefined) metrics[`largeAccountIncrementalHeapAt${index + 1}MiB`] = Math.round(sample.JSHeapUsedSize / 2 ** 20);
-            await snapshotRefs(index + 1);
           }
         }
         await pause(Math.max(0, 600000 - (Date.now() - started)));
@@ -188,31 +168,12 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         metrics.largeAccountIncrementalMaxMs = Math.round(Math.max(...latencies));
         metrics.largeAccountSyncResponses = syncResponses;
         const endingRenderer = await rendererMetrics();
-        await snapshotRefs(300);
         const heapAfter = endingRenderer.JSHeapUsedSize;
         if (heapAfter !== undefined) metrics.largeAccountIncrementalHeapAt300MiB = Math.round(heapAfter / 2 ** 20);
         if (endingRenderer.Nodes !== undefined) metrics.largeAccountIncrementalNodesAt300 = endingRenderer.Nodes;
         if (endingRenderer.JSEventListeners !== undefined) metrics.largeAccountIncrementalListenersAt300 = endingRenderer.JSEventListeners;
         if (heapStart !== undefined && heapAfter !== undefined) {
           metrics.largeAccountIncrementalHeapGrowthMiB = Math.max(0, Math.round((heapAfter - heapStart) / 2 ** 20));
-        }
-        if (heapDiagnostic) {
-          const { profile } = await cdp.send('HeapProfiler.stopSampling');
-          const allocationByFrame = new Map();
-          const visit = (node) => {
-            const frame = node.callFrame;
-            const functionName = /^[A-Za-z_$][A-Za-z0-9_$]{0,80}$/.test(frame.functionName)
-              ? frame.functionName : '(anonymous)';
-            const asset = /\/assets\/([A-Za-z0-9_-]+\.js)$/.exec(frame.url)?.[1] ?? '(browser)';
-            const key = `${asset}:${functionName}:${frame.lineNumber}:${frame.columnNumber}`;
-            allocationByFrame.set(key, (allocationByFrame.get(key) ?? 0) + node.selfSize);
-            for (const child of node.children ?? []) visit(child);
-          };
-          visit(profile.head);
-          const top = [...allocationByFrame].sort((left, right) => right[1] - left[1]).slice(0, 20)
-            .map(([frame, bytes]) => ({ frame, sampledMiB: Math.round(bytes / 2 ** 20) }));
-          // Only static bundle/function identifiers and aggregate sizes; never heap contents.
-          process.stdout.write(`large-account-live-allocation-samples ${JSON.stringify(top)}\n`);
         }
         invariant(metrics.largeAccountIncrementalDurationMs >= 600000, 'large-account-sustained-duration');
       });
