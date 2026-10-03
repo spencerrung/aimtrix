@@ -2135,6 +2135,26 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant((await api('/_matrix/client/v3/account/whoami', { token: saved.accessToken })).user_id === saved.userId, 'sso-valid-session');
     });
     await check('standard-sso-recovery-guidance', async () => {
+      const ssoRoomName = `SSO recovery ${randomBytes(5).toString('hex')}`;
+      const ssoMarker = `Synthetic SSO recovery event ${randomBytes(8).toString('hex')}`;
+      await sso.getByRole('button', { name: 'Join or create room' }).click();
+      const createDialog = sso.getByRole('dialog', { name: 'Add a conversation' });
+      await createDialog.getByRole('button', { name: 'Create room', exact: true }).first().click();
+      await createDialog.getByLabel('Room name', { exact: true }).fill(ssoRoomName);
+      await createDialog.getByLabel('Encrypt this room').check();
+      const creation = sso.waitForResponse((response) => new URL(response.url()).pathname.endsWith('/createRoom') && response.request().method() === 'POST');
+      await createDialog.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
+      const created = await creation;
+      invariant(created.ok(), 'sso-recovery-room-created');
+      const ssoRoomId = (await created.json()).room_id;
+      invariant((await api(`/_matrix/client/v3/rooms/${encode(ssoRoomId)}/state/m.room.encryption`, { token: (await session(sso)).accessToken })).algorithm === 'm.megolm.v1.aes-sha2', 'sso-recovery-room-encrypted');
+      await createDialog.waitFor({ state: 'hidden' });
+      await openRoom(sso, ssoRoomName);
+      await sso.getByRole('textbox', { name: `Message ${ssoRoomName}`, exact: true }).fill(ssoMarker);
+      await sso.getByRole('button', { name: 'Send message', exact: true }).click();
+      const sentMarker = sso.locator('.timeline-message').filter({ hasText: ssoMarker });
+      await until(async () => (await sentMarker.getAttribute('data-event-id'))?.startsWith('$'), 'sso-recovery-marker-accepted');
+      const ssoMarkerId = await sentMarker.getAttribute('data-event-id');
       await sso.getByRole('button', { name: 'Open settings', exact: true }).click();
       const settings = sso.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await settings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
@@ -2161,6 +2181,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await ssoSecond.getByRole('button', { name: 'Login', exact: true }).click();
       await ssoSecond.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
       invariant((await session(ssoSecond))?.deviceId !== (await session(sso))?.deviceId, 'sso-recovery-distinct-device');
+      await openRoom(ssoSecond, ssoRoomName);
+      const oldEvent = ssoSecond.locator(`.timeline-message[data-event-id="${ssoMarkerId}"]`);
+      await oldEvent.waitFor({ timeout: 45000 });
+      invariant(!await oldEvent.getByText(ssoMarker, { exact: true }).count(), 'sso-recovery-old-event-unavailable');
       await ssoSecond.getByRole('button', { name: 'Open settings', exact: true }).click();
       const secondSettings = ssoSecond.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
       await secondSettings.getByRole('button', { name: 'Matrix & security', exact: true }).click();
@@ -2169,6 +2193,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await secondSettings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 60000 });
       invariant(await secondSettings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', 'sso-recovery-key-cleared');
       await secondSettings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      await oldEvent.getByText(ssoMarker, { exact: true }).waitFor({ timeout: 45000 });
     });
     const assertExpired = async (page) => {
       await page.getByRole('heading', { name: 'Your Matrix session expired', exact: true }).waitFor({ timeout: 60000 });
