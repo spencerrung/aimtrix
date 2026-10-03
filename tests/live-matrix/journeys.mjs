@@ -1773,7 +1773,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         locationWire.length > 0 && locationWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(location)), 'location-decrypted');
     });
     if (elementPeer) await check('element-ui-encrypted-location', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last().isVisible(), 'element-location-render', 60000);
+      const tile = elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last();
+      const jump = elementPeer.locator('.mx_JumpToBottomButton_scrollDown');
+      await until(async () => {
+        // Voting in an older poll can leave Element's timeline detached from
+        // live messages, even though its sync has received this location.
+        if (await jump.isVisible()) await jump.click({ timeout: 1500 }).catch(() => {});
+        return tile.isVisible();
+      }, 'element-location-render', 60000);
     });
     if (elementPeer) await check('element-ui-location-to-aimtrix', async () => {
       let stage = 'element-location-open-menu';
