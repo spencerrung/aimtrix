@@ -1813,6 +1813,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(/^geo:[+-]?[\d.]+,[+-]?[\d.]+$/.test(await card.getByRole('link', { name: /Open .* in your map application/ }).getAttribute('href') || ''), stage);
       } catch { throw new Error(stage); }
     });
+    let voiceEventId;
     await check('encrypted-voice-interop', async () => {
       const bytes = voiceBytes;
       const uploadStart = uploads.length;
@@ -1822,7 +1823,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       invariant(uploads.length === uploadStart && wire.length === voiceWireStart, 'voice-no-premature-upload');
       await voiceDialog.getByRole('button', { name: 'Start recording' }).click();
       await voiceDialog.getByRole('button', { name: 'Stop recording' }).waitFor();
-      await alice.waitForTimeout(350);
+      await alice.waitForTimeout(3050);
       await voiceDialog.getByRole('button', { name: 'Stop recording' }).click();
       await voiceDialog.getByLabel('Voice message preview').waitFor();
       invariant(uploads.length === uploadStart && wire.length === voiceWireStart, 'voice-no-premature-upload');
@@ -1830,6 +1831,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await until(() => uploads.length > uploadStart, 'voice-encrypted-upload');
       const audio = bob.locator('.message-audio-card').filter({ hasText: 'Voice message' }).last();
       await audio.waitFor({ timeout: 45000 });
+      voiceEventId = await bob.locator('.timeline-message').filter({ has: audio }).getAttribute('data-event-id');
+      invariant(voiceEventId?.startsWith('$'), 'voice-decrypted-download');
       const link = audio.getByRole('link', { name: 'Download audio' });
       await until(async () => (await link.getAttribute('href'))?.startsWith('blob:'), 'voice-decrypted-download');
       const decrypted = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
@@ -1841,6 +1844,23 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     if (elementPeer) await check('element-ui-encrypted-voice', async () => {
       await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: 'Voice message' }).last().isVisible(), 'element-voice-render', 60000);
+    });
+    if (elementPeer) await check('element-ui-encrypted-voice-playback', async () => {
+      let stage = 'element-voice-open-event';
+      try {
+        await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(voiceEventId)}`);
+        const tile = elementPeer.locator(`.mx_EventTile[data-scroll-tokens=${JSON.stringify(voiceEventId)}]`);
+        const player = tile.locator('.mx_MVoiceMessageBody');
+        stage = 'element-voice-player-ready';
+        const play = player.getByRole('button', { name: 'Play', exact: true });
+        await play.waitFor({ state: 'visible', timeout: 60000 });
+        invariant(await play.isEnabled(), stage);
+        stage = 'element-voice-playing';
+        await play.click();
+        await player.getByRole('button', { name: 'Pause', exact: true }).waitFor({ timeout: 10000 });
+        stage = 'element-voice-playback-complete';
+        await player.getByRole('button', { name: 'Play', exact: true }).waitFor({ timeout: 10000 });
+      } catch { throw new Error(stage); }
     });
     await check('encrypted-staged-attachments-and-retry', async () => {
       const files = ['staged-alpha.bin', 'staged-beta.bin'].map((name) => ({ name, mimeType: 'application/octet-stream', buffer: randomBytes(64) }));
@@ -2342,10 +2362,44 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
           await aimtrixPoll.getByRole('button', { name: 'Refresh results' }).click();
           return (await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '1';
         }, stage);
+        stage = 'plain-poll-invalid-replacement';
+        const pollId = await plainAlice.locator('.timeline-message').filter({ has: aimtrixPoll }).getAttribute('data-event-id');
+        const root = await api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/event/${encode(pollId)}`, { token: aliceSession.accessToken });
+        const answerId = root.content?.['org.matrix.msc3381.poll.start']?.answers?.[0]?.id;
+        invariant(pollId?.startsWith('$') && typeof answerId === 'string', stage);
+        const sendResponse = (answers) => api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/send/org.matrix.msc3381.poll.response/${randomBytes(8).toString('hex')}`, {
+          token: accounts.bob.access_token, method: 'PUT', body: {
+            'm.relates_to': { rel_type: 'm.reference', event_id: pollId },
+            'org.matrix.msc3381.poll.response': { answers },
+          },
+        });
+        await sendResponse(['not-a-poll-option']);
+        await until(async () => {
+          await aimtrixPoll.getByRole('button', { name: 'Refresh results' }).click();
+          return (await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '0';
+        }, stage);
         stage = 'plain-poll-end';
         await aimtrixPoll.getByRole('button', { name: 'End poll' }).click();
         await plainAlice.getByRole('dialog', { name: 'End this poll?' }).getByRole('button', { name: 'End poll' }).click();
         await until(() => elementPoll.getByRole('radio', { name: new RegExp(option) }).isDisabled(), stage, 45000);
+        stage = 'plain-poll-late-vote';
+        const relationPath = `/_matrix/client/v1/rooms/${encode(plainRoomId)}/relations/${encode(pollId)}/m.reference`;
+        const beforeLate = await api(relationPath, { token: aliceSession.accessToken });
+        const endEvent = beforeLate.chunk?.find((event) => event.type === 'org.matrix.msc3381.poll.end');
+        invariant(Number.isFinite(endEvent?.origin_server_ts), stage);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+        const late = await sendResponse([answerId]);
+        const relations = await api(relationPath, { token: aliceSession.accessToken });
+        const lateEvent = relations.chunk?.find((event) => event.event_id === late.event_id);
+        invariant(lateEvent?.origin_server_ts > endEvent.origin_server_ts, stage);
+        const refresh = aimtrixPoll.getByRole('button', { name: 'Refresh results' });
+        await Promise.all([
+          plainAlice.waitForResponse((response) => response.url().includes(`/rooms/${encode(plainRoomId)}/relations/${encode(pollId)}/m.reference`) && response.ok(), { timeout: 45000 }),
+          refresh.click(),
+        ]);
+        await until(() => refresh.isEnabled(), stage);
+        invariant((await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '0' &&
+          (await aimtrixPoll.textContent()).includes('Poll ended'), stage);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {
