@@ -81,6 +81,8 @@ Use a distinct owner for concurrent runs. Cleanup never invokes Docker prune, re
 
 SAS/incoming verification, key-backup restore, withheld keys, federation, delegated OIDC, Firefox/WebKit, physical/mobile/native shells, and large-account performance remain separate work. This baseline does not close their TODO items. Optional TURN/LiveKit and push/APNs/FCM infrastructure should use separate services, credentials, and jobs under #169/#176, so unavailable provider infrastructure cannot silently skip the baseline Matrix gate.
 
+The separate `matrixrtc-live-peer` job provisions disposable Synapse and a pinned LiveKit SFU, then joins two Chromium clients to an encrypted Matrix room with generated accounts and fake microphone media. Its short-lived test authorizer validates each real Matrix OpenID token and signs a LiveKit JWT with a generated key. The job checks encrypted media subscription, membership reconciliation, and capture cleanup, and writes only an allowlisted `group-rtc.json` result. It injects the MSC4143 transport advertisement because the pinned Synapse image does not provide that optional endpoint. This proves the media and membership path against real services, while leaving real JWT-service compatibility, TURN-only routing, federation, and newer homeserver-mediated MSC4195 authorization as distinct live boundaries.
+
 ## Validation record
 
 September 13, 2026 · Linux amd64 host · Node 22.23.2 · Chromium 149.0.7827.55 · Synapse 1.160.0 / Dex 2.45.1. Local tests exercised the built application and this branch's working-tree harness; CI summaries record their checkout revision.
