@@ -93,11 +93,16 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         await createDialog.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
         const created = await creation;
         invariant(created.ok(), 'delegated-recovery-room-created');
-        stage = 'delegated-recovery-room-encryption';
+        stage = 'delegated-recovery-room-response';
         const roomId = (await created.json()).room_id;
+        invariant(typeof roomId === 'string' && roomId.startsWith('!'), stage);
+        stage = 'delegated-recovery-session-read';
         const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
-        const encryption = await fetch(`${stored.baseUrl}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
+        invariant(stored?.accessToken, stage);
+        stage = 'delegated-recovery-state-request';
+        const encryption = await fetch(`${stack.origins.synapse}/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.encryption`,
           { headers: { Authorization: `Bearer ${stored.accessToken}` } });
+        stage = 'delegated-recovery-room-encryption';
         invariant(encryption.ok() && (await encryption.json()).algorithm === 'm.megolm.v1.aes-sha2',
           'delegated-recovery-room-encrypted');
         stage = 'delegated-recovery-room-open';

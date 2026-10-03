@@ -68,6 +68,7 @@ failureCategories.push('delegated-recovery-room-created', 'delegated-recovery-ro
   'delegated-recovery-key-generated', 'delegated-recovery-server-backup', 'delegated-recovery-distinct-device',
   'delegated-recovery-old-event-unavailable', 'delegated-recovery-imported-keys', 'delegated-recovery-key-cleared');
 failureCategories.push('delegated-recovery-open-create', 'delegated-recovery-create-form', 'delegated-recovery-room-submit',
+  'delegated-recovery-room-response', 'delegated-recovery-session-read', 'delegated-recovery-state-request',
   'delegated-recovery-room-encryption', 'delegated-recovery-room-open', 'delegated-recovery-send',
   'delegated-recovery-settings', 'delegated-recovery-setup-action', 'delegated-recovery-backup',
   'delegated-recovery-dismiss-key', 'delegated-recovery-close-settings');
