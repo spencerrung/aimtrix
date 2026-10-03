@@ -836,8 +836,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const startEmoji = peer.locator('.mx_VerificationPanel_QRPhase_startOption').filter({ hasText: /Compare.*emoji/i })
           .getByRole('button', { name: 'Start', exact: true });
         await until(async () => {
-          if (await startEmoji.isVisible()) { await startEmoji.click(); return true; }
-          if (await chooseEmoji.isVisible()) { await chooseEmoji.click(); return true; }
+          for (const control of [startEmoji, chooseEmoji]) {
+            if (!await control.isVisible()) continue;
+            try { await control.click({ timeout: 5000 }); return true; }
+            catch { return false; } // Element may replace the method picker between visibility and click.
+          }
           return await elementEmoji.count() === 7;
         }, stage, 45000);
         stage = 'element-sas-emoji';
