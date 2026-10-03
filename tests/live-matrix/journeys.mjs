@@ -1818,6 +1818,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         ]);
         invariant(response.ok() && !response.request().postData()?.includes('geo:'), stage);
         const eventId = (await response.json()).event_id;
+        // Resolve the exact event through Aimtrix's context path. A long
+        // Element journey can leave Alice's visible timeline behind the live
+        // edge even though the server accepted the event.
+        stage = 'element-location-open-context';
+        await openMatrixEvent(alice, roomId, eventId);
         stage = 'element-location-received';
         const card = alice.locator(`[data-event-id=${JSON.stringify(eventId)}] .message-location`);
         await card.waitFor({ timeout: 45000 });
