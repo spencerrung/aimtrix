@@ -30,6 +30,8 @@ export class GroupCallEngine {
   private room?: LiveKitRoom;
   private rtcSession?: MatrixRTCSession;
   private worker?: Worker;
+  private readonly receivedMediaKeys = new Set<string>();
+  private readonly missingKeyTimers = new Map<string, number>();
   private keyListener?: (bytes: Uint8Array<ArrayBuffer>, index: number, member: { userId: string; deviceId: string }, backendIdentity: string) => void;
   private state: GroupCallSummary;
   private disposed = false;
@@ -85,11 +87,25 @@ export class GroupCallEngine {
     this.abort.abort();
     void this.release();
   };
-  private readonly onEncryptionError = (): void => {
-    if (this.disposed) return;
+  private failEncryption(): void {
+    if (this.disposed || this.abort.signal.aborted) return;
     this.publish({ state: 'error', error: 'Call media encryption failed. Leave this call and try again.' });
     this.abort.abort();
     void this.release();
+  }
+  private readonly onEncryptionError = (error?: Error, participant?: Participant): void => {
+    const identity = participant?.identity;
+    // LiveKit can receive an encrypted remote frame before the Matrix to-device
+    // key arrives. Keep the remote track encrypted while that key is in flight.
+    if (error?.message.startsWith('MissingKey:') && identity && identity !== this.room?.localParticipant.identity) {
+      if (this.receivedMediaKeys.has(identity) || this.missingKeyTimers.has(identity)) return;
+      this.missingKeyTimers.set(identity, window.setTimeout(() => {
+        this.missingKeyTimers.delete(identity);
+        if (!this.receivedMediaKeys.has(identity)) this.failEncryption();
+      }, 15_000));
+      return;
+    }
+    this.failEncryption();
   };
   private readonly onMembershipError = (): void => {
     if (this.disposed || this.abort.signal.aborted) return;
@@ -141,8 +157,11 @@ export class GroupCallEngine {
       const ownKey = new Promise<void>((resolve) => { ownKeyReady = resolve; });
       const keyChanged = (bytes: Uint8Array<ArrayBuffer>, index: number, member: { userId: string; deviceId: string }, backendIdentity: string): void => {
         void keys.receive(bytes, index, backendIdentity).then(() => {
+          this.receivedMediaKeys.add(backendIdentity);
+          window.clearTimeout(this.missingKeyTimers.get(backendIdentity));
+          this.missingKeyTimers.delete(backendIdentity);
           if (member.userId === userId && member.deviceId === deviceId) ownKeyReady();
-        }).catch(() => this.onEncryptionError());
+        }).catch(() => this.failEncryption());
       };
       this.keyListener = keyChanged;
       session.on(MatrixRTCSessionEvent.EncryptionKeyChanged, keyChanged);
@@ -249,6 +268,9 @@ export class GroupCallEngine {
   private release(): Promise<void> { return this.releasing ??= this.releaseOnce(); }
 
   private async releaseOnce(): Promise<void> {
+    for (const timer of this.missingKeyTimers.values()) window.clearTimeout(timer);
+    this.missingKeyTimers.clear();
+    this.receivedMediaKeys.clear();
     const session = this.rtcSession;
     if (session && this.keyListener) session.off(MatrixRTCSessionEvent.EncryptionKeyChanged, this.keyListener);
     session?.off(MatrixRTCSessionEvent.MembershipManagerError, this.onMembershipError);

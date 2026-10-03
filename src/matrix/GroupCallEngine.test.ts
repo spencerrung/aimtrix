@@ -96,6 +96,20 @@ describe('group call media lifecycle', () => {
     await expect(engine.setMicrophoneMuted(false)).rejects.toThrow('unavailable');
   });
 
+  it('keeps encrypted remote media joined while its Matrix key is in flight', async () => {
+    vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
+    mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
+    mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
+    const { engine, session } = fixture();
+    await engine.join(false, { microphoneId: '', cameraId: '' }, false);
+    mocks.room?.emit('encryption-error', new Error('MissingKey: remote key pending'), { identity: '@bob:example.test:DEVICE' });
+    expect(engine.summary.state).toBe('connected');
+    session.emit(MatrixRTCSessionEvent.EncryptionKeyChanged, new Uint8Array(32), 0, { userId: '@bob:example.test', deviceId: 'DEVICE' }, '@bob:example.test:DEVICE');
+    await vi.waitFor(() => expect(mocks.events.filter((event) => event === 'key-import')).toHaveLength(2));
+    expect(engine.summary.state).toBe('connected');
+    await engine.leave();
+  });
+
   it('waits for the encryption worker acknowledgment before opening the microphone', async () => {
     vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
     mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
