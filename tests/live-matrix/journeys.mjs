@@ -84,8 +84,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     for (const name of ['alice', 'bob', 'charlie']) accounts[name] = await register(api, stack, name);
   });
   const contexts = [];
-  const newPage = async () => {
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block' });
+  const newPage = async ({ element = false } = {}) => {
+    // Element's authenticated-media download path uses its service worker to
+    // rewrite legacy MXC URLs and attach the session token. Keep Aimtrix's
+    // isolated contexts worker-free while exercising Element as deployed.
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: element ? 'allow' : 'block' });
     contexts.push(context);
     // A bad default/discovery target must fail locally, never contact a real account service.
     const permitted = new Set(Object.values(stack.origins));
@@ -585,7 +588,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (stack.origins.element) await check('element-ui-encrypted-room', async () => {
       let stage = 'element-encrypted-login';
       try {
-        elementPeer = await newPage();
+        elementPeer = await newPage({ element: true });
         await elementPeer.goto(`${stack.origins.element}/#/login`);
         await elementPeer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.bob.user_id);
         await elementPeer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -790,7 +793,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPeer) await check('element-ui-incoming-sas-verification', async () => {
       let stage = 'element-sas-login';
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -844,7 +847,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       let stage = 'element-qr-login';
       let recipient;
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -890,7 +893,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPeer) await check('element-ui-aimtrix-declines-verification', async () => {
       let stage = 'element-cancel-login';
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -919,7 +922,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     if (elementPeer) await check('element-ui-withdraws-verification', async () => {
       let stage = 'element-withdraw-login';
       try {
-        const peer = await newPage();
+        const peer = await newPage({ element: true });
         await peer.goto(`${stack.origins.element}/#/login`);
         await peer.getByRole('textbox', { name: 'Username', exact: true }).fill(accounts.alice.user_id);
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
@@ -1849,8 +1852,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: 'Voice message' }).last().isVisible(), 'element-voice-render', 60000);
     });
     if (elementPeer) await check('element-ui-encrypted-voice-playback', async () => {
-      let stage = 'element-voice-open-event';
+      let stage = 'element-voice-worker-ready';
       try {
+        await until(() => elementPeer.evaluate(() => Boolean(navigator.serviceWorker?.controller)), stage, 30000);
+        stage = 'element-voice-open-event';
         await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(voiceEventId)}`);
         const tile = elementPeer.locator(`.mx_EventTile[data-scroll-tokens=${JSON.stringify(voiceEventId)}]`);
         stage = 'element-voice-tile';

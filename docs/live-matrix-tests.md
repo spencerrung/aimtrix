@@ -22,6 +22,8 @@ Each run creates a unique Compose project, generated credentials, two fresh serv
 
 Ports are allocated on `127.0.0.1`; startup fails if another process claims an allocated port. Tests do not reuse an existing server. Browser requests are restricted to the run's app, Synapse, and Dex origins. Docker images must be pulled from GHCR, but no Matrix federation listener is enabled and the federation domain allowlist is empty. The two services share a unique bridge network; the bridge is not an outbound firewall. Compose's internal-network mode is not used because Docker 29 suppressed its published host ports in local testing.
 
+The optional Element interoperability journey also permits its local Element origin. Its browser contexts allow Element's service worker, which authenticates Matrix media downloads; Aimtrix contexts keep service workers blocked in this harness. The same disposable-origin route applies to Element's worker-owned network requests.
+
 `AIMTRIX_LIVE_UID=1001 npm run test:matrix` exercises a different non-root service UID. Configuration lives in a readable child directory under a host-private `0700` temporary parent. Only that child is mounted read-only into the containers, so service readability does not depend on the host UID. Service data is held in UID-owned tmpfs. Read-only root filesystems, dropped capabilities, `no-new-privileges`, and discarded Docker logs are checked at runtime. The short-lived password-hashing helper is also unprivileged, has no network, and receives its password on stdin.
 
 ## What each journey proves
