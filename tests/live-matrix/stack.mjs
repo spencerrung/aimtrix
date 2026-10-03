@@ -119,12 +119,16 @@ export async function createStack({ elementUi = false, syncResponseCache = false
     if (elementUi) {
       await write('element.json', {
         default_server_config: { 'm.homeserver': { base_url: origins.synapse, server_name: 'aimtrix.test' } },
+        map_style_url: `${origins.element}/test-map-style.json`,
         disable_custom_urls: true, disable_guests: true, disable_3pid_login: true,
         brand: 'Element', force_verification: false, default_federate: false,
         integrations_ui_url: '', integrations_rest_url: '', integrations_widgets_urls: [],
         room_directory: { servers: [] }, element_call: { disable: true },
         setting_defaults: { 'analyticsOptIn': false },
       });
+      // A blank local style lets Element's real pin picker run without sending
+      // coordinates or tile requests to a public provider.
+      await write('element-map-style.json', { version: 8, sources: {}, layers: [] });
       // Override only serving configuration, never Element's built application.
       const target = join(configDirectory, 'element-nginx.conf');
       await writeFile(target, `pid /tmp/element.pid;
@@ -146,6 +150,7 @@ http {
   add_header X-Content-Type-Options nosniff always;
   add_header Referrer-Policy no-referrer always;
   location = /config.json { alias /config/element.json; add_header Cache-Control no-store; }
+  location = /test-map-style.json { alias /config/element-map-style.json; add_header Cache-Control no-store; }
   location / { try_files $uri $uri/ =404; }
  }
 }

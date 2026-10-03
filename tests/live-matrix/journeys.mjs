@@ -538,7 +538,10 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
             throw new Error(stage);
           }
           stage = 'upgrade-open-replacement';
-          await admin.getByRole('button', { name: 'Open replacement room' }).click();
+          // Sync may select the replacement and close the old-room controls
+          // between the check above and this click. Either path must land in
+          // the replacement; the assertion below distinguishes a real failure.
+          await admin.getByRole('button', { name: 'Open replacement room' }).click({ timeout: 5000 }).catch(() => {});
         }
         try { await until(async () => await alice.locator('main.conversation').getAttribute('data-room-id') === replacementId, stage, 5000); }
         catch {
@@ -1752,6 +1755,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await until(() => elementPoll.getByRole('radio', { name: new RegExp(first) }).isDisabled(), 'element-poll-ended', 45000);
     });
     const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;
+    let locationEventId;
     await check('encrypted-location-interop', async () => {
       const locationWireStart = wire.length;
       await safeAction('location-open-control', () => openTool('Share a location'));
@@ -1764,13 +1768,50 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await safeAction('location-submit', () => locationDialog.getByRole('button', { name: 'Share this location' }).click());
       const receivedLocation = bob.locator('.message-location').filter({ hasText: location });
       await safeAction('location-render', () => receivedLocation.waitFor({ timeout: 45000 }));
+      locationEventId = await bob.locator('.timeline-message').filter({ has: receivedLocation }).getAttribute('data-event-id');
+      invariant(locationEventId?.startsWith('$'), 'location-decrypted');
       const locationWire = wire.slice(locationWireStart);
       invariant((await receivedLocation.textContent()).includes('40.7128, -74.006') &&
         (await receivedLocation.getByRole('link', { name: `Open ${location} in your map application` }).getAttribute('href')) === 'geo:40.7128,-74.006' &&
         locationWire.length > 0 && locationWire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(location)), 'location-decrypted');
     });
     if (elementPeer) await check('element-ui-encrypted-location', async () => {
-      await until(() => elementPeer.locator('.mx_EventTile').filter({ hasText: location }).last().isVisible(), 'element-location-render', 60000);
+      // Voting in an older poll can detach Element's visible timeline. Open
+      // the exact server-accepted location event and require its decrypted UI.
+      await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}/${encode(locationEventId)}`);
+      const tile = elementPeer.locator(`.mx_EventTile[data-scroll-tokens=${JSON.stringify(locationEventId)}]`);
+      await until(() => tile.locator('.mx_MLocationBody_map canvas').isVisible(), 'element-location-render', 60000);
+    });
+    if (elementPeer) await check('element-ui-location-to-aimtrix', async () => {
+      let stage = 'element-location-return-room';
+      try {
+        await elementPeer.goto(`${stack.origins.element}/#/room/${encode(roomId)}`);
+        await elementPeer.locator('.mx_RoomView_body .mx_BasicMessageComposer_input').waitFor({ timeout: 45000 });
+        stage = 'element-location-open-menu';
+        await elementPeer.locator('.mx_RoomView_body .mx_MessageComposer').getByRole('button', { name: 'More options', exact: true }).click();
+        stage = 'element-location-menu-item';
+        await elementPeer.getByRole('menu').getByRole('menuitem', { name: 'Location', exact: true }).click();
+        const shareMenu = elementPeer.locator('.mx_LocationShareMenu');
+        stage = 'element-location-share-menu';
+        await shareMenu.waitFor({ state: 'visible', timeout: 45000 });
+        stage = 'element-location-pin-option';
+        await shareMenu.getByRole('button', { name: 'Drop a Pin', exact: true }).click();
+        stage = 'element-location-map';
+        const map = elementPeer.locator('#mx_LocationPicker_map');
+        await map.waitFor({ state: 'visible', timeout: 45000 });
+        await map.click();
+        stage = 'element-location-send';
+        const [response] = await Promise.all([
+          elementPeer.waitForResponse((candidate) => candidate.request().method() === 'PUT' && new URL(candidate.url()).pathname.includes(`/rooms/${encode(roomId)}/send/m.room.encrypted/`), { timeout: 45000 }),
+          elementPeer.getByRole('button', { name: 'Share location', exact: true }).click(),
+        ]);
+        invariant(response.ok() && !response.request().postData()?.includes('geo:'), stage);
+        const eventId = (await response.json()).event_id;
+        stage = 'element-location-received';
+        const card = alice.locator(`[data-event-id=${JSON.stringify(eventId)}] .message-location`);
+        await card.waitFor({ timeout: 45000 });
+        invariant(/^geo:[+-]?[\d.]+,[+-]?[\d.]+$/.test(await card.getByRole('link', { name: /Open .* in your map application/ }).getAttribute('href') || ''), stage);
+      } catch { throw new Error(stage); }
     });
     await check('encrypted-voice-interop', async () => {
       const bytes = voiceBytes;
@@ -2255,6 +2296,56 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       } finally { alice.off('request', observe); aliceSecond.off('request', observe); }
       stage = 'home-cleanup-rooms';
       for (const page of [alice, aliceSecond]) await openRoom(page, roomName);
+      } catch { throw new Error(stage); }
+    });
+    if (elementPeer) await check('element-ui-unencrypted-poll-roundtrip', async () => {
+      let stage = 'plain-poll-room';
+      try {
+        const name = `Disposable plain poll ${randomBytes(4).toString('hex')}`;
+        const created = await api('/_matrix/client/v3/createRoom', { token: aliceSession.accessToken, method: 'POST', body: { name, preset: 'private_chat' } });
+        const plainRoomId = created.room_id;
+        await api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/invite`, { token: aliceSession.accessToken, method: 'POST', body: { user_id: accounts.bob.user_id } });
+        await api(`/_matrix/client/v3/rooms/${encode(plainRoomId)}/join`, { token: accounts.bob.access_token, method: 'POST', body: {} });
+        const plainAlice = await newPage();
+        await login(plainAlice, stack.origins.app, 'alice', stack.credentials.password);
+        await openRoom(plainAlice, name);
+        await elementPeer.goto(`${stack.origins.element}/#/room/${encode(plainRoomId)}`);
+        await elementPeer.locator('.mx_BasicMessageComposer_input').waitFor({ timeout: 45000 });
+        stage = 'plain-poll-create';
+        const question = `Synthetic plain poll ${randomBytes(5).toString('hex')}`;
+        const option = 'Synthetic plain choice';
+        await plainAlice.getByRole('button', { name: 'More message tools' }).click();
+        await plainAlice.getByRole('button', { name: 'Create a poll', exact: true }).click();
+        const dialog = plainAlice.getByRole('dialog', { name: 'Create a poll' });
+        await dialog.getByLabel('Question').fill(question);
+        await dialog.getByLabel('Answer 1').fill(option);
+        await dialog.getByLabel('Answer 2').fill('Synthetic alternate choice');
+        const [start] = await Promise.all([
+          plainAlice.waitForRequest((candidate) => candidate.method() === 'PUT' && new URL(candidate.url()).pathname.includes(`/rooms/${encode(plainRoomId)}/send/`), { timeout: 45000 }),
+          dialog.getByRole('button', { name: 'Create poll', exact: true }).click(),
+        ]);
+        invariant(!new URL(start.url()).pathname.includes('/m.room.encrypted/') && start.postData()?.includes(question), stage);
+        const aimtrixPoll = plainAlice.getByRole('region', { name: `Poll: ${question}` });
+        const elementPoll = elementPeer.locator('.mx_MPollBody').filter({ hasText: question }).last();
+        await aimtrixPoll.waitFor({ timeout: 45000 });
+        stage = 'plain-poll-element-render';
+        await elementPoll.waitFor({ timeout: 60000 });
+        stage = 'plain-poll-element-vote';
+        const elementOption = elementPoll.locator('.mx_PollOption .mx_StyledRadioButton').filter({ hasText: option });
+        const [vote] = await Promise.all([
+          elementPeer.waitForRequest((candidate) => candidate.method() === 'PUT' && new URL(candidate.url()).pathname.includes(`/rooms/${encode(plainRoomId)}/send/`), { timeout: 45000 }),
+          elementOption.click(),
+        ]);
+        invariant(!new URL(vote.url()).pathname.includes('/m.room.encrypted/'), stage);
+        stage = 'plain-poll-aimtrix-count';
+        await until(async () => {
+          await aimtrixPoll.getByRole('button', { name: 'Refresh results' }).click();
+          return (await aimtrixPoll.getByRole('button', { name: option }).locator('b').textContent()) === '1';
+        }, stage);
+        stage = 'plain-poll-end';
+        await aimtrixPoll.getByRole('button', { name: 'End poll' }).click();
+        await plainAlice.getByRole('dialog', { name: 'End this poll?' }).getByRole('button', { name: 'End poll' }).click();
+        await until(() => elementPoll.getByRole('radio', { name: new RegExp(option) }).isDisabled(), stage, 45000);
       } catch { throw new Error(stage); }
     });
     if (stack.origins.element) await check('element-ui-formatted-interoperability', async () => {
