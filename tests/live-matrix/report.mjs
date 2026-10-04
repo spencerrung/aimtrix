@@ -79,10 +79,10 @@ failureCategories.push('mas-config-invalid', 'mas-compose-start', 'mas-synapse-r
 failureCategories.push('mas-runtime-permission', 'mas-runtime-database', 'mas-runtime-policy', 'mas-runtime-homeserver',
   'mas-runtime-assets', 'mas-runtime-bind-in-use', 'mas-runtime-bind-unavailable', 'mas-runtime-bind',
   'mas-runtime-config', 'mas-runtime-unknown', 'mas-start-probe-timeout');
-failureCategories.push('account-switch-create-room', 'account-switch-encrypted-send', 'account-switch-add',
+failureCategories.push('account-switch-create-room', 'account-switch-encrypted-send', 'account-switch-draft-saved', 'account-switch-add',
   'account-switch-no-cross-account-room', 'account-switch-return-settings', 'account-switch-return-select',
   'account-switch-return-ready', 'account-switch-return-session', 'account-switch-return-room',
-  'account-switch-return-message', 'account-switch-dormant-draft-restored',
+  'account-switch-return-message', 'account-switch-draft-store-retained', 'account-switch-dormant-draft-restored',
   'account-switch-forget-dormant', 'account-switch-dormant-removed', 'account-switch-active-preserved');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, delegatedAuth, passed, failureStage, checks, metrics }) {

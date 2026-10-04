@@ -2900,6 +2900,14 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await alice.getByRole('button', { name: 'Send message', exact: true }).click();
         await alice.locator('.timeline-message').filter({ hasText: marker }).waitFor();
         await composer.fill(draft);
+        const savedDraft = () => alice.evaluate(({ userId, homeserver, body }) => {
+          const key = `aimtrix.private-drafts.v1:${encodeURIComponent(JSON.stringify({ userId, homeserver: new URL(homeserver).href.replace(/\/+$/, '') }))}`;
+          const raw = localStorage.getItem(key);
+          try { return Boolean(raw && JSON.parse(raw).drafts?.some((item) => item.value?.body === body)); }
+          catch { return false; }
+        }, { userId: accounts.alice.user_id, homeserver: stack.origins.synapse, body: draft });
+        stage = 'account-switch-draft-saved';
+        await until(savedDraft, stage, 10000);
         stage = 'account-switch-add';
         await alice.getByRole('button', { name: 'Open settings' }).click();
         let settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
@@ -2927,9 +2935,11 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await openRoom(alice, privateRoom);
         stage = 'account-switch-return-message';
         await alice.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
+        stage = 'account-switch-draft-store-retained';
+        await until(savedDraft, stage, 10000);
         stage = 'account-switch-dormant-draft-restored';
-        invariant((await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).inputValue()) === draft,
-          'account-switch-dormant-draft-restored');
+        await until(async () => (await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).inputValue()) === draft,
+          stage, 10000);
         stage = 'account-switch-forget-dormant';
         await alice.getByRole('button', { name: 'Open settings' }).click();
         settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
