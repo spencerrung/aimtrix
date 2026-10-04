@@ -57,6 +57,9 @@ export function nativeSsoCallbackPath(url: URL): string | undefined {
   const hasAuth = (params: URLSearchParams) => keys.some((key) => params.has(key));
   if (hasAuth(url.searchParams) && hasAuth(fragment)) return undefined;
   const params = hasAuth(fragment) ? fragment : url.searchParams;
+  // URLSearchParams.get() otherwise silently chooses the first value. A native
+  // handoff must not accept a callback whose authorization result is ambiguous.
+  if (keys.some((key) => params.getAll(key).length > 1)) return undefined;
   const loginToken = params.get('loginToken');
   const code = params.get('code');
   const error = params.get('error');
