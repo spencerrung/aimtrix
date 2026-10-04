@@ -144,11 +144,16 @@ try {
       await until(async () => (await subscriberShelf.locator('video').count()) === 0, `${prefix}camera-unpublished`, 45000);
     });
     await run(`${prefix}encrypted-synthetic-screen-publish-and-subscribe`, async () => {
+      stage = `${prefix}screen-start`;
       await publisherShelf.getByRole('button', { name: 'Share group screen' }).click();
       await publisherShelf.getByRole('button', { name: 'Stop sharing group screen' }).waitFor();
+      stage = `${prefix}screen-remote-video`;
       await until(() => remoteVideoPlaying(subscriberShelf), `${prefix}encrypted-screen-video`, 45000);
+      stage = `${prefix}screen-capture-used`;
       if (!await publisher.evaluate(() => window.__rtcDisplayTracks.length > 0)) throw new Error('synthetic-screen-capture-unused');
+      stage = `${prefix}screen-stop`;
       await publisherShelf.getByRole('button', { name: 'Stop sharing group screen' }).click();
+      stage = `${prefix}screen-capture-cleanup`;
       await until(async () => (await subscriberShelf.locator('video').count()) === 0 &&
         (await publisher.evaluate(() => window.__rtcDisplayTracks.every((track) => track.readyState === 'ended'))), `${prefix}screen-capture-cleanup`, 45000);
     });

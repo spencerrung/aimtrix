@@ -29,13 +29,16 @@ async function signInWithProvider(page, stack, username) {
 
 async function rejectNextDeviceRead(page, trigger) {
   let rejected = 0;
+  let claimed = false;
   const pattern = '**/_matrix/client/*/devices';
   const reject = async (route) => {
     if (route.request().method() !== 'GET') return route.continue();
+    if (claimed) return route.continue();
+    claimed = true;
     rejected += 1;
-    await page.unroute(pattern, reject);
     await route.fulfill({ status: 401, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' },
       body: JSON.stringify({ errcode: 'M_UNKNOWN_TOKEN', error: 'Expired access token' }) });
+    await page.unroute(pattern, reject);
   };
   await page.route(pattern, reject);
   await trigger();
