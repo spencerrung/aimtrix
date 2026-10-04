@@ -2938,7 +2938,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'account-switch-draft-store-retained';
         await until(savedDraft, stage, 10000);
         stage = 'account-switch-dormant-draft-restored';
-        await until(async () => (await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).inputValue()) === draft,
+        await until(async () => (await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).textContent())?.trim() === draft,
           stage, 10000);
         stage = 'account-switch-forget-dormant';
         await alice.getByRole('button', { name: 'Open settings' }).click();
