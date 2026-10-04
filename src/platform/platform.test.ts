@@ -43,4 +43,7 @@ it('accepts only the native SSO callback destination with one unambiguous result
   expect(nativeSsoCallbackPath(new URL(`aimtrix://sso?code=first&code=second&state=${oauth.state}`))).toBeUndefined();
   expect(nativeSsoCallbackPath(new URL(`aimtrix://sso?code=first&state=${oauth.state}&state=${oauth.state}`))).toBeUndefined();
   expect(nativeSsoCallbackPath(new URL('aimtrix://sso?loginToken=first&loginToken=second'))).toBeUndefined();
+  expect(nativeSsoCallbackPath(new URL(`aimtrix://sso?loginToken=synthetic-token&code=synthetic-code&state=${oauth.state}`))).toBeUndefined();
+  expect(nativeSsoCallbackPath(new URL(`aimtrix://sso?loginToken=synthetic-token&error=access_denied&state=${oauth.state}`))).toBeUndefined();
+  expect(nativeSsoCallbackPath(new URL(`aimtrix://sso?code=&error=access_denied&state=${oauth.state}`))).toBeUndefined();
 });
