@@ -8,7 +8,7 @@ Aimtrix follows semantic versioning after `1.0.0`. Until then, minor versions ma
 2. Test password login, SSO callback login, E2EE recovery, attachment encryption, and a direct call against disposable Matrix accounts.
 3. Update `CHANGELOG.md`, `package.json` and its lockfile, and the documented configuration schema when it changes.
 4. Tag `vMAJOR.MINOR.PATCH`. The image workflow on `main` verifies both release architectures, runs the image as an unprivileged user, and scans both architectures. A merge to `main` verifies the image but does not publish it.
-5. Review the Trivy image scan and GitHub dependency review. Manually dispatch `Verify container and publish manually` from `main` with the version tag only after accepting that evidence. It publishes the exact verified multi-architecture image, including provenance and an SBOM, under the version and `latest` tags.
+5. Review the Trivy image scan and GitHub dependency review. Manually dispatch `Verify container and publish manually` from `main` with the version tag only after accepting that evidence. It publishes the exact verified multi-architecture image, including provenance and an SBOM, under the version tag. Stable releases also update `latest`; prereleases leave `latest` unchanged.
 
 For a hosted-PWA prerelease, use an `-rc.N` version and pin the published image by its immutable multi-architecture digest during device acceptance. A version tag also starts the desktop draft workflow; that draft is not a desktop promotion. Keep the previously deployed tag and digest in the operator's rollback record until the candidate is accepted.
 
