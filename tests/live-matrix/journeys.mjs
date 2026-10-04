@@ -2926,7 +2926,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'account-switch-return-room';
         await openRoom(alice, privateRoom);
         stage = 'account-switch-return-message';
-        await alice.getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
+        await alice.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
         stage = 'account-switch-dormant-draft-restored';
         invariant((await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).inputValue()) === draft,
           'account-switch-dormant-draft-restored');
