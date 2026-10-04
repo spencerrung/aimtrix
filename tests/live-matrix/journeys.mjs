@@ -1749,7 +1749,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     const openTool = async (name) => {
       const more = alice.getByRole('button', { name: 'More message tools' });
-      if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
+      if (await more.isVisible() && await more.getAttribute('aria-expanded') !== 'true') await more.click();
       await alice.getByRole('button', { name, exact: true }).click();
     };
     const safeAction = async (category, action) => {
@@ -2474,7 +2474,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'plain-poll-create';
         const question = `Synthetic plain poll ${randomBytes(5).toString('hex')}`;
         const option = 'Synthetic plain choice';
-        await plainAlice.getByRole('button', { name: 'More message tools' }).click();
+        const plainMore = plainAlice.getByRole('button', { name: 'More message tools' });
+        if (await plainMore.isVisible()) await plainMore.click();
         await plainAlice.getByRole('button', { name: 'Create a poll', exact: true }).click();
         const dialog = plainAlice.getByRole('dialog', { name: 'Create a poll' });
         await dialog.getByLabel('Question').fill(question);
