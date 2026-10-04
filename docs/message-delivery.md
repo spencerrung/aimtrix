@@ -13,7 +13,7 @@ Polish 05 ([#145](https://github.com/spencerrung/aimtrix/issues/145)) gives room
 | `SENT` or remote echo (`null`) | Accepted by server; this does not establish recipient reading or decryption |
 | `CANCELLED` | Removed from the local conversation |
 
-Recovery buttons stay visible on touch layouts and keyboard accessible. Delivery failure copy uses a small allowlist of error codes; these controls never display server error bodies. A lost acknowledgement can leave an uncertain outcome, so generic failure copy says “not confirmed.” A permission rejection explains permissions; rate limits suggest waiting. Existing read-position avatars remain separate from send acceptance.
+Recovery buttons stay visible on touch layouts and keyboard accessible. Delivery failure copy uses a small allowlist of error codes; these controls never display server error bodies. A lost acknowledgement can leave an uncertain outcome, so generic failure copy says “not confirmed.” A permission rejection explains permissions; rate limits suggest waiting. Outgoing messages use a compact, accessible check for server acceptance and a double check only when a Matrix read receipt exists. Pending and failed states remain neutral and explicit; neither mark claims delivery to another device or successful decryption. Existing read-position avatars retain the reader detail.
 
 Only failed sends can be cancelled. An active encryption/send request may already have progressed, and the SDK cannot provide a reliable universal cancellation outcome. Cancel removes the local failed event; it is not a server redaction or an assurance that an unacknowledged request never reached the server.
 

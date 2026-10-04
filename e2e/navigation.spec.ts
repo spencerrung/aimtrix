@@ -35,6 +35,40 @@ test('nested spaces can be opened from their parent map', async ({ page }, info)
   await page.screenshot({ path: info.outputPath('nested-space-open.png') });
 });
 
+test('switching from a live room to a DM and back keeps the visible message anchor', async ({ page }, info) => {
+  await page.setViewportSize(info.project.name === 'mobile' ? { width: 412, height: 600 } : { width: 1280, height: 600 });
+  await page.goto('/?demo=1');
+  if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  const composer = page.getByRole('textbox', { name: 'Message Welcome Lounge', exact: true });
+  await composer.fill('A long live-room message\n'.repeat(20));
+  await composer.press('Enter');
+  await expect(composer).toHaveText('');
+  const timeline = page.getByRole('region', { name: 'Messages', exact: true });
+  await expect.poll(() => timeline.evaluate((element) => element.scrollHeight - element.clientHeight)).toBeGreaterThan(200);
+  await timeline.evaluate((element) => {
+    element.scrollTop = Math.round((element.scrollHeight - element.clientHeight) * 0.45);
+    element.dispatchEvent(new Event('scroll'));
+  });
+  await expect(page.getByRole('button', { name: 'Jump to latest messages', exact: true })).toBeVisible();
+  const anchor = await timeline.evaluate((element) => {
+    const viewport = element.getBoundingClientRect();
+    const row = [...element.querySelectorAll<HTMLElement>('[data-event-id][data-message-key]')]
+      .find((item) => item.getBoundingClientRect().bottom > viewport.top && item.getBoundingClientRect().top < viewport.bottom);
+    if (!row) throw new Error('No visible message anchor');
+    return { id: row.dataset.eventId!, offset: row.getBoundingClientRect().top - viewport.top };
+  });
+  if (info.project.name === 'mobile') await page.getByRole('button', { name: 'Back to previous view' }).click();
+  await page.getByRole('button', { name: /Mara Chen/ }).click();
+  await expect(page.getByRole('textbox', { name: 'Message Mara Chen', exact: true })).toBeVisible();
+  if (info.project.name === 'mobile') await page.getByRole('button', { name: 'Back to previous view' }).click();
+  await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  await expect.poll(async () => Math.abs(await timeline.locator(`[data-event-id="${anchor.id}"]`).evaluate((row) =>
+    row.getBoundingClientRect().top - row.closest('.timeline')!.getBoundingClientRect().top) - anchor.offset)).toBeLessThan(3);
+  await expect(page.getByRole('button', { name: 'Jump to latest messages', exact: true })).toBeVisible();
+  await expect(composer).toBeVisible();
+  await page.screenshot({ path: info.outputPath('live-room-restored-anchor.png') });
+});
+
 test('quick switching preserves drafts and real favorites filter independently of unread', async ({ page }, info) => {
   await page.setViewportSize(info.project.name === 'mobile' ? { width: 412, height: 915 } : { width: 1280, height: 800 });
   await page.goto('/?demo=1');
@@ -54,6 +88,15 @@ test('quick switching preserves drafts and real favorites filter independently o
   }
   const buddies = page.getByRole('complementary', { name: 'Buddy list' });
   const filter = page.getByRole('combobox', { name: 'Conversation filter' });
+  const [panelBounds, searchBounds, filterBounds, groupsBounds] = await Promise.all([
+    buddies.boundingBox(), buddies.getByRole('searchbox', { name: 'Search conversations' }).boundingBox(),
+    filter.boundingBox(), buddies.locator('.buddy-groups').boundingBox(),
+  ]);
+  expect(panelBounds && searchBounds && filterBounds && groupsBounds).toBeTruthy();
+  expect(filterBounds!.x).toBeGreaterThanOrEqual(panelBounds!.x);
+  expect(filterBounds!.x + filterBounds!.width).toBeLessThanOrEqual(panelBounds!.x + panelBounds!.width);
+  expect(filterBounds!.y).toBeGreaterThanOrEqual(searchBounds!.y + searchBounds!.height);
+  expect(filterBounds!.y + filterBounds!.height).toBeLessThanOrEqual(groupsBounds!.y + 1);
   await filter.selectOption('favorites');
   await expect(buddies.getByRole('button', { name: /Welcome Lounge/ })).toBeVisible();
   await expect(buddies.getByRole('button', { name: /Mara Chen/ })).toBeHidden();

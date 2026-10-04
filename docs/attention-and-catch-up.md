@@ -2,6 +2,8 @@
 
 Home opens from the sparkle button in the title bar or the Home space. It gathers unread conversations, highlighted notifications and threads in one surface, with All activity, Unread, Mentions and My threads filters. Browse conversations opens the room list directly, including on narrow screens. Drafts opens the existing private draft list. Event rows use authenticated Matrix context navigation; browser Back restores the filter and scroll position. The conversation is unmounted while Home is visible, so hidden timelines cannot advance their receipts.
 
+Activity cards use the room's avatar and color where available and render a bounded, inert preview of supported Matrix formatting. Reply fallback quoting is removed, while links and spoilers stay non-interactive in Home; opening the conversation shows the full message. Encrypted or unavailable activity retains an explicit placeholder.
+
 ## History and read state
 
 The controller owns an ephemeral activity cache, separate from SDK room and thread timelines. Standard `/notifications` requests include all notification types, with 30 entries per page and at most 20 pages per refresh. At most 500 activity records are retained. Refresh starts discovery again; Load older activity advances the notification cursor. Repeated cursors stop pagination. Failures preserve available rows and expose retry. Room membership and client-generation checks discard stale responses. Activity contents are cleared on account shutdown and are not persisted.

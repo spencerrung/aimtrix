@@ -17,9 +17,11 @@ import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
 import type { ISyncStateData } from 'matrix-js-sdk/lib/sync.js';
 import { connectionIssue, connectionIssueMessage, isSessionRejected, type ConnectionIssue, type SessionRecovery } from './sessionRecovery';
 export type { ConnectionIssue, SessionRecovery } from './sessionRecovery';
-import { NotificationRules, threadSilenceRuleId, type RoomNotificationMode } from './notificationRules';
+import { NotificationRules, roomNotificationMode, threadSilenceRuleId, type RoomNotificationMode } from './notificationRules';
 import { normalizeNotificationPolicy, notificationsPaused, type LocalNotificationPolicy } from '../pwa/notificationPolicy';
 import type { IPusherRequest } from 'matrix-js-sdk/lib/@types/PushRules.js';
+import { PushRuleActionName, RuleId } from 'matrix-js-sdk/lib/@types/PushRules.js';
+import { PushProcessor } from 'matrix-js-sdk/lib/pushprocessor.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
 import type { UIAuthCallback } from 'matrix-js-sdk/lib/interactive-auth.js';
 import { CryptoEvent } from 'matrix-js-sdk/lib/crypto-api/index.js';
@@ -329,6 +331,7 @@ export class MatrixController {
     desktopNotifications: false,
     notificationSounds: true,
     soundVolume: 0.55,
+    nudgeEffects: true,
   };
   private pushRegistration?: { pushKey: string; appId: string };
   private pushRefreshPending = false;
@@ -439,9 +442,15 @@ export class MatrixController {
     notificationSounds: boolean;
     soundVolume: number;
     sendReadReceipts?: boolean;
+    nudgeEffects?: boolean;
   }): void {
     if (preferences.sendReadReceipts !== undefined) this.publicReadReceipts = preferences.sendReadReceipts;
-    this.notificationPreferences = preferences;
+    this.notificationPreferences = { ...preferences, nudgeEffects: preferences.nudgeEffects ?? true };
+  }
+
+  public nudgeEffectsAllowed(): boolean {
+    return !notificationsPaused(this.localNotificationPolicy)
+      && !this.client?.pushRules?.global.override?.some((rule) => rule.rule_id === '.m.rule.master' && rule.enabled);
   }
 
   public registerPushNotifications(): Promise<PushRegistrationResult> {
@@ -1006,16 +1015,20 @@ export class MatrixController {
     requestedSize: number,
     encryptedFile?: EncryptedMediaInfo,
     mimeType?: string,
+    original = false,
   ): Promise<string | undefined> => {
     if (!source.startsWith('mxc://')) return Promise.resolve(source);
     const size = Math.min(1024, Math.max(32, Math.round(requestedSize)));
-    const key = `${source}|${size}|${encryptedFile?.hashes?.sha256 ?? ''}`;
+    const key = `${source}|${original ? 'original' : size}|${encryptedFile?.hashes?.sha256 ?? ''}`;
     const existing = this.mediaRequests.get(key);
     if (existing) return existing;
 
-    const request = this.fetchMatrixMedia(source, size, encryptedFile, mimeType).catch(
-      () => undefined,
-    );
+    const request = this.fetchMatrixMedia(source, size, encryptedFile, mimeType, original)
+      .catch(() => undefined)
+      .then((url) => {
+        if (!url && this.mediaRequests.get(key) === request) this.mediaRequests.delete(key);
+        return url;
+      });
     this.mediaRequests.set(key, request);
     return request;
   };
@@ -1058,12 +1071,13 @@ export class MatrixController {
     size: number,
     encryptedFile?: EncryptedMediaInfo,
     mimeType?: string,
+    original = false,
   ): Promise<string | undefined> {
     const client = this.client;
     const accessToken = client?.getAccessToken();
     if (!client || !accessToken) return undefined;
     const useOriginal = Boolean(
-      encryptedFile ||
+      original || encryptedFile ||
       mimeType === 'image/svg+xml' ||
       (mimeType && !mimeType.startsWith('image/')),
     );
@@ -4262,25 +4276,50 @@ export class MatrixController {
 
   private readonly liveEncryptedMessages = new Set<string>();
 
+  private nudgeNoticeFallbackAllowed(event: MatrixEvent, body: string | undefined): boolean {
+    const client = this.client;
+    const winning = client?.getPushDetailsForEvent?.(event)?.rule;
+    if (winning?.rule_id !== RuleId.SuppressNotices || winning.default !== true) return false;
+    const rules = client?.pushRules?.global;
+    const silences = (rule: { enabled: boolean; actions: Array<string | object> }) =>
+      rule.enabled !== false && (rule.actions.length === 0 || rule.actions.some((action) => action === PushRuleActionName.DontNotify));
+    const sender = event.getSender?.();
+    if (sender && rules?.sender?.some((rule) => !rule.default && rule.rule_id === sender && silences(rule))) return false;
+    if (typeof body === 'string' && rules?.content?.some((rule) => {
+      if (rule.default || !rule.pattern || !silences(rule)) return false;
+      try { return PushProcessor.getPushRuleGlobRegex(rule.pattern, true).test(body); }
+      catch { return true; }
+    })) return false;
+    return true;
+  }
+
   private notifyForMessage(event: MatrixEvent, room: Room): void {
     if (event.getType() !== 'm.room.message') return;
-    if (!this.client?.getPushActionsForEvent(event)?.notify) return;
-    if (notificationsPaused(this.localNotificationPolicy)) return;
+    const pushNotify = Boolean(this.client?.getPushActionsForEvent(event)?.notify);
+    const content = event.getContent?.<{ body?: string; msgtype?: string; 'dev.alucard.aimtrix.nudge.v1'?: { version?: unknown } }>() ?? {};
+    const nudge = content.msgtype === 'm.notice' && content['dev.alucard.aimtrix.nudge.v1']?.version === 1;
+    const roomMode = nudge ? roomNotificationMode(this.client?.pushRules, room.roomId) : undefined;
+    const nudgeTone = nudge && (roomMode === 'default' || roomMode === 'all' || (roomMode === 'custom' && pushNotify))
+      && (pushNotify || this.nudgeNoticeFallbackAllowed(event, content.body));
+    if (!pushNotify && !nudgeTone) return;
+    if (!this.nudgeEffectsAllowed()) return;
     const eventId = event.getId();
     const owner = this.notificationOwner;
     if (eventId && this.notifiedEvents.has(eventId)) return;
     if (eventId) this.notifiedEvents.add(eventId);
     while (this.notifiedEvents.size > 500) this.notifiedEvents.delete(this.notifiedEvents.values().next().value!);
     if (this.notificationPreferences.notificationSounds && this.connection === 'online') {
-      this.playMessageTone();
+      if (nudge) {
+        if (this.notificationPreferences.nudgeEffects && nudgeTone) this.playNudgeTone();
+      } else this.playMessageTone();
     }
+    if (!pushNotify) return;
     if (
       !notificationsPaused(this.localNotificationPolicy) &&
       this.notificationPreferences.desktopNotifications &&
       this.platform.lifecycle.isHidden() &&
       this.platform.notifications.permission === 'granted'
     ) {
-      const content = event.getContent<{ body?: string }>();
       const body = this.platform.capabilities.platform === 'browser' && typeof content.body === 'string'
         ? content.body.slice(0, 240)
         : 'New Matrix activity';
@@ -4350,6 +4389,14 @@ export class MatrixController {
       ],
       0.16,
     );
+  }
+
+  private playNudgeTone(): void {
+    this.playTone([
+      { frequency: 440, start: 0, duration: 0.09 },
+      { frequency: 587.33, start: 0.11, duration: 0.09 },
+      { frequency: 783.99, start: 0.22, duration: 0.15 },
+    ], 0.28);
   }
 
   private playSignOnTone(): void {

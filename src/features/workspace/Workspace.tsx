@@ -178,6 +178,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
   pushRoute?: PushRoute;
   onSendMessage?: (roomId: string, body: string, mentions?: ComposerMention[], inlineEmojis?: ComposerInlineEmoji[]) => Promise<void>;
   onSendNudge?: (roomId: string) => Promise<void>;
+  nudgeEffectsAllowed?: () => boolean;
   onSendLocation?: (roomId: string, latitude: number, longitude: number, description: string, threadRootId?: string) => Promise<void>;
   onSendPoll?: (roomId: string, question: string, answers: string[], disclosed: boolean, threadRootId?: string) => Promise<void>;
   onLoadPoll?: (roomId: string, pollId: string) => Promise<{ definition: PollDefinition; results: PollResults; canEnd: boolean }>;
@@ -1281,7 +1282,7 @@ function BuddyPanel({
         />
       </label>
 
-      <label className="buddy-search"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)} style={{ width: '100%', minHeight: 44, color: 'var(--text)', background: 'var(--surface-raised)', border: 0 }}><option value="all">All conversations</option><option value="unread">Unread conversations</option><option value="favorites">Favorite conversations</option></select></label>
+      <label className="buddy-filter"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)}><option value="all">All conversations</option><option value="unread">Unread conversations</option><option value="favorites">Favorite conversations</option></select></label>
       <div ref={buddyGroupsRef} className={`buddy-groups${showSpaceTree ? ' buddy-groups--space-tree' : ''}`}>
         {showSpaceTree && scopeSpace ? (
           <>
@@ -1914,13 +1915,15 @@ function Conversation({
       setLocalHistoryError(undefined);
       setLocalTarget(undefined);
       const saved = room?.id ? readingPositions.current.get(room.id) : undefined;
-      if (saved && historicalWindow && history?.mode !== 'context') {
+      if (saved && history?.mode !== 'context' && !navigationReading?.anchor) {
         viewportMode.current = 'detached';
         readingAnchor.current = saved.anchor;
         runProgrammaticScroll(() => {
           if (!restoreTimelineAnchor(element, saved.anchor)) element.scrollTop = saved.scrollTop;
         });
         readingAnchor.current = captureTimelineAnchor(element) ?? saved.anchor;
+        setTimelineDetached(true);
+        onDetachedChange?.(true);
         previousTimelineMessages.current = messages;
         return;
       }
@@ -1998,7 +2001,7 @@ function Conversation({
     }
     if (history?.mode === 'live' && viewportMode.current !== 'bottom') onDetachedChange?.(true);
     previousTimelineMessages.current = messages;
-  }, [conversationVisible, activeEntryUnreadMarker, history, historyAction, historicalWindow, messages, onDetachedChange, restoreTimelineViewport, room?.id, runProgrammaticScroll]);
+  }, [conversationVisible, activeEntryUnreadMarker, history, historyAction, historicalWindow, messages, navigationReading?.anchor, onDetachedChange, restoreTimelineViewport, room?.id, runProgrammaticScroll]);
 
   const restoredNavigationEntry = useRef<number | undefined>(undefined);
   const captureNavigationReading = useCallback(() => {
@@ -3139,6 +3142,7 @@ export function Workspace({
   pushRoute,
   onSendMessage,
   onSendNudge,
+  nudgeEffectsAllowed,
   onSendLocation,
   onSendPoll,
   onLoadPoll,
@@ -3370,7 +3374,11 @@ export function Workspace({
   const [notice, setNotice] = useState<string>();
   const [draftListOpen, setDraftListOpen] = useState(false);
   const [nudgeActive, setNudgeActive] = useState(false);
-  const latestNudgeId = useRef<string | undefined>(undefined);
+  const latestNudgeByRoom = useRef(new Map<string, string | undefined>());
+  const observedNudgeRoom = useRef<string | undefined>(undefined);
+  const nudgeReset = useRef<number | undefined>(undefined);
+  const nudgeStart = useRef<number | undefined>(undefined);
+  const nudgeStop = useRef<number | undefined>(undefined);
   const lastNudgeSentAt = useRef(0);
   const [roomOverrides, setRoomOverrides] = useState<Record<string, Partial<RoomSummary>>>({});
   const [spaceOverrides, setSpaceOverrides] = useState<Record<string, Partial<SpaceSummary>>>({});
@@ -3470,16 +3478,42 @@ export function Workspace({
   const messagesByRoom = useMemo(() => workspace.mode === 'demo' ? Object.fromEntries(Object.entries(demoMessages).map(([roomId, items]) => [roomId, items.filter((item) => demoMessageOverrides[item.id] !== null).map((item) => ({ ...item, ...demoMessageOverrides[item.id] }))])) : workspace.messagesByRoom, [workspace.mode, workspace.messagesByRoom, demoMessages, demoMessageOverrides]);
   const messages = useMemo(() => effectiveRoomId ? messagesByRoom[effectiveRoomId] ?? [] : [], [effectiveRoomId, messagesByRoom]);
   const canReceiveLiveNudges = workspace.mode === 'demo' || Boolean(effectiveRoomId && workspace.historyByRoom?.[effectiveRoomId]?.mode === 'live');
+  const latestRemoteNudge = messages.filter((message) => message.nudge && !message.isOwn).at(-1);
   useEffect(() => {
-    if (!canReceiveLiveNudges) return;
-    const latest = messages.filter((message) => message.nudge && !message.isOwn).at(-1);
-    if (!latest || latestNudgeId.current === latest.id) return;
-    latestNudgeId.current = latest.id;
+    if (!effectiveRoomId || !canReceiveLiveNudges) {
+      observedNudgeRoom.current = undefined;
+      window.clearTimeout(nudgeReset.current);
+      window.clearTimeout(nudgeStart.current);
+      window.clearTimeout(nudgeStop.current);
+      nudgeReset.current = window.setTimeout(() => setNudgeActive(false), 0);
+      return;
+    }
+    const hadBaseline = latestNudgeByRoom.current.has(effectiveRoomId);
+    const previous = latestNudgeByRoom.current.get(effectiveRoomId);
+    latestNudgeByRoom.current.set(effectiveRoomId, latestRemoteNudge?.id);
+    if (observedNudgeRoom.current !== effectiveRoomId) {
+      observedNudgeRoom.current = effectiveRoomId;
+      window.clearTimeout(nudgeReset.current);
+      window.clearTimeout(nudgeStart.current);
+      window.clearTimeout(nudgeStop.current);
+      nudgeReset.current = window.setTimeout(() => setNudgeActive(false), 0);
+      return;
+    }
+    if (!latestRemoteNudge || !hadBaseline || previous === latestRemoteNudge.id) return;
+    if (selectedRoom?.notificationMode === 'nothing' || selectedRoom?.notificationMode === 'mentions' || selectedRoom?.notificationMode === 'custom' || nudgeEffectsAllowed?.() === false) return;
     if (!preferences.nudgeEffects || preferences.motion === 'reduced' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
-    const start = window.setTimeout(() => setNudgeActive(true), 0);
-    const stop = window.setTimeout(() => setNudgeActive(false), 520);
-    return () => { window.clearTimeout(start); window.clearTimeout(stop); setNudgeActive(false); };
-  }, [canReceiveLiveNudges, messages, preferences.motion, preferences.nudgeEffects]);
+    window.clearTimeout(nudgeReset.current);
+    window.clearTimeout(nudgeStart.current);
+    window.clearTimeout(nudgeStop.current);
+    nudgeReset.current = window.setTimeout(() => setNudgeActive(false), 0);
+    nudgeStart.current = window.setTimeout(() => setNudgeActive(true), 0);
+    nudgeStop.current = window.setTimeout(() => setNudgeActive(false), 650);
+  }, [canReceiveLiveNudges, effectiveRoomId, latestRemoteNudge, nudgeEffectsAllowed, preferences.motion, preferences.nudgeEffects, selectedRoom?.notificationMode]);
+  useEffect(() => () => {
+    window.clearTimeout(nudgeReset.current);
+    window.clearTimeout(nudgeStart.current);
+    window.clearTimeout(nudgeStop.current);
+  }, []);
   const loadedThreadRoot = activeThreadRootId ? messages.find((item) => item.id === activeThreadRootId && !item.pending && (!item.delivery || item.delivery === 'accepted')) : undefined;
   const activeThreadBase: ThreadSummary | undefined = activeThreadRootId ? workspace.threadsByRoot[activeThreadRootId] ?? (loadedThreadRoot ? {
     rootId: activeThreadRootId, roomId: loadedThreadRoot.roomId, root: loadedThreadRoot, rootStatus: 'found', messages: [], replyCount: 0,

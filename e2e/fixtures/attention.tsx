@@ -14,7 +14,11 @@ import '../../src/styles.css';
 declare global { interface Window { attentionFixture: { reads: string[]; contexts: string[]; refreshes: number; older: number; threads: number; rejectRoom: boolean; localTests: number; accountChoices: Array<string | null>; removedAccounts: string[] } } }
 window.attentionFixture = { reads: [], contexts: [], refreshes: 0, older: 0, threads: 0, rejectRoom: false, localTests: 0, accountChoices: [], removedAccounts: [] };
 const activity: ActivitySnapshot = {
-  items: Array.from({ length: 24 }, (_, index) => ({ id: `activity-${index}`, kind: index % 2 ? 'thread' : 'notification', roomId: 'welcome', roomName: 'Welcome Lounge', eventId: `$activity-${index}`, body: `Synthetic activity item ${index}`, timestamp: 1000 + index, read: 'unknown', highlighted: index % 2 === 0, encrypted: false, unavailable: false, ...(index % 2 ? { threadRootId: '$root', participated: true, followed: true } : {}) })),
+  items: Array.from({ length: 24 }, (_, index) => ({ id: `activity-${index}`, kind: index % 2 ? 'thread' : 'notification', roomId: 'welcome', roomName: 'Welcome Lounge', eventId: `$activity-${index}`, body: `Synthetic activity item ${index}`, timestamp: 1000 + index, read: 'unknown', highlighted: index % 2 === 0, encrypted: false, unavailable: false,
+    ...(index === 12 ? { formatted: [
+      { type: 'element' as const, tag: 'p' as const, children: [{ type: 'element' as const, tag: 'strong' as const, children: [{ type: 'text' as const, text: 'Synthetic activity item 12' }] }] },
+      { type: 'element' as const, tag: 'pre' as const, children: [{ type: 'element' as const, tag: 'code' as const, children: [{ type: 'text' as const, text: 'const sample = 12;' }] }] },
+    ] } : {}), ...(index % 2 ? { threadRootId: '$root', participated: true, followed: true } : {}) })),
   loading: false, loadingThreads: false, canLoadOlder: true, canLoadMoreThreads: true,
   coverage: { notifications: 'server', limited: false, encryptedPending: false, roomsLoaded: 1, roomsTotal: 2, threadsUnsupported: false },
 };

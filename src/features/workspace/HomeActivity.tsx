@@ -1,9 +1,32 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
-import { ArrowLeft, Bell, MessageCircle, RefreshCw, Sparkles } from 'lucide-react';
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { ArrowLeft, Bell, RefreshCw, Sparkles } from 'lucide-react';
 import type { ActivitySnapshot } from '../../matrix/activity';
-import type { WorkspaceSnapshot } from '../../matrix/viewModels';
+import { colorForId, type WorkspaceSnapshot } from '../../matrix/viewModels';
+import type { FormattedMessageNode } from '../../matrix/incomingFormatting';
 import type { MatrixNavigationTarget } from '../../matrix/matrixLinks';
+import { Avatar } from '../../components/Avatar';
 import './homeActivity.css';
+
+/** Compact, inert preview: interactive links and spoilers stay in the conversation. */
+function ActivityPreview({ body, formatted }: { body: string; formatted?: FormattedMessageNode[] }) {
+  const render = (nodes: FormattedMessageNode[]): ReactNode => nodes.map((node, index) => {
+    if (node.type === 'text') return node.text;
+    if (node.type === 'emoticon') return node.alt;
+    if (node.type === 'spoiler') return <span className="home-activity__spoiler" key={index}>Spoiler hidden</span>;
+    const children = render(node.children);
+    if (node.type === 'link') return <span className="home-activity__link" key={index}>{children}</span>;
+    if (node.tag === 'br') return <br key={index} />;
+    if (node.tag === 'hr') return <span className="home-activity__rule" key={index} />;
+    if (node.tag === 'pre') return <span className="home-activity__code-block" key={index}><code>{node.children.length === 1 && node.children[0].type === 'element' && node.children[0].tag === 'code' ? render(node.children[0].children) : children}</code></span>;
+    if (node.tag === 'code') return <code key={index}>{children}</code>;
+    if (node.tag === 'strong') return <strong key={index}>{children}</strong>;
+    if (node.tag === 'em') return <em key={index}>{children}</em>;
+    if (node.tag === 'u') return <u key={index}>{children}</u>;
+    if (node.tag === 's') return <s key={index}>{children}</s>;
+    return <span className={`home-activity__${node.tag}`} key={index}>{children}</span>;
+  });
+  return <span className="home-activity__body">{formatted?.length ? render(formatted) : body}</span>;
+}
 
 export interface ActivityActions {
   refresh(): Promise<void>;
@@ -59,8 +82,8 @@ export default function HomeActivity({ workspace, activity, actions, position, o
       {firstUse}
       {error ? <p role="alert">{error}</p> : null}
       {(filter === 'all' || filter === 'unread') ? <section aria-label="Unread conversations"><h2>{unread.length ? `${unread.length} conversations to catch up on` : 'Your conversation badges are clear'}</h2>
-        {unread.map((room) => <article className="home-activity__card" key={room.id}>
-          <button className="home-activity__open" type="button" disabled={busy} onClick={() => void run(() => onOpen({ roomId: room.id, ...(room.unreadEventId ? { eventId: room.unreadEventId } : {}) }))}><MessageCircle size={18} /><span><strong>{room.name}</strong><span>{room.lastMessage || 'Open conversation'}</span></span><b>{room.badgeCount ?? room.unreadCount}</b></button>
+        {unread.map((room) => <article className="home-activity__card" key={room.id} style={{ '--activity-room-color': colorForId(room.id) } as CSSProperties}>
+          <button className="home-activity__open" type="button" disabled={busy} onClick={() => void run(() => onOpen({ roomId: room.id, ...(room.unreadEventId ? { eventId: room.unreadEventId } : {}) }))}><Avatar name={room.name} src={room.avatarUrl} color={colorForId(room.id)} size="small" /><span className="home-activity__copy"><strong>{room.name}</strong><span className="home-activity__body">{room.lastMessage || 'Open conversation'}</span></span><b>{room.badgeCount ?? room.unreadCount}</b></button>
           {onMarkRead ? <button type="button" className="aqua-button" disabled={busy} onClick={() => void run(() => onMarkRead(room.id))}>Mark loaded timeline read</button> : null}
         </article>)}
         <p className="home-activity__hint">Badges use the same read and mute rules as your room list. Opening Home sends no read receipts. Thread unread counts remain separate.</p>
@@ -68,10 +91,13 @@ export default function HomeActivity({ workspace, activity, actions, position, o
       <section aria-label="Recent activity"><h2>{filter === 'threads' ? 'Threads you follow or joined' : filter === 'mentions' ? 'Mentions and highlighted messages' : 'Recent activity'}</h2>
         {activity?.loading ? <p role="status">Fetching your activity…</p> : null}
         {activity?.error ? <p role="alert">{activity.error} Use Refresh activity to retry.</p> : null}
-        {items.map((item) => <article className="home-activity__card" key={item.id}>
-          <button className="home-activity__open" type="button" disabled={busy} onClick={() => void run(() => onOpen({ roomId: item.roomId, eventId: item.eventId }))}><span><strong>{workspace.rooms.find((room) => room.id === item.roomId)?.name ?? 'Conversation'}{item.kind === 'thread' ? ' · Thread' : ''}</strong><span>{item.body || 'Message unavailable'}</span><small>{new Date(item.timestamp).toLocaleString()} · {item.read === 'unknown' ? 'Read position not known' : item.read === 'read' ? 'Read' : 'Unread'}{item.highlighted ? ' · Highlighted' : ''}</small></span></button>
+        {items.map((item) => {
+          const room = workspace.rooms.find((entry) => entry.id === item.roomId);
+          const roomName = room?.name ?? item.roomName ?? 'Conversation';
+          return <article className="home-activity__card" key={item.id} style={{ '--activity-room-color': colorForId(item.roomId) } as CSSProperties}>
+          <button className="home-activity__open" type="button" disabled={busy} onClick={() => void run(() => onOpen({ roomId: item.roomId, eventId: item.eventId }))}><Avatar name={roomName} src={room?.avatarUrl} color={colorForId(item.roomId)} size="small" /><span className="home-activity__copy"><strong>{roomName}{item.kind === 'thread' ? ' · Thread' : ''}</strong>{item.senderName ? <small>{item.senderName}</small> : null}<ActivityPreview body={item.body || 'Message unavailable'} formatted={item.formatted} /><small>{new Date(item.timestamp).toLocaleString()} · {item.read === 'unknown' ? 'Read position not known' : item.read === 'read' ? 'Read' : 'Unread'}{item.highlighted ? ' · Highlighted' : ''}</small></span></button>
           {item.threadRootId && actions ? <button className="aqua-button" type="button" disabled={busy} onClick={() => void run(() => actions.setThreadFollow(item.roomId, item.threadRootId!, !(item.followed ?? item.participated)))}>{(item.followed ?? item.participated) ? 'Hide from Home' : 'Follow in Home'}</button> : null}
-        </article>)}
+        </article>; })}
         {!items.length && !activity?.loading ? <p>No matching activity in the history checked so far.</p> : null}
         {activity?.canLoadOlder && actions ? <button className="aqua-button" type="button" disabled={busy || activity.loading} onClick={() => void run(actions.loadOlder)}>Load older activity</button> : null}
       </section>

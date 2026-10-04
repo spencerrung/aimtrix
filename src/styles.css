@@ -375,7 +375,7 @@
     overflow: hidden;
     background: var(--surface);
   }
-  .aimtrix-window.is-nudging { animation: aimtrix-nudge 520ms ease-out; }
+  .aimtrix-window.is-nudging { animation: aimtrix-nudge 650ms ease-out; }
   .incoming-verification { position:absolute; z-index:20; top:58px; right:16px; width:min(390px, calc(100% - 32px)); max-height:calc(100% - 74px); overflow:auto; padding:16px; border:1px solid var(--border-strong); border-radius:14px; background:var(--surface-raised); box-shadow:0 12px 36px #10264055; }
   .incoming-verification > strong { display:block; margin-bottom:8px; }
   .incoming-verification__request { border-top:1px solid var(--border-soft); padding-top:8px; }
@@ -388,7 +388,7 @@
   .incoming-verification__emoji small { font-size:11px; }
   .incoming-verification__qr { display:block; width:min(256px, 100%); height:auto; margin:16px auto; image-rendering:pixelated; }
   .incoming-verification__camera { display:block; width:min(320px, 100%); min-height:180px; margin:16px auto; border-radius:8px; background:#101820; }
-  @keyframes aimtrix-nudge { 0%, 100% { transform: translateX(0); } 20% { transform: translateX(-7px); } 45% { transform: translateX(6px); } 68% { transform: translateX(-3px); } }
+  @keyframes aimtrix-nudge { 0%, 100% { transform: translateX(0); } 12% { transform: translateX(-12px); } 26% { transform: translateX(12px); } 40% { transform: translateX(-10px); } 54% { transform: translateX(9px); } 68% { transform: translateX(-6px); } 82% { transform: translateX(4px); } }
   @media (prefers-reduced-motion: reduce) { .aimtrix-window.is-nudging { animation: none; } }
   .app-titlebar {
     display: flex;
@@ -461,6 +461,9 @@
   .buddy-panel__heading h2 { margin: 0; overflow: hidden; font-size: 1rem; text-overflow: ellipsis; white-space: nowrap; }
   .buddy-search { display: flex; height: 30px; align-items: center; gap: 6px; margin: 0 10px 9px; padding: 0 8px; color: var(--text-faint); border: 1px solid var(--border); border-radius: 13px; background: var(--surface-raised); box-shadow: inset 0 1px 3px rgba(40,60,75,0.13), 0 1px var(--chrome-highlight); }
   .buddy-search input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; background: transparent; font-size: 0.8rem; }
+  .buddy-filter { display:block; min-width:0; margin:0 10px 9px; }
+  .buddy-filter select { display:block; width:100%; min-width:0; height:44px; padding:0 11px; color:var(--text); border:1px solid var(--border); border-radius:12px; background:var(--surface-raised); box-shadow:inset 0 1px 3px rgba(40,60,75,0.13),0 1px var(--chrome-highlight); font:inherit; font-size:0.8rem; }
+  .buddy-filter select:focus-visible { outline:2px solid var(--blue); outline-offset:2px; }
   .buddy-groups { min-height: 0; padding-bottom: 8px; overflow-y: auto; scrollbar-color: var(--border) transparent; }
   .buddy-group__toggle { display: flex; width: 100%; height: 31px; align-items: center; gap: 4px; padding: 0 11px; color: var(--text-soft); border: 0; border-block: 1px solid color-mix(in srgb, var(--border-soft) 70%, transparent); background: linear-gradient(var(--surface), var(--surface-inset)); font-size: 0.69rem; font-weight: 900; letter-spacing: 0.035em; text-transform: uppercase; }
   .buddy-group__toggle svg { transition: transform 140ms ease; }
@@ -611,7 +614,7 @@
   .message-media-button { display: block; max-width: 100%; padding: 0; border: 0; background: transparent; cursor: zoom-in; }
   .message-media-button .message-media { display: block; }
   .media-viewer-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; padding: 24px; place-items: center; background: rgba(7, 16, 25, 0.78); }
-  .media-viewer { display: grid; width: min(1100px, 100%); max-height: 100%; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 18px 60px rgba(0,0,0,0.45); }
+  .media-viewer { display: grid; grid-template-columns: minmax(0, 1fr); width: min(1100px, 100%); max-height: 100%; overflow: auto; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-raised); box-shadow: 0 18px 60px rgba(0,0,0,0.45); }
   .media-viewer header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 12px; border-bottom: 1px solid var(--border); }
   .media-viewer header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.76rem; }
   .media-viewer header span { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 5px; }
@@ -620,6 +623,9 @@
   .media-viewer > img { display: block; max-width: 100%; max-height: calc(100vh - 120px); margin: auto; object-fit: contain; }
   .media-viewer > img.is-actual-size { max-width: none; max-height: none; }
   .media-viewer > p { padding: 30px; color: var(--text-soft); text-align: center; }
+  .media-viewer__unavailable { display: grid; justify-items: center; gap: 10px; padding: 30px; color: var(--text-soft); text-align: center; }
+  .media-viewer__unavailable p { margin: 0; }
+  .media-viewer__unavailable button { min-height: 44px; padding: 7px 12px; color: var(--blue-deep); border: 1px solid var(--border); border-radius: 7px; background: var(--surface-soft); }
   .message-sticker { width: min(180px, 45vw); max-height: 180px; margin-top: 7px; object-fit: contain; }
   .emoji-asset { display: inline; width: 1.6em; height: 1.6em; object-fit: contain; }
   .message-audio { width: min(420px, 100%); margin-top: 7px; }
@@ -1240,6 +1246,11 @@
 
 /* Delivery recovery remains visible to touch and keyboard users. */
 .message-delivery { margin-block: 6px; font-size: 0.75rem; color: var(--text-soft); }
+.message-delivery-mark { display: inline-flex; align-items: center; gap: 4px; color: var(--text-faint); font-size: 0.7rem; }
+.timeline-message--own .message-delivery-mark { display: flex; width: max-content; max-width: 100%; margin: 4px 0 0 auto; }
+.message-delivery-mark--accepted { color: var(--blue-deep); }
+.message-delivery-mark--read { color: color-mix(in srgb, var(--online) 65%, var(--text)); }
+.message-delivery-mark--failed { color: var(--text-soft); }
 .message-delivery--failed { padding: 9px 11px; border: 1px solid var(--text-soft); border-radius: 10px; background: var(--surface); color: var(--text); }
 .message-delivery p { margin: 5px 0; max-width: 54ch; }
 .message-delivery__actions { display: flex; flex-wrap: wrap; gap: 8px; }

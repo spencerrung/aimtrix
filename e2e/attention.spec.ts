@@ -26,6 +26,8 @@ test('Home unmounts conversation, retains filter and reading point, and opens ex
   await expect(home.getByText('Synthetic activity item 1', { exact: true })).toHaveCount(0);
   const target = home.getByRole('button', { name: /Synthetic activity item 12 / });
   await target.scrollIntoViewIfNeeded();
+  await expect(target.locator('.avatar')).toBeVisible();
+  await expect(target.locator('.home-activity__code-block code')).toHaveText('const sample = 12;');
   const scroll = await home.locator('.home-activity__list').evaluate((element) => element.scrollTop);
   expect(scroll).toBeGreaterThan(0);
   expect(await page.evaluate(() => window.attentionFixture.reads.length)).toBe(before);

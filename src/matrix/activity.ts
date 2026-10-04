@@ -3,10 +3,12 @@ import type { IEvent } from 'matrix-js-sdk/lib/models/event.js';
 import { Method } from 'matrix-js-sdk/lib/http-api/method.js';
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
 import { validUnreadEventId } from './unreadState';
-import { historyRelation, isVisibleTimelineEvent } from './historyEvents';
+import { historyRelation, isVisibleTimelineEvent, stripReplyFallback } from './historyEvents';
+import { parseIncomingFormatting, type FormattedMessageNode } from './incomingFormatting';
 
 export const THREAD_FOLLOW_EVENT = 'dev.alucard.aimtrix.followed_threads.v1';
 const PAGE = 30, MAX_ITEMS = 500, MAX_ROOMS = 200, ROOMS_PER_PAGE = 4, MAX_FOLLOWS = 128;
+const MAX_PREVIEW_FORMATTED_LENGTH = 8192;
 const encode = encodeURIComponent;
 export interface ActivityItem {
   id: string;
@@ -18,6 +20,7 @@ export interface ActivityItem {
   senderId?: string;
   senderName?: string;
   body: string;
+  formatted?: FormattedMessageNode[];
   timestamp: number;
   read: 'read' | 'unread' | 'unknown';
   highlighted: boolean;
@@ -73,6 +76,7 @@ export class ActivityStore {
   private records = new Map<string, RecordEntry>();
   private roomCursors = new Map<string, RoomCursor>();
   private follows = new Map<string, FollowPreferences>();
+  private formattedPreviews = new WeakMap<MatrixEvent, { html: string; nodes?: FormattedMessageNode[] }>();
   private writes = new Map<string, Promise<void>>();
   private notificationToken?: string;
   private notificationTokens = new Set<string>();
@@ -88,6 +92,7 @@ export class ActivityStore {
 
   public clear(): void {
     this.generation++; this.owner = undefined; this.records.clear(); this.roomCursors.clear(); this.follows.clear(); this.writes.clear();
+    this.formattedPreviews = new WeakMap();
     this.notificationToken = undefined; this.notificationTokens.clear(); this.exhausted = false;
     this.loading = false; this.loadingThreads = false; this.limited = false;
     this.notifications = 'not-loaded'; this.error = undefined; this.threadError = undefined; this.threadsUnsupported = false;
@@ -96,6 +101,14 @@ export class ActivityStore {
     const client = this.clientGetter();
     if (this.owner !== client) { this.clear(); this.owner = client; }
     return client;
+  }
+  private formattedPreview(event: MatrixEvent, html: unknown): FormattedMessageNode[] | undefined {
+    if (typeof html !== 'string' || html.length > MAX_PREVIEW_FORMATTED_LENGTH) return;
+    const cached = this.formattedPreviews.get(event);
+    if (cached?.html === html) return cached.nodes;
+    const nodes = parseIncomingFormatting(html);
+    this.formattedPreviews.set(event, { html, nodes });
+    return nodes;
   }
   private active(client: MatrixClient, generation: number, room?: Room): boolean {
     return this.clientGetter() === client && this.owner === client && this.generation === generation &&
@@ -335,11 +348,17 @@ export class ActivityStore {
       const event = record.preview ?? record.event;
       const encrypted = event.getType() === 'm.room.encrypted';
       const unavailable = event.isRedacted();
-      const content = event.getContent<{ body?: unknown }>();
+      const content = event.getContent<{ body?: unknown; format?: unknown; formatted_body?: unknown }>();
       const senderId = event.getSender();
+      const body = typeof content.body === 'string'
+        ? (historyRelation(event)?.['m.in_reply_to'] ? stripReplyFallback(content.body) : content.body).slice(0, 1000)
+        : 'Matrix activity';
+      const formatted = !encrypted && !unavailable && content.format === 'org.matrix.custom.html'
+        ? this.formattedPreview(event, content.formatted_body) : undefined;
       items.push({ id, kind: record.kind, roomId: record.room.roomId, roomName: record.room.name || record.room.roomId,
         eventId: event.getId()!, threadRootId: record.rootId, senderId, senderName: senderId ? record.room.getMember(senderId)?.name ?? senderId : undefined,
-        body: unavailable ? 'This message was removed.' : encrypted ? 'Encrypted activity. Keys are not available yet.' : typeof content.body === 'string' ? content.body.slice(0, 1000) : 'Matrix activity',
+        body: unavailable ? 'This message was removed.' : encrypted ? 'Encrypted activity. Keys are not available yet.' : body,
+        ...(formatted ? { formatted } : {}),
         timestamp: record.timestamp, read: this.read(record, event, client), highlighted: client.getPushActionsForEvent(event, true)?.tweaks?.highlight === true || record.highlighted,
         encrypted, unavailable, participated: record.participated, followed, serverRead: record.serverRead });
     }
