@@ -2913,15 +2913,21 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         invariant(bobOnAlicePage.userId === accounts.bob.user_id && bobOnAlicePage.deviceId !== bobSession.deviceId, stage);
         invariant(await alice.locator('.buddy-row').filter({ hasText: privateRoom }).count() === 0 &&
           await alice.getByText(marker, { exact: true }).count() === 0, 'account-switch-no-cross-account-room');
-        stage = 'account-switch-return';
+        stage = 'account-switch-return-settings';
         await alice.getByRole('button', { name: 'Open settings' }).click();
         settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
         await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+        stage = 'account-switch-return-select';
         await settings.locator('.account-list__row').filter({ hasText: accounts.alice.user_id }).getByRole('button', { name: 'Switch' }).click();
+        stage = 'account-switch-return-session';
+        await until(async () => (await session(alice))?.userId === accounts.alice.user_id, stage, 60000);
+        stage = 'account-switch-return-ready';
         await alice.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
-        invariant((await session(alice)).userId === accounts.alice.user_id, stage);
+        stage = 'account-switch-return-room';
         await openRoom(alice, privateRoom);
+        stage = 'account-switch-return-message';
         await alice.getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
+        stage = 'account-switch-dormant-draft-restored';
         invariant((await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).inputValue()) === draft,
           'account-switch-dormant-draft-restored');
         stage = 'account-switch-forget-dormant';
