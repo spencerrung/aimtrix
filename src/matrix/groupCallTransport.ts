@@ -51,21 +51,26 @@ export interface GroupCallAuthorization {
 export async function authorizeGroupCall(
   client: Pick<MatrixClient, 'getOpenIdToken'>,
   transport: GroupCallTransport,
-  identity: { deviceId: string },
+  identity: { userId: string; deviceId: string; memberId: string },
   roomId: string,
   signal?: AbortSignal,
+  mode: 'compatibility' | 'matrix_2_0' = 'compatibility',
+  slotId = 'm.call#ROOM',
 ): Promise<GroupCallAuthorization> {
   const openidToken = await client.getOpenIdToken();
-  // The state-event membership uses the legacy user:device backend identity.
-  // Its JWT must come from the matching legacy endpoint; /get_token hashes it.
-  const response = await fetch(`${transport.livekit_service_url}/sfu/get`, {
+  // The SDK's sticky membership mode hashes [user, device, member] for the
+  // LiveKit identity. /get_token issues the matching JWT; /sfu/get is only for
+  // the legacy state-event identity.
+  const modern = mode === 'matrix_2_0';
+  const response = await fetch(`${transport.livekit_service_url}/${modern ? 'get_token' : 'sfu/get'}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      room: roomId,
+    body: JSON.stringify(modern ? {
+      room_id: roomId,
+      slot_id: slotId,
       openid_token: openidToken,
-      device_id: identity.deviceId,
-    }),
+      member: { id: identity.memberId, claimed_user_id: identity.userId, claimed_device_id: identity.deviceId },
+    } : { room: roomId, openid_token: openidToken, device_id: identity.deviceId }),
     signal,
   });
   if (!response.ok) throw new Error(`The MatrixRTC authorization service rejected this call (${response.status}).`);

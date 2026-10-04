@@ -10,6 +10,7 @@
     "demoMode": true,
     "calls": false,
     "groupCalls": false,
+    "matrixRtcMode": "compatibility",
     "gifs": false,
     "stickers": true
   },

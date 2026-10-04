@@ -16,6 +16,7 @@ export interface RuntimeConfig {
     demoMode: boolean;
     calls: boolean;
     groupCalls: boolean;
+    matrixRtcMode: 'compatibility' | 'matrix_2_0';
     gifs: boolean;
     stickers: boolean;
   };
@@ -57,6 +58,7 @@ export const defaultRuntimeConfig: RuntimeConfig = {
     demoMode: true,
     calls: false,
     groupCalls: false,
+    matrixRtcMode: 'compatibility',
     gifs: false,
     stickers: true,
   },
@@ -140,6 +142,9 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
     : defaultRuntimeConfig.defaultTheme;
   if (requestedTheme !== undefined && requestedTheme !== defaultTheme) {
     warnings.push('defaultTheme is unknown; Aqua was used.');
+  }
+  if (features.matrixRtcMode !== undefined && features.matrixRtcMode !== 'compatibility' && features.matrixRtcMode !== 'matrix_2_0') {
+    warnings.push('features.matrixRtcMode is unknown; compatibility mode was used.');
   }
 
   let parsedGifProvider: RuntimeConfig['gifProvider'];
@@ -236,6 +241,7 @@ export function parseRuntimeConfig(value: unknown): RuntimeConfigResult {
         demoMode: readBoolean(features.demoMode, defaultRuntimeConfig.features.demoMode),
         calls: readBoolean(features.calls, defaultRuntimeConfig.features.calls),
         groupCalls: readBoolean(features.groupCalls, defaultRuntimeConfig.features.groupCalls),
+        matrixRtcMode: features.matrixRtcMode === 'matrix_2_0' ? 'matrix_2_0' : 'compatibility',
         gifs: readBoolean(features.gifs, defaultRuntimeConfig.features.gifs),
         stickers: readBoolean(features.stickers, defaultRuntimeConfig.features.stickers),
       },

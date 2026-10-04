@@ -50,7 +50,7 @@ vi.mock('livekit-client', async () => {
 
 import { GroupCallEngine } from './GroupCallEngine';
 
-function fixture() {
+function fixture(mode: 'compatibility' | 'matrix_2_0' = 'compatibility') {
   const session = Object.assign(new EventEmitter(), {
     reemitEncryptionKeys: vi.fn(),
     joinRTCSession: vi.fn(() => { queueMicrotask(() => session.emit(mocks.rejectMembership ? MatrixRTCSessionEvent.MembershipManagerError : MatrixRTCSessionEvent.EncryptionKeyChanged, ...(mocks.rejectMembership ? [new Error('private server detail')] : [new Uint8Array(32), 0, { userId: '@alice:example.test', deviceId: 'DEVICE' }, '@alice:example.test:DEVICE']))); }),
@@ -64,7 +64,7 @@ function fixture() {
     getDeviceId: () => 'DEVICE',
   } as unknown as MatrixClient;
   const changed = vi.fn();
-  return { engine: new GroupCallEngine(client, '!room:example.test', changed), session, changed };
+  return { engine: new GroupCallEngine(client, '!room:example.test', changed, mode), session, changed };
 }
 
 afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; mocks.deferE2EE = false; mocks.completeE2EE = undefined; mocks.rejectMembership = false; vi.unstubAllGlobals(); });
@@ -82,6 +82,17 @@ describe('group call media lifecycle', () => {
     await engine.leave();
     expect(mocks.events.slice(-3)).toEqual(['disconnect', 'membership-leave', 'worker-terminate']);
     expect(session.listenerCount(MatrixRTCSessionEvent.EncryptionKeyChanged)).toBe(0);
+  });
+
+  it('pairs sticky RTC membership with modern token authorization', async () => {
+    vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
+    mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
+    mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
+    const { engine, session } = fixture('matrix_2_0');
+    await engine.join(false, { microphoneId: '', cameraId: '' }, false);
+    expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ memberId: '@alice:example.test:DEVICE' }), '!room:example.test', expect.any(AbortSignal), 'matrix_2_0', 'm.call#ROOM');
+    expect(session.joinRTCSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), expect.objectContaining({ unstableSendStickyEvents: true, manageMediaKeys: true }));
+    await engine.leave();
   });
 
   it('disconnects and stops publication if encryption fails', async () => {

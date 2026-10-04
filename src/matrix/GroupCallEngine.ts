@@ -41,6 +41,7 @@ export class GroupCallEngine {
     private readonly client: MatrixClient,
     roomId: string,
     private readonly changed: (summary: GroupCallSummary) => void,
+    private readonly mode: 'compatibility' | 'matrix_2_0' = 'compatibility',
   ) {
     this.state = { roomId, state: 'joining', encrypted: false, microphoneMuted: true, videoMuted: true, screensharing: false, participants: [] };
     this.changed(this.state);
@@ -143,7 +144,7 @@ export class GroupCallEngine {
       if (!deviceId) throw new Error('A Matrix device is required for encrypted group calls.');
       const identity = { userId, deviceId, memberId: `${userId}:${deviceId}` };
       phase = 'authorization';
-      const authorization = await authorizeGroupCall(this.client, transport, identity, this.state.roomId, this.abort.signal);
+      const authorization = await authorizeGroupCall(this.client, transport, identity, this.state.roomId, this.abort.signal, this.mode, session.slotId ?? 'm.call#ROOM');
       if (this.abort.signal.aborted) return;
 
       phase = 'worker';
@@ -168,7 +169,7 @@ export class GroupCallEngine {
       session.on(MatrixRTCSessionEvent.MembershipManagerError, this.onMembershipError);
       session.reemitEncryptionKeys();
       phase = 'membership';
-      session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio' });
+      session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio', unstableSendStickyEvents: this.mode === 'matrix_2_0' });
       if (this.abort.signal.aborted) return;
       phase = 'key';
       let keyTimer!: number;

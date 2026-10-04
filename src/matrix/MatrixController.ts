@@ -2177,7 +2177,7 @@ export class MatrixController {
         if (this.client !== client || (this.groupCallEngine && this.groupCallEngine !== holder.engine)) return;
         this.groupCallSummary = summary;
         this.scheduleWorkspacePublish();
-      });
+      }, this.config.features.matrixRtcMode);
       const engine = holder.engine;
       this.groupCallEngine = engine;
       this.callDevices = devices;
