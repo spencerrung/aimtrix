@@ -392,6 +392,32 @@ describe('MatrixController protocol integration', () => {
     }
   });
 
+  it('abandons an inline media send when its account is removed during download', async () => {
+    let finishDownload!: (response: unknown) => void;
+    const fetchMedia = vi.fn().mockImplementation(() => new Promise((resolve) => { finishDownload = resolve; }));
+    vi.stubGlobal('fetch', fetchMedia);
+    try {
+      const { controller, client } = deliveryFixture(true);
+      const uploadContent = vi.fn();
+      Object.assign(client, { uploadContent });
+      const sending = controller.sendMessage('!room:test', ':wave:', [], [{
+        shortcode: ':wave:', id: 'wave', name: 'Wave', src: '/emoji/wave.png',
+      }]);
+      await vi.waitFor(() => expect(fetchMedia).toHaveBeenCalledOnce());
+      (controller as unknown as ControllerInternals).client = undefined;
+      finishDownload({
+        ok: true,
+        headers: { get: () => null },
+        blob: () => Promise.resolve(new Blob(['image'], { type: 'image/png' })),
+      });
+      await expect(sending).rejects.toEqual(new MessageSendError(false));
+      expect(uploadContent).not.toHaveBeenCalled();
+      expect(client.sendMessage).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps mention metadata inside standard Matrix replacement content', async () => {
     const { controller, client } = deliveryFixture();
     const sendEvent = client.sendEvent;
