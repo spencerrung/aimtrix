@@ -109,6 +109,7 @@ import type {
   WorkspaceSnapshot,
 } from './viewModels';
 import type { GroupCallEngine } from './GroupCallEngine';
+import { clearRtcMembershipPolicy } from './rtcMembershipEncryption';
 import type { GroupCallActivity } from './GroupCallActivity';
 
 export interface LoginCredentials {
@@ -4073,6 +4074,7 @@ export class MatrixController {
     this.snapshotCache.members.clear();
     this.clearMediaCache();
     if (groupCallLeaving) await groupCallLeaving;
+    if (client) clearRtcMembershipPolicy(client);
     await Promise.allSettled(privateWrites);
     this.privateSearchRedactions.clear();
     this.privateSearchRoomRevisions.clear();
