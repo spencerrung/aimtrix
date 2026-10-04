@@ -1,4 +1,4 @@
-/* global console, navigator, window */
+/* global console, MediaStream, navigator, window */
 import { readFile, mkdir, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { URL } from 'node:url';
@@ -64,9 +64,17 @@ try {
     await context.addInitScript(() => {
       const original = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
       window.__rtcMediaTracks = [];
+      window.__rtcDisplayTracks = [];
       navigator.mediaDevices.getUserMedia = async (constraints) => {
         const stream = await original(constraints);
         window.__rtcMediaTracks.push(...stream.getTracks());
+        return stream;
+      };
+      // Chromium cannot select a real display in this unattended run. Feed a
+      // separate fake video track through LiveKit's getDisplayMedia path.
+      navigator.mediaDevices.getDisplayMedia = async () => {
+        const stream = await original({ audio: false, video: true });
+        window.__rtcDisplayTracks.push(...stream.getTracks());
         return stream;
       };
     });
@@ -125,6 +133,33 @@ try {
     }
     return shelf;
   };
+  const remoteVideoPlaying = async (shelf) => shelf.locator('video').evaluateAll((videos) => videos.some((video) =>
+    video.srcObject instanceof MediaStream && video.srcObject.getVideoTracks().some((track) => track.readyState === 'live') && video.readyState >= 2 && video.videoWidth > 0));
+  const exerciseVideoAndScreen = async (publisher, subscriberShelf, publisherShelf, prefix) => {
+    await run(`${prefix}encrypted-camera-publish-and-subscribe`, async () => {
+      await publisherShelf.getByRole('button', { name: 'Turn group camera on' }).click();
+      await publisherShelf.getByRole('button', { name: 'Turn group camera off' }).waitFor();
+      await until(() => remoteVideoPlaying(subscriberShelf), `${prefix}encrypted-camera-video`, 45000);
+      await publisherShelf.getByRole('button', { name: 'Turn group camera off' }).click();
+      await until(async () => (await subscriberShelf.locator('video').count()) === 0, `${prefix}camera-unpublished`, 45000);
+    });
+    await run(`${prefix}encrypted-synthetic-screen-publish-and-subscribe`, async () => {
+      stage = `${prefix}screen-start`;
+      await publisherShelf.getByRole('button', { name: 'Share group screen' }).click();
+      await publisherShelf.getByRole('button', { name: 'Stop sharing group screen' }).waitFor();
+      stage = `${prefix}screen-remote-video`;
+      await until(() => remoteVideoPlaying(subscriberShelf), `${prefix}encrypted-screen-video`, 45000);
+      stage = `${prefix}screen-capture-used`;
+      if (!await publisher.evaluate(() => window.__rtcDisplayTracks.length > 0)) throw new Error('synthetic-screen-capture-unused');
+      stage = `${prefix}screen-stop`;
+      await publisherShelf.getByRole('button', { name: 'Stop sharing group screen' }).click();
+      stage = `${prefix}screen-remote-cleanup`;
+      await until(async () => (await subscriberShelf.locator('video').count()) === 0, `${prefix}screen-remote-cleanup`, 45000);
+      stage = `${prefix}screen-capture-cleanup`;
+      await until(() => publisher.evaluate(() => window.__rtcDisplayTracks.every((track) => track.readyState === 'ended')),
+        `${prefix}screen-capture-cleanup`, 45000);
+    });
+  };
   let aliceShelf, bobShelf;
   await run('first-encrypted-media-publisher', async () => {
     aliceShelf = await join(alice, 'Start group call');
@@ -137,6 +172,7 @@ try {
     await aliceShelf.getByText('2 participants').waitFor({ timeout: 60000 });
     await until(async () => (await bobShelf.locator('audio').count()) > 0 && (await aliceShelf.locator('audio').count()) > 0, 'encrypted-remote-audio', 45000);
   });
+  await exerciseVideoAndScreen(alice, bobShelf, aliceShelf, '');
   await run('membership-and-capture-cleanup', async () => {
     await bobShelf.getByRole('button', { name: 'Leave group call' }).click();
     await aliceShelf.getByText('1 participant').waitFor({ timeout: 60000 });
@@ -168,6 +204,7 @@ try {
     await modernAliceShelf.getByText('2 participants').waitFor({ timeout: 60000 });
     await until(async () => (await modernBobShelf.locator('audio').count()) > 0 && (await modernAliceShelf.locator('audio').count()) > 0, 'modern-encrypted-remote-audio', 45000);
   });
+  await exerciseVideoAndScreen(modernAlice, modernBobShelf, modernAliceShelf, 'modern-');
   await run('modern-membership-and-capture-cleanup', async () => {
     await modernBobShelf.getByRole('button', { name: 'Leave group call' }).click();
     await modernAliceShelf.getByText('1 participant').waitFor({ timeout: 60000 });
@@ -198,7 +235,7 @@ try {
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, stickyWire, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, stickyWire, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'screen capture uses a synthetic video track in place of a physical display picker', 'TURN-required NAT, connection-loss recovery, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }

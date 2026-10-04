@@ -1,4 +1,4 @@
-/* global localStorage, indexedDB, fetch, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
+/* global localStorage, indexedDB, fetch, AbortController, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -130,6 +130,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
   const accounts = {};
   await check('isolated-accounts', async () => {
     for (const name of ['alice', 'bob', 'charlie']) accounts[name] = await register(api, stack, name);
+    if (stack.origins.secondary) accounts.secondary = await register(
+      matrixApi({ origins: { synapse: stack.origins.secondary } }), stack, 'secondary',
+    );
   });
   const contexts = [];
   const newPage = async ({ element = false } = {}) => {
@@ -2952,43 +2955,108 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         let settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
         await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
         await settings.getByRole('button', { name: 'Add another account' }).click();
-        await alice.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill(accounts.bob.user_id);
+        await alice.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill(accounts.secondary.user_id);
+        await alice.getByRole('textbox', { name: 'Homeserver', exact: true }).fill(stack.origins.secondary);
         await alice.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
         await alice.getByRole('button', { name: 'Sign On', exact: true }).click();
         await alice.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
-        const bobOnAlicePage = await session(alice);
-        invariant(bobOnAlicePage.userId === accounts.bob.user_id && bobOnAlicePage.deviceId !== bobSession.deviceId, stage);
+        const secondarySession = await session(alice);
+        invariant(secondarySession.userId === accounts.secondary.user_id && secondarySession.baseUrl === stack.origins.secondary, stage);
         invariant(await alice.locator('.buddy-row').filter({ hasText: privateRoom }).count() === 0 &&
           await alice.getByText(marker, { exact: true }).count() === 0, 'account-switch-no-cross-account-room');
-        stage = 'account-switch-return-settings';
-        await alice.getByRole('button', { name: 'Open settings' }).click();
-        settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
-        await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
-        stage = 'account-switch-return-select';
-        await settings.locator('.account-list__row').filter({ hasText: accounts.alice.user_id }).getByRole('button', { name: 'Switch' }).click();
-        stage = 'account-switch-return-session';
-        await until(async () => (await session(alice))?.userId === accounts.alice.user_id, stage, 60000);
-        stage = 'account-switch-return-ready';
-        await alice.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
-        stage = 'account-switch-return-room';
-        await openRoom(alice, privateRoom);
-        stage = 'account-switch-return-message';
-        await alice.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
-        stage = 'account-switch-draft-store-retained';
-        await until(savedDraft, stage, 10000);
-        stage = 'account-switch-dormant-draft-restored';
-        await until(async () => (await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).textContent())?.trim() === draft,
-          stage, 10000);
-        stage = 'account-switch-forget-dormant';
-        await alice.getByRole('button', { name: 'Open settings' }).click();
-        settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
-        await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
-        await settings.locator('.account-list__row').filter({ hasText: accounts.bob.user_id }).getByRole('button', { name: 'Forget' }).click();
-        await alice.getByRole('dialog', { name: 'Forget this account?' }).getByRole('button', { name: 'Forget account' }).click();
-        await until(async () => await settings.locator('.account-list__row').filter({ hasText: accounts.bob.user_id }).count() === 0,
-          'account-switch-dormant-removed', 45000);
-        invariant((await session(alice)).userId === accounts.alice.user_id, 'account-switch-active-preserved');
-        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+        stage = 'account-switch-pending-create-room';
+        const pendingRoom = `Synthetic pending send ${randomBytes(6).toString('hex')}`;
+        await alice.getByRole('button', { name: 'Join or create room' }).click();
+        const pendingCreate = alice.getByRole('dialog', { name: 'Add a conversation' });
+        await pendingCreate.getByRole('button', { name: 'Create room', exact: true }).first().click();
+        await pendingCreate.getByLabel('Room name', { exact: true }).fill(pendingRoom);
+        await pendingCreate.getByLabel('Encrypt this room').check();
+        const pendingRoomResponse = alice.waitForResponse((response) => response.request().method() === 'POST' &&
+          new URL(response.url()).pathname.endsWith('/createRoom'));
+        await pendingCreate.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
+        const pendingRoomId = (await (await pendingRoomResponse).json()).room_id;
+        invariant(typeof pendingRoomId === 'string' && pendingRoomId.startsWith('!'), stage);
+        await pendingCreate.waitFor({ state: 'hidden' });
+        await openRoom(alice, pendingRoom);
+        let unblockSend;
+        let sawSend;
+        let sendFinished;
+        let pendingRequest;
+        const blockedSend = new Promise((resolve) => { sawSend = resolve; });
+        const routeFinished = new Promise((resolve) => { sendFinished = resolve; });
+        const sendGate = new Promise((resolve) => { unblockSend = resolve; });
+        const pendingSendRoute = async (route) => {
+          pendingRequest = route.request();
+          sawSend();
+          await sendGate;
+          // The send may already be accepted when an account switch begins.
+          // Let the held request settle naturally and verify that its outcome
+          // never restores the removed account or leaks into the active one.
+          try { await route.continue().catch(() => undefined); }
+          finally { sendFinished(); }
+        };
+        await alice.route('**/_matrix/client/*/rooms/**/send/m.room.encrypted/**', pendingSendRoute);
+        try {
+          stage = 'account-switch-send-in-flight';
+          await alice.getByRole('textbox', { name: `Message ${pendingRoom}`, exact: true }).fill(`Synthetic unsent ${randomBytes(6).toString('hex')}`);
+          await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+          const blockedTimeout = new AbortController();
+          try {
+            await Promise.race([blockedSend, delay(45000, undefined, { signal: blockedTimeout.signal }).then(() => { throw new Error(stage); })]);
+          } finally { blockedTimeout.abort(); }
+          stage = 'account-switch-return-settings';
+          await alice.getByRole('button', { name: 'Open settings' }).click();
+          settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+          await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+          stage = 'account-switch-return-select';
+          await settings.locator('.account-list__row').filter({ hasText: accounts.alice.user_id }).getByRole('button', { name: 'Switch' }).click();
+          stage = 'account-switch-return-session';
+          await until(async () => (await session(alice))?.userId === accounts.alice.user_id, stage, 60000);
+          stage = 'account-switch-return-ready';
+          await alice.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
+          stage = 'account-switch-return-room';
+          await openRoom(alice, privateRoom);
+          invariant(await alice.locator('.buddy-row').filter({ hasText: pendingRoom }).count() === 0,
+            'account-switch-no-cross-account-room');
+          stage = 'account-switch-return-message';
+          await alice.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
+          stage = 'account-switch-draft-store-retained';
+          await until(savedDraft, stage, 10000);
+          stage = 'account-switch-dormant-draft-restored';
+          await until(async () => (await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).textContent())?.trim() === draft,
+            stage, 10000);
+          stage = 'account-switch-forget-dormant';
+          await alice.getByRole('button', { name: 'Open settings' }).click();
+          settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+          await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+          await settings.locator('.account-list__row').filter({ hasText: accounts.secondary.user_id }).getByRole('button', { name: 'Forget' }).click();
+          await alice.getByRole('dialog', { name: 'Forget this account?' }).getByRole('button', { name: 'Forget account' }).click();
+          await until(async () => await settings.locator('.account-list__row').filter({ hasText: accounts.secondary.user_id }).count() === 0,
+            'account-switch-dormant-removed', 45000);
+          invariant((await session(alice)).userId === accounts.alice.user_id, 'account-switch-active-preserved');
+          stage = 'account-switch-pending-cleanup';
+          unblockSend();
+          await routeFinished;
+          const settleTimeout = new AbortController();
+          try {
+            await Promise.race([pendingRequest.response(), delay(15000, undefined, { signal: settleTimeout.signal })
+              .then(() => { throw new Error(stage); })]);
+          } finally { settleTimeout.abort(); }
+          const secondaryApi = matrixApi({ origins: { synapse: stack.origins.secondary } });
+          const history = await secondaryApi(`/_matrix/client/v3/rooms/${encode(pendingRoomId)}/messages?dir=b&limit=20`,
+            { token: secondarySession.accessToken });
+          invariant((history.chunk?.filter((event) => event.type === 'm.room.encrypted').length ?? 0) <= 1, stage);
+          invariant(await alice.locator('.buddy-row').filter({ hasText: pendingRoom }).count() === 0, stage);
+          const retainedSecondary = await alice.evaluate((userId) => {
+            const stored = JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1'));
+            return stored?.accounts?.some((account) => account.userId === userId) ?? false;
+          }, accounts.secondary.user_id);
+          invariant(!retainedSecondary, stage);
+          await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+        } finally {
+          unblockSend();
+          await alice.unroute('**/_matrix/client/*/rooms/**/send/m.room.encrypted/**', pendingSendRoute);
+        }
       } catch { throw new Error(stage); }
     });
   } finally {

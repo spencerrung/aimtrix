@@ -45,7 +45,7 @@ vi.mock('livekit-client', async () => {
     Room: FakeRoom,
     BaseKeyProvider: class { onSetEncryptionKey() { mocks.events.push('key-import'); } },
     isE2EESupported: () => true,
-    RoomEvent: { ParticipantConnected: 'participant-connected', ParticipantDisconnected: 'participant-disconnected', TrackSubscribed: 'track-subscribed', TrackUnsubscribed: 'track-unsubscribed', TrackMuted: 'track-muted', TrackUnmuted: 'track-unmuted', LocalTrackPublished: 'local-track-published', LocalTrackUnpublished: 'local-track-unpublished', ActiveSpeakersChanged: 'speakers', ParticipantEncryptionStatusChanged: 'participant-encryption', AudioPlaybackStatusChanged: 'audio-playback', Reconnecting: 'reconnecting', Reconnected: 'reconnected', Disconnected: 'disconnected', EncryptionError: 'encryption-error' },
+    RoomEvent: { ParticipantConnected: 'participant-connected', ParticipantDisconnected: 'participant-disconnected', TrackSubscribed: 'track-subscribed', TrackUnsubscribed: 'track-unsubscribed', TrackUnpublished: 'track-unpublished', TrackMuted: 'track-muted', TrackUnmuted: 'track-unmuted', LocalTrackPublished: 'local-track-published', LocalTrackUnpublished: 'local-track-unpublished', ActiveSpeakersChanged: 'speakers', ParticipantEncryptionStatusChanged: 'participant-encryption', AudioPlaybackStatusChanged: 'audio-playback', Reconnecting: 'reconnecting', Reconnected: 'reconnected', Disconnected: 'disconnected', EncryptionError: 'encryption-error' },
     Track: { Source: { Camera: 'camera', ScreenShare: 'screen', Microphone: 'microphone' } },
   };
 });

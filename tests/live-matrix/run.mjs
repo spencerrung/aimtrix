@@ -54,10 +54,11 @@ for (let run = 1; run <= repeats; run++) {
     }
   };
   try {
-    stack = await createStack({ elementUi, syncResponseCache: profileCount > 0, largeAccount: profileLargeAccount, delegatedAuth });
+    stack = await createStack({ elementUi, secondaryHomeserver: profileCount === 0 && !delegatedAuth && !probe,
+      syncResponseCache: profileCount > 0, largeAccount: profileLargeAccount, delegatedAuth });
     await check('disposable-stack', () => stack.start());
     await check('application-server', async () => {
-      const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: false,
+      const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: Boolean(stack.origins.secondary),
         features: { demoMode: false, calls: false, gifs: false, stickers: false }, emojiPacks: { enabled: false }, stickerPacks: [], media: { maxUploadBytes: 1048576 } };
       await readFile('dist/index.html');
       server = await preview({ logLevel: 'silent', preview: { host: '127.0.0.1', port: Number(new URL(stack.origins.app).port), strictPort: true, open: false },

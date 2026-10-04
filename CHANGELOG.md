@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0-rc.3 — 2026-10-04
+
+PWA device-testing candidate replacing `0.3.0-rc.2`.
+
+- Clear remote group-call video when a screen-share publication ends. The disposable two-browser LiveKit journey now checks camera and synthetic screen publication, subscription, and cleanup in both compatibility and Matrix 2.0 modes.
+- Extend disposable cross-homeserver account isolation and delegated-auth refresh/revocation evidence. The remaining physical-device, real-provider, and broader interoperability acceptance criteria stay open in the roadmap.
+
+The prior homelab image `v0.3.0-rc.2` remains available for rollback, as does the earlier known-good `v0.2.6` image.
+
 ## 0.3.0-rc.2 — 2026-10-04
 
 PWA device-testing candidate replacing `0.3.0-rc.1`.

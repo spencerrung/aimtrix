@@ -45,10 +45,10 @@ export async function freePort() {
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false, delegatedAuth = false, stickyEvents = false } = {}) {
+export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false, delegatedAuth = false, stickyEvents = false, secondaryHomeserver = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
-  const ports = { synapse: await freePort(), ...(delegatedAuth ? { mas: await freePort() } : { dex: await freePort() }),
+  const ports = { synapse: await freePort(), ...(secondaryHomeserver ? { secondary: await freePort() } : {}), ...(delegatedAuth ? { mas: await freePort() } : { dex: await freePort() }),
     app: await freePort(), ...(elementUi ? { element: await freePort() } : {}) };
   invariant(new Set(Object.values(ports)).size === Object.keys(ports).length, 'port-allocation');
   const origins = Object.fromEntries(Object.entries(ports).map(([key, port]) => [key, `http://127.0.0.1:${port}`]));
@@ -107,7 +107,7 @@ export async function createStack({ elementUi = false, syncResponseCache = false
     if (elementUi) await command('docker', ['pull', images.element]);
     const hash = delegatedAuth ? undefined : await command('docker', ['run', '--rm', '-i', '--network', 'none', '--log-driver', 'none', '--label', `dev.aimtrix.test-owner=${owner}`, '--name', `${project}-hash`, '--user', `${uid}:${uid}`, '--entrypoint', 'python', images.synapse, '-c', 'import bcrypt,sys; print(bcrypt.hashpw(sys.stdin.buffer.read(), bcrypt.gensalt()).decode())'], { input: credentials.password });
     await write('logging.json', { version: 1, disable_existing_loggers: true, handlers: { discard: { class: 'logging.NullHandler' } }, root: { level: 'CRITICAL', handlers: ['discard'] } });
-    await write('synapse.json', {
+    const synapseConfig = {
       server_name: 'aimtrix.test', public_baseurl: `${origins.synapse}/`, report_stats: false,
       pid_file: '/data/homeserver.pid', signing_key_path: '/data/signing.key', media_store_path: '/data/media',
       database: { name: 'sqlite3', args: { database: '/data/homeserver.db' } },
@@ -132,6 +132,16 @@ export async function createStack({ elementUi = false, syncResponseCache = false
         scopes: ['openid', 'profile', 'email'], user_mapping_provider: { config: { localpart_template: '{{ user.name }}', display_name_template: '{{ user.name }}' } },
         }],
       }),
+    };
+    await write('synapse.json', synapseConfig);
+    if (secondaryHomeserver) await write('synapse-secondary.json', {
+      ...synapseConfig,
+      server_name: 'secondary.test',
+      public_baseurl: `${origins.secondary}/`,
+      macaroon_secret_key: secret(), form_secret: secret(),
+      // Separate disposable database, media and signing material in its own
+      // container; federation stays disabled between the test homeservers.
+      sso: undefined, oidc_providers: undefined,
     });
     if (!delegatedAuth) await write('dex.json', {
       issuer: `${origins.dex}/dex`, storage: { type: 'sqlite3', config: { file: '/data/dex.db' } },
@@ -216,6 +226,7 @@ http {
           command: ['server'], depends_on: { postgres: { condition: 'service_healthy' } }, ports: [`127.0.0.1:${ports.mas}:8081`] },
       } : { dex: { ...isolation, image: images.dex, command: ['dex', 'serve', '/config/dex.json'], ports: [`127.0.0.1:${ports.dex}:5556`] } }),
       synapse: { ...isolation, image: images.synapse, entrypoint: ['python', '-m', 'synapse.app.homeserver'], command: ['-c', '/config/synapse.json'], ports: [`127.0.0.1:${ports.synapse}:8008`] },
+      ...(secondaryHomeserver ? { secondary: { ...isolation, image: images.synapse, entrypoint: ['python', '-m', 'synapse.app.homeserver'], command: ['-c', '/config/synapse-secondary.json'], ports: [`127.0.0.1:${ports.secondary}:8008`] } } : {}),
       ...(elementUi ? { element: { ...isolation, image: images.element, environment: { ELEMENT_WEB_PORT: '8080' }, entrypoint: ['nginx'], command: ['-c', '/config/element-nginx.conf', '-g', 'daemon off;'], ports: [`127.0.0.1:${ports.element}:8080`] } } : {}),
     }, networks: { test: { driver: 'bridge', labels: { 'dev.aimtrix.test-owner': owner } } } });
     prepared = true;
@@ -225,6 +236,9 @@ http {
     await until(async () => {
       try { return (await fetch(`${origins.synapse}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
     }, delegatedAuth ? 'mas-synapse-readiness' : 'stack-readiness', 60000);
+    if (secondaryHomeserver) await until(async () => {
+      try { return (await fetch(`${origins.secondary}/health`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
+    }, 'secondary-synapse-readiness', 60000);
     if (delegatedAuth) {
       try { await compose('up', '--detach', 'mas'); } catch { throw new Error('mas-compose-start'); }
     }
@@ -252,7 +266,7 @@ http {
       try { return (await fetch(`${origins.element}/config.json`, { signal: AbortSignal.timeout(2000) })).ok; } catch { return false; }
     }, 'element-readiness', 60000);
     const ids = (await compose('ps', '-q')).split('\n');
-    invariant(ids.length === (delegatedAuth ? 3 : elementUi ? 3 : 2), 'service-count');
+    invariant(ids.length === (delegatedAuth ? 3 : elementUi ? 3 : 2) + Number(secondaryHomeserver), 'service-count');
     for (const id of ids) {
       const [info] = JSON.parse(await command('docker', ['inspect', id]));
       invariant(info.HostConfig.CapDrop?.includes('ALL') && info.HostConfig.SecurityOpt?.includes('no-new-privileges:true'), 'container-capabilities');
