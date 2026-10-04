@@ -62,9 +62,10 @@ function fixture(mode: 'compatibility' | 'matrix_2_0' = 'compatibility') {
     matrixRTC: { getRoomSession: () => session },
     getSafeUserId: () => '@alice:example.test',
     getDeviceId: () => 'DEVICE',
+    shouldEncryptEventForRoom: vi.fn(async () => true),
   } as unknown as MatrixClient;
   const changed = vi.fn();
-  return { engine: new GroupCallEngine(client, '!room:example.test', changed, mode), session, changed };
+  return { engine: new GroupCallEngine(client, '!room:example.test', changed, mode), session, changed, client };
 }
 
 afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; mocks.deferE2EE = false; mocks.completeE2EE = undefined; mocks.rejectMembership = false; vi.unstubAllGlobals(); });
@@ -88,11 +89,17 @@ describe('group call media lifecycle', () => {
     vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
     mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
     mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
-    const { engine, session } = fixture('matrix_2_0');
+    const { engine, session, client } = fixture('matrix_2_0');
     await engine.join(false, { microphoneId: '', cameraId: '' }, false);
     expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ memberId: '@alice:example.test:DEVICE' }), '!room:example.test', expect.any(AbortSignal), 'matrix_2_0', 'm.call#ROOM');
     expect(session.joinRTCSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), expect.objectContaining({ unstableSendStickyEvents: true, manageMediaKeys: true }));
+    const policy = client as unknown as { shouldEncryptEventForRoom: (event: { getType(): string; getRoomId(): string }, room: unknown) => Promise<boolean> };
+    const event = (type: string, roomId = '!room:example.test') => ({ getType: () => type, getRoomId: () => roomId });
+    expect(await policy.shouldEncryptEventForRoom(event('org.matrix.msc4143.rtc.member'), {})).toBe(false);
+    expect(await policy.shouldEncryptEventForRoom(event('m.room.message'), {})).toBe(true);
+    expect(await policy.shouldEncryptEventForRoom(event('org.matrix.msc4143.rtc.member', '!other:example.test'), {})).toBe(true);
     await engine.leave();
+    expect(await policy.shouldEncryptEventForRoom(event('org.matrix.msc4143.rtc.member'), {})).toBe(true);
   });
 
   it('disconnects and stops publication if encryption fails', async () => {

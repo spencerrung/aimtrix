@@ -13,6 +13,7 @@ const checks = [];
 let stage = 'setup';
 let stack, rtc, server, browser, roomId, aliceAccount, bobAccount, runtime;
 const membershipWrites = { compatibility: { alice: { accepted: 0, rejected: 0 }, bob: { accepted: 0, rejected: 0 } }, matrix_2_0: { alice: { accepted: 0, rejected: 0 }, bob: { accepted: 0, rejected: 0 } } };
+const stickyWire = { membership: 0, encrypted: 0, other: 0, rejected: 0 };
 const run = async (name, action) => {
   stage = name;
   console.log(`MatrixRTC live: ${name}`);
@@ -72,9 +73,18 @@ try {
     const page = await context.newPage();
     page.on('response', (response) => {
       const request = response.request();
-      const path = decodeURIComponent(new URL(response.url()).pathname);
+      const url = new URL(response.url());
+      const path = decodeURIComponent(url.pathname);
       if (mode === 'compatibility' && (request.method() !== 'PUT' || !path.includes('/state/org.matrix.msc3401.call.member/'))) return;
-      if (mode === 'matrix_2_0' && (request.method() !== 'PUT' || !path.includes('/send/m.rtc.member/'))) return;
+      if (mode === 'matrix_2_0') {
+        if (request.method() !== 'PUT' || !path.includes('/send/') || !url.searchParams.has('org.matrix.msc4354.sticky_duration_ms')) return;
+        if (!response.ok()) stickyWire.rejected++;
+        const delayed = url.searchParams.has('org.matrix.msc4140.delay');
+        if (path.includes('/send/org.matrix.msc4143.rtc.member/')) stickyWire.membership++;
+        else if (path.includes('/send/m.room.encrypted/')) stickyWire.encrypted++;
+        else stickyWire.other++;
+        if (!path.includes('/send/org.matrix.msc4143.rtc.member/') || delayed) return;
+      }
       membershipWrites[mode][label][response.ok() ? 'accepted' : 'rejected']++;
     });
     page.setDefaultTimeout(30000);
@@ -165,7 +175,7 @@ try {
     await until(async () => (await modernAlice.evaluate(() => window.__rtcMediaTracks.length > 0 && window.__rtcMediaTracks.every((track) => track.readyState === 'ended'))) && (await modernBob.evaluate(() => window.__rtcMediaTracks.length > 0 && window.__rtcMediaTracks.every((track) => track.readyState === 'ended'))), 'modern-media-capture-cleanup', 30000);
   });
   await run('modern-sticky-membership-and-token-evidence', async () => {
-    if (membershipWrites.matrix_2_0.alice.accepted < 1 || membershipWrites.matrix_2_0.bob.accepted < 1 || membershipWrites.matrix_2_0.alice.rejected || membershipWrites.matrix_2_0.bob.rejected || rtc.metrics.modernJwtIssued < 2) throw new Error('modern-membership-or-token');
+    if (membershipWrites.matrix_2_0.alice.accepted < 1 || membershipWrites.matrix_2_0.bob.accepted < 1 || membershipWrites.matrix_2_0.alice.rejected || membershipWrites.matrix_2_0.bob.rejected || stickyWire.encrypted || stickyWire.rejected || rtc.metrics.modernJwtIssued < 2) throw new Error('modern-membership-or-token');
   });
   await Promise.all(contexts.map((context) => context.close()));
 } catch {
@@ -188,7 +198,7 @@ try {
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, stickyWire, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }

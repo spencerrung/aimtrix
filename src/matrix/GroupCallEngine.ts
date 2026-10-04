@@ -1,5 +1,6 @@
 import type { MatrixClient } from 'matrix-js-sdk';
 import { MatrixRTCSessionEvent, type MatrixRTCSession } from 'matrix-js-sdk/lib/matrixrtc/index.js';
+import { EventType } from 'matrix-js-sdk/lib/@types/event.js';
 import { BaseKeyProvider, isE2EESupported, Room as LiveKitRoom, RoomEvent, Track, type Participant } from 'livekit-client';
 import E2EEWorker from 'livekit-client/e2ee-worker?worker&inline';
 import type { GroupCallParticipant, GroupCallSummary } from './viewModels';
@@ -36,6 +37,25 @@ export class GroupCallEngine {
   private state: GroupCallSummary;
   private disposed = false;
   private releasing?: Promise<void>;
+  private restoreMembershipEncryption?: () => void;
+
+  private allowClearRtcMembership(): void {
+    // The installed matrix-js-sdk sends sticky RTC membership through the ordinary
+    // timeline sender, which encrypts it in an encrypted room. The server and
+    // other RTC clients must see the exact membership event type to track the
+    // call. Scope this SDK policy exception to this room and call lifetime.
+    type EncryptionPolicy = (event: { getType(): string; getRoomId(): string }, room: unknown) => Promise<boolean>;
+    const policy = this.client as unknown as { shouldEncryptEventForRoom: EncryptionPolicy };
+    const original = policy.shouldEncryptEventForRoom;
+    if (typeof original !== 'function') throw new Error('The Matrix SDK cannot send clear RTC membership.');
+    const owned = Object.prototype.hasOwnProperty.call(policy, 'shouldEncryptEventForRoom');
+    policy.shouldEncryptEventForRoom = (event, room) => event.getType() === EventType.RTCMembership && event.getRoomId() === this.state.roomId
+      ? Promise.resolve(false) : original.call(this.client, event, room);
+    this.restoreMembershipEncryption = () => {
+      if (owned) policy.shouldEncryptEventForRoom = original;
+      else delete (policy as { shouldEncryptEventForRoom?: EncryptionPolicy }).shouldEncryptEventForRoom;
+    };
+  }
 
   public constructor(
     private readonly client: MatrixClient,
@@ -169,6 +189,7 @@ export class GroupCallEngine {
       session.on(MatrixRTCSessionEvent.MembershipManagerError, this.onMembershipError);
       session.reemitEncryptionKeys();
       phase = 'membership';
+      if (this.mode === 'matrix_2_0') this.allowClearRtcMembership();
       session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio', unstableSendStickyEvents: this.mode === 'matrix_2_0' });
       if (this.abort.signal.aborted) return;
       phase = 'key';
@@ -281,6 +302,8 @@ export class GroupCallEngine {
     this.room = undefined;
     if (room) await room.disconnect().catch(() => undefined);
     if (session?.isJoined()) await session.leaveRoomSession(5000).catch(() => undefined);
+    this.restoreMembershipEncryption?.();
+    this.restoreMembershipEncryption = undefined;
     this.worker?.terminate();
     this.worker = undefined;
   }
