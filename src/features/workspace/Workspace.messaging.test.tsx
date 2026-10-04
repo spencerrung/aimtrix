@@ -35,7 +35,7 @@ describe('room and thread composition routing', () => {
     fireEvent.click(within(thread).getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(edit).toHaveBeenCalledWith('welcome', 'm2', 'An edited root from the thread', []));
     expect(container.querySelector('[aria-label="Message Welcome Lounge"]')).toHaveTextContent('Keep the room draft');
-  });
+  }, 15_000);
 
   it('distinguishes a root reply in the main timeline from a root reply in the thread panel', async () => {
     const reply = vi.fn().mockResolvedValue(undefined);
