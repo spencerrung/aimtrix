@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { makeReport } from './report.mjs';
+import { failureCategories, makeReport } from './report.mjs';
 const base = { revision: 'a'.repeat(40), platform: 'linux/x64', run: 1, probe: false, passed: false, failureStage: 'authenticated-encrypted-media', checks: [], metrics: {} };
 test('diagnostics discard arbitrary error, response, identity and metric content', () => {
   const privateValue = randomBytes(24).toString('hex');
@@ -91,6 +91,22 @@ test('optional Element evidence records the pinned client without session or ren
     assert.match(result.images.element, /^vectorim\/element-web:v[0-9.]+@sha256:[a-f0-9]{64}$/);
     assert.equal('element' in makeReport(base).images, false);
     assert.deepEqual(result.checks, [{ name, passed: true }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
+
+test('Element verification send and target failures retain a precise stage without request data', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const category of ['element-cancel-request-send', 'element-cancel-request-accepted',
+    'element-cancel-request-target-unavailable', 'element-cancel-request-no-aimtrix-target',
+    'element-withdraw-request-send', 'element-withdraw-request-accepted',
+    'element-withdraw-request-target-unavailable', 'element-withdraw-request-no-aimtrix-target']) {
+    assert.equal(failureCategories.find((entry) => category.includes(entry)), category);
+    const result = makeReport({ ...base, elementUi: true, failureStage: 'element-ui-aimtrix-declines-verification',
+      checks: [{ name: 'element-ui-aimtrix-declines-verification', passed: false, category,
+        request: privateValue, response: privateValue, deviceId: privateValue }],
+    });
+    assert.equal(result.checks[0].category, category);
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
