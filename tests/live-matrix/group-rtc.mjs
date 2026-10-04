@@ -11,8 +11,9 @@ import { login, openRoom } from './journeys.mjs';
 
 const checks = [];
 let stage = 'setup';
-let stack, rtc, server, browser, roomId, aliceAccount, bobAccount;
-const membershipWrites = { alice: { accepted: 0, rejected: 0 }, bob: { accepted: 0, rejected: 0 } };
+let stack, rtc, server, browser, roomId, aliceAccount, bobAccount, runtime;
+const membershipWrites = { compatibility: { alice: { accepted: 0, rejected: 0 }, bob: { accepted: 0, rejected: 0 } }, matrix_2_0: { alice: { accepted: 0, rejected: 0 }, bob: { accepted: 0, rejected: 0 } } };
+const stickyWire = { membership: 0, encrypted: 0, other: 0, rejected: 0 };
 const run = async (name, action) => {
   stage = name;
   console.log(`MatrixRTC live: ${name}`);
@@ -21,7 +22,7 @@ const run = async (name, action) => {
 };
 
 try {
-  stack = await createStack({ federation: true });
+  stack = await createStack({ federation: true, stickyEvents: true });
   await run('disposable-synapse', () => stack.start());
   const api = matrixApi(stack);
   await run('encrypted-room-and-accounts', async () => {
@@ -42,8 +43,8 @@ try {
   await run('disposable-livekit-and-openid-authorization', async () => { rtc = await startRtcStack(stack, roomId); });
   await run('application-server', async () => {
     await readFile('dist/index.html');
-    const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: false,
-      features: { demoMode: false, calls: false, groupCalls: true, gifs: false, stickers: false }, emojiPacks: { enabled: false }, stickerPacks: [], media: { maxUploadBytes: 1048576 } };
+    runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: false,
+      features: { demoMode: false, calls: false, groupCalls: true, matrixRtcMode: 'compatibility', gifs: false, stickers: false }, emojiPacks: { enabled: false }, stickerPacks: [], media: { maxUploadBytes: 1048576 } };
     server = await preview({ logLevel: 'silent', preview: { host: '127.0.0.1', port: Number(new URL(stack.origins.app).port), strictPort: true, open: false },
       plugins: [{ name: 'disposable-rtc-runtime', configurePreviewServer(vite) { vite.middlewares.use((request, response, next) => {
         if (request.url?.split('?')[0] === '/config.json') { response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store'); response.end(JSON.stringify(runtime)); }
@@ -54,7 +55,7 @@ try {
   });
 
   const contexts = [];
-  const pageFor = async (label) => {
+  const pageFor = async (label, mode = 'compatibility') => {
     const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, permissions: ['microphone', 'camera'], serviceWorkers: 'block' });
     contexts.push(context);
     const permitted = new Set([...Object.values(stack.origins), rtc.authOrigin]);
@@ -72,8 +73,19 @@ try {
     const page = await context.newPage();
     page.on('response', (response) => {
       const request = response.request();
-      if (request.method() !== 'PUT' || !decodeURIComponent(new URL(response.url()).pathname).includes('/state/org.matrix.msc3401.call.member/')) return;
-      membershipWrites[label][response.ok() ? 'accepted' : 'rejected']++;
+      const url = new URL(response.url());
+      const path = decodeURIComponent(url.pathname);
+      if (mode === 'compatibility' && (request.method() !== 'PUT' || !path.includes('/state/org.matrix.msc3401.call.member/'))) return;
+      if (mode === 'matrix_2_0') {
+        if (request.method() !== 'PUT' || !path.includes('/send/') || !url.searchParams.has('org.matrix.msc4354.sticky_duration_ms')) return;
+        if (!response.ok()) stickyWire.rejected++;
+        const delayed = url.searchParams.has('org.matrix.msc4140.delay');
+        if (path.includes('/send/org.matrix.msc4143.rtc.member/')) stickyWire.membership++;
+        else if (path.includes('/send/m.room.encrypted/')) stickyWire.encrypted++;
+        else stickyWire.other++;
+        if (!path.includes('/send/org.matrix.msc4143.rtc.member/') || delayed) return;
+      }
+      membershipWrites[mode][label][response.ok() ? 'accepted' : 'rejected']++;
     });
     page.setDefaultTimeout(30000);
     return page;
@@ -131,6 +143,40 @@ try {
     await aliceShelf.getByRole('button', { name: 'Leave group call' }).click();
     await until(async () => (await alice.evaluate(() => window.__rtcMediaTracks.length > 0 && window.__rtcMediaTracks.every((track) => track.readyState === 'ended'))) && (await bob.evaluate(() => window.__rtcMediaTracks.length > 0 && window.__rtcMediaTracks.every((track) => track.readyState === 'ended'))), 'media-capture-cleanup', 30000);
   });
+  await run('compatibility-membership-write-evidence', async () => {
+    if (membershipWrites.compatibility.alice.accepted < 1 || membershipWrites.compatibility.bob.accepted < 1 || membershipWrites.compatibility.alice.rejected || membershipWrites.compatibility.bob.rejected) throw new Error('compatibility-membership');
+  });
+  await Promise.all(contexts.map((context) => context.close()));
+  contexts.length = 0;
+  runtime.features.matrixRtcMode = 'matrix_2_0';
+  const modernAlice = await pageFor('alice', 'matrix_2_0'), modernBob = await pageFor('bob', 'matrix_2_0');
+  await run('modern-two-browser-login', async () => {
+    await login(modernAlice, stack.origins.app, 'alice', stack.credentials.password);
+    await login(modernBob, stack.origins.app, 'bob', stack.credentials.password);
+    await openRoom(modernAlice, 'RTC Proof');
+    await openRoom(modernBob, 'RTC Proof');
+  });
+  let modernAliceShelf, modernBobShelf;
+  await run('modern-first-encrypted-media-publisher', async () => {
+    modernAliceShelf = await join(modernAlice, 'Start group call');
+    await modernAliceShelf.getByText('1 participant').waitFor();
+  });
+  await run('modern-second-client-subscribes-to-encrypted-media', async () => {
+    await modernBob.getByRole('button', { name: /Join group call/ }).waitFor({ timeout: 60000 });
+    modernBobShelf = await join(modernBob, /Join group call/);
+    await modernBobShelf.getByText('2 participants').waitFor({ timeout: 60000 });
+    await modernAliceShelf.getByText('2 participants').waitFor({ timeout: 60000 });
+    await until(async () => (await modernBobShelf.locator('audio').count()) > 0 && (await modernAliceShelf.locator('audio').count()) > 0, 'modern-encrypted-remote-audio', 45000);
+  });
+  await run('modern-membership-and-capture-cleanup', async () => {
+    await modernBobShelf.getByRole('button', { name: 'Leave group call' }).click();
+    await modernAliceShelf.getByText('1 participant').waitFor({ timeout: 60000 });
+    await modernAliceShelf.getByRole('button', { name: 'Leave group call' }).click();
+    await until(async () => (await modernAlice.evaluate(() => window.__rtcMediaTracks.length > 0 && window.__rtcMediaTracks.every((track) => track.readyState === 'ended'))) && (await modernBob.evaluate(() => window.__rtcMediaTracks.length > 0 && window.__rtcMediaTracks.every((track) => track.readyState === 'ended'))), 'modern-media-capture-cleanup', 30000);
+  });
+  await run('modern-sticky-membership-and-token-evidence', async () => {
+    if (membershipWrites.matrix_2_0.alice.accepted < 1 || membershipWrites.matrix_2_0.bob.accepted < 1 || membershipWrites.matrix_2_0.alice.rejected || membershipWrites.matrix_2_0.bob.rejected || stickyWire.encrypted || stickyWire.rejected || rtc.metrics.modernJwtIssued < 2) throw new Error('modern-membership-or-token');
+  });
   await Promise.all(contexts.map((context) => context.close()));
 } catch {
   process.exitCode = 1;
@@ -152,7 +198,7 @@ try {
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT and newer homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, stickyWire, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'TURN-required NAT, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }

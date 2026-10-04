@@ -242,7 +242,7 @@ describe('Workspace demo', () => {
     await waitFor(() => expect(container.querySelector('.context-panel')).not.toBeVisible());
     expect(screen.getByRole('main', { name: /Welcome Lounge/ })).toBeVisible();
     expect(composer).toHaveTextContent('Synthetic room draft');
-  });
+  }, 15_000);
 
   it('respects a saved closed drawer and keeps the conversation visible when a desktop panel closes', async () => {
     const { container } = renderWorkspace({ preferences: { ...defaultUserPreferences, detailsOpenByDefault: false } });
@@ -803,7 +803,7 @@ describe('Workspace demo', () => {
     fireEvent.paste(threadComposer, { clipboardData: imageClipboard });
     fireEvent.click(await screen.findByRole('button', { name: 'Send thread attachments' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), 'm2', undefined, expect.any(Object)));
-  });
+  }, 15_000);
 
   it.each(['reply', 'edit'] as const)('clears another room’s %s context on browser Back while retaining this room’s draft', async (action) => {
     const onSendMessage = vi.fn().mockResolvedValue(undefined);

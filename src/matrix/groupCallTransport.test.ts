@@ -45,4 +45,19 @@ describe('MatrixRTC transport contract', () => {
     request.mockResolvedValueOnce(new Response('denied', { status: 403 }));
     await expect(authorizeGroupCall(client, transport, identity, '!room:example.test')).rejects.toThrow('(403)');
   });
+
+  it('requests the hashed-identity JWT contract for sticky memberships', async () => {
+    const client = { getOpenIdToken: vi.fn().mockResolvedValue({ access_token: '<synthetic>', token_type: 'Bearer' }) } as unknown as Pick<MatrixClient, 'getOpenIdToken'>;
+    const request = vi.fn().mockResolvedValue(new Response(JSON.stringify({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' }), { status: 200 }));
+    vi.stubGlobal('fetch', request);
+    const identity = { userId: '@user:example.test', deviceId: 'DEVICE', memberId: '@user:example.test:DEVICE' };
+    const transport = { type: 'livekit' as const, livekit_service_url: 'https://rtc.example.test/jwt' };
+    await authorizeGroupCall(client, transport, identity, '!room:example.test', undefined, 'matrix_2_0');
+    expect(request).toHaveBeenCalledWith('https://rtc.example.test/jwt/get_token', expect.objectContaining({ method: 'POST' }));
+    expect(JSON.parse(request.mock.calls[0][1].body as string)).toEqual({
+      room_id: '!room:example.test', slot_id: 'm.call#ROOM',
+      openid_token: { access_token: '<synthetic>', token_type: 'Bearer' },
+      member: { id: identity.memberId, claimed_user_id: identity.userId, claimed_device_id: identity.deviceId },
+    });
+  });
 });

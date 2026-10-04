@@ -2,6 +2,8 @@ import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { MatrixClient } from 'matrix-js-sdk';
 import { MatrixRTCSessionEvent } from 'matrix-js-sdk/lib/matrixrtc/index.js';
+import { MembershipManagerEvent } from 'matrix-js-sdk/lib/matrixrtc/IMembershipManager.js';
+import { Status } from 'matrix-js-sdk/lib/matrixrtc/types.js';
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
@@ -50,21 +52,23 @@ vi.mock('livekit-client', async () => {
 
 import { GroupCallEngine } from './GroupCallEngine';
 
-function fixture() {
+function fixture(mode: 'compatibility' | 'matrix_2_0' = 'compatibility') {
   const session = Object.assign(new EventEmitter(), {
     reemitEncryptionKeys: vi.fn(),
     joinRTCSession: vi.fn(() => { queueMicrotask(() => session.emit(mocks.rejectMembership ? MatrixRTCSessionEvent.MembershipManagerError : MatrixRTCSessionEvent.EncryptionKeyChanged, ...(mocks.rejectMembership ? [new Error('private server detail')] : [new Uint8Array(32), 0, { userId: '@alice:example.test', deviceId: 'DEVICE' }, '@alice:example.test:DEVICE']))); }),
     isJoined: () => true,
-    leaveRoomSession: vi.fn(async () => { mocks.events.push('membership-leave'); }),
+    membershipStatus: Status.Connected,
+    leaveRoomSession: vi.fn<() => Promise<boolean>>(async () => { mocks.events.push('membership-leave'); return true; }),
   });
   const client = {
     getRoom: () => ({ getMyMembership: () => 'join' }),
     matrixRTC: { getRoomSession: () => session },
     getSafeUserId: () => '@alice:example.test',
     getDeviceId: () => 'DEVICE',
+    shouldEncryptEventForRoom: vi.fn(async () => true),
   } as unknown as MatrixClient;
   const changed = vi.fn();
-  return { engine: new GroupCallEngine(client, '!room:example.test', changed), session, changed };
+  return { engine: new GroupCallEngine(client, '!room:example.test', changed, mode), session, changed, client };
 }
 
 afterEach(() => { mocks.events.length = 0; mocks.room = undefined; mocks.connectGate = undefined; mocks.deferE2EE = false; mocks.completeE2EE = undefined; mocks.rejectMembership = false; vi.unstubAllGlobals(); });
@@ -82,6 +86,42 @@ describe('group call media lifecycle', () => {
     await engine.leave();
     expect(mocks.events.slice(-3)).toEqual(['disconnect', 'membership-leave', 'worker-terminate']);
     expect(session.listenerCount(MatrixRTCSessionEvent.EncryptionKeyChanged)).toBe(0);
+  });
+
+  it('pairs sticky RTC membership with modern token authorization', async () => {
+    vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
+    mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
+    mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
+    const { engine, session, client } = fixture('matrix_2_0');
+    await engine.join(false, { microphoneId: '', cameraId: '' }, false);
+    expect(mocks.authorize).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.objectContaining({ memberId: '@alice:example.test:DEVICE' }), '!room:example.test', expect.any(AbortSignal), 'matrix_2_0', 'm.call#ROOM');
+    expect(session.joinRTCSession).toHaveBeenCalledWith(expect.anything(), expect.anything(), expect.anything(), expect.objectContaining({ unstableSendStickyEvents: true, manageMediaKeys: true }));
+    const policy = client as unknown as { shouldEncryptEventForRoom: (event: { getType(): string; getRoomId(): string }, room: unknown) => Promise<boolean> };
+    const event = (type: string, roomId = '!room:example.test') => ({ getType: () => type, getRoomId: () => roomId });
+    expect(await policy.shouldEncryptEventForRoom(event('org.matrix.msc4143.rtc.member'), {})).toBe(false);
+    expect(await policy.shouldEncryptEventForRoom(event('m.room.message'), {})).toBe(true);
+    expect(await policy.shouldEncryptEventForRoom(event('org.matrix.msc4143.rtc.member', '!other:example.test'), {})).toBe(true);
+    await engine.leave();
+    expect(await policy.shouldEncryptEventForRoom(event('org.matrix.msc4143.rtc.member'), {})).toBe(true);
+  });
+
+  it('keeps sticky leave retries clear after a timed-out leave and restores the policy when the scheduler stops', async () => {
+    vi.stubGlobal('crypto', { subtle: { importKey: vi.fn(async () => ({})) } });
+    mocks.discover.mockResolvedValue({ type: 'livekit', livekit_service_url: 'https://rtc.example.test' });
+    mocks.authorize.mockResolvedValue({ url: 'wss://sfu.example.test', jwt: 'synthetic.jwt.value' });
+    const { engine, session, client } = fixture('matrix_2_0');
+    session.leaveRoomSession.mockResolvedValue(false);
+    await engine.join(false, { microphoneId: '', cameraId: '' }, false);
+    const policy = client as unknown as { shouldEncryptEventForRoom: (event: { getType(): string; getRoomId(): string }, room: unknown) => Promise<boolean> };
+    const member = { getType: () => 'org.matrix.msc4143.rtc.member', getRoomId: () => '!room:example.test' };
+    const message = { getType: () => 'm.room.message', getRoomId: () => '!room:example.test' };
+    await engine.leave();
+    expect(await policy.shouldEncryptEventForRoom(member, {})).toBe(false);
+    expect(await policy.shouldEncryptEventForRoom(message, {})).toBe(true);
+    session.membershipStatus = Status.Disconnected;
+    session.emit(MembershipManagerEvent.StatusChanged, Status.Disconnecting, Status.Disconnected);
+    expect(await policy.shouldEncryptEventForRoom(member, {})).toBe(true);
+    expect(session.listenerCount(MembershipManagerEvent.StatusChanged)).toBe(0);
   });
 
   it('disconnects and stops publication if encryption fails', async () => {

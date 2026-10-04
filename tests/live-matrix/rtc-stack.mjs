@@ -35,7 +35,7 @@ export async function startRtcStack(stack, roomId) {
   const keyId = 'devkey';
   let containerId;
   let server;
-  const metrics = { authorizationRequests: 0, openidAccepted: 0, jwtIssued: 0 };
+  const metrics = { authorizationRequests: 0, openidAccepted: 0, jwtIssued: 0, modernJwtIssued: 0 };
 
   const respond = (response, status, data) => {
     response.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', 'Access-Control-Allow-Origin': stack.origins.app, 'Access-Control-Allow-Headers': 'content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' });
@@ -61,27 +61,33 @@ export async function startRtcStack(stack, roomId) {
 
     server = createServer(async (request, response) => {
       if (request.method === 'OPTIONS') { respond(response, 204, {}); return; }
-      if (request.method !== 'POST' || request.url !== '/sfu/get') { respond(response, 404, {}); return; }
+      if (request.method !== 'POST' || !['/sfu/get', '/get_token'].includes(request.url)) { respond(response, 404, {}); return; }
       metrics.authorizationRequests += 1;
       try {
         let raw = '';
         for await (const chunk of request) { raw += chunk; if (raw.length > 8192) throw new Error('too-large'); }
         const body = JSON.parse(raw);
-        if (body.room !== roomId || body.openid_token?.matrix_server_name !== 'aimtrix.test' || typeof body.device_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(body.device_id)) throw new Error('invalid-request');
+        const modern = request.url === '/get_token';
+        if (body.openid_token?.matrix_server_name !== 'aimtrix.test') throw new Error('invalid-request');
+        if (modern) {
+          if (body.room_id !== roomId || body.slot_id !== 'm.call#ROOM' || typeof body.member?.id !== 'string' || body.member.id.length > 255 || typeof body.member.claimed_device_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(body.member.claimed_device_id)) throw new Error('invalid-modern-request');
+        } else if (body.room !== roomId || typeof body.device_id !== 'string' || !/^[A-Za-z0-9_-]{1,100}$/.test(body.device_id)) throw new Error('invalid-legacy-request');
         const token = body.openid_token.access_token;
         if (typeof token !== 'string' || token.length > 4096) throw new Error('invalid-token');
         const userinfo = await fetch(`${stack.origins.synapse}/_matrix/federation/v1/openid/userinfo?access_token=${encodeURIComponent(token)}`, { signal: AbortSignal.timeout(5000) });
         if (!userinfo.ok) throw new Error('invalid-openid');
         const { sub } = await userinfo.json();
         if (!['@alice:aimtrix.test', '@bob:aimtrix.test'].includes(sub)) throw new Error('invalid-subject');
+        if (modern && body.member.claimed_user_id !== sub) throw new Error('invalid-claimed-user');
         metrics.openidAccepted += 1;
         const now = Math.floor(Date.now() / 1000);
-        const subject = `${sub}:${body.device_id}`;
+        const subject = modern ? createHash('sha256').update(JSON.stringify([sub, body.member.claimed_device_id, body.member.id])).digest('base64').replace(/=+$/, '') : `${sub}:${body.device_id}`;
         const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
         const payload = base64url(JSON.stringify({ iss: keyId, sub: subject, nbf: now - 10, exp: now + 600, video: { room: roomAlias(roomId), roomJoin: true, canPublish: true, canSubscribe: true } }));
         const input = `${header}.${payload}`;
         const signature = createHmac('sha256', secret).update(input).digest('base64url');
         metrics.jwtIssued += 1;
+        if (modern) metrics.modernJwtIssued += 1;
         respond(response, 200, { url: origin, jwt: `${input}.${signature}` });
       } catch { respond(response, 403, { errcode: 'M_FORBIDDEN' }); }
     });

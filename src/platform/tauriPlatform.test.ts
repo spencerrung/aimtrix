@@ -91,6 +91,29 @@ describe('Tauri platform', () => {
     expect(mocks.invoke).toHaveBeenCalledWith('secure_credential_load', { key: SESSION_KEY });
   });
 
+  it('keeps two accounts in the allowlisted secure store across a shell restart', async () => {
+    const secrets = new Map<string, string>();
+    mocks.invoke.mockImplementation(async (command: string, args: { key: string; value?: string }) => {
+      if (command === 'secure_credential_load') return secrets.get(args.key) ?? null;
+      if (command === 'secure_credential_save') { secrets.set(args.key, args.value!); return; }
+      if (command === 'secure_credential_clear') { secrets.delete(args.key); return; }
+      throw new Error('Unexpected native command');
+    });
+    const first = { baseUrl: 'https://one.example', serverName: 'one.example', userId: '@alice:one.example', deviceId: 'ALICE', accessToken: 'synthetic-a' };
+    const second = { baseUrl: 'https://two.example', serverName: 'two.example', userId: '@bob:two.example', deviceId: 'BOB', accessToken: 'synthetic-b' };
+    const desktop = createTauriPlatform();
+    await desktop.credentials.save(first);
+    await desktop.credentials.save(second);
+    expect(secrets.size).toBe(1);
+    const restarted = createTauriPlatform();
+    expect((await restarted.accounts?.list())?.map((entry) => entry.userId)).toEqual([first.userId, second.userId]);
+    await restarted.accounts?.select(JSON.stringify([first.baseUrl, first.userId]));
+    expect(await restarted.credentials.load()).toEqual(first);
+    await restarted.accounts?.remove(JSON.stringify([second.baseUrl, second.userId]));
+    expect((await restarted.accounts?.list())?.map((entry) => entry.userId)).toEqual([first.userId]);
+    expect(secrets.size).toBe(1);
+  });
+
   it('prepares cold-start deep links without accepting arbitrary URLs', async () => {
     const platform = createTauriPlatform();
     mocks.getCurrent.mockResolvedValue(['aimtrix://open?room=!room:example&event=$event']);
@@ -102,6 +125,13 @@ describe('Tauri platform', () => {
     expect(window.location.search).toContain('room=%21room%3Aexample');
     expect(routeEvent).toHaveBeenCalledOnce();
     window.removeEventListener('aimtrix-push-route', routeEvent);
+  });
+
+  it('moves an OAuth cold-start callback into the webview before sign-in', async () => {
+    window.history.replaceState({}, '', '/');
+    mocks.getCurrent.mockResolvedValue(['aimtrix://sso?code=synthetic-code&state=ABCDEFGHIJKLMNOPQRSTUVWX']);
+    await createTauriPlatform().deepLinks.prepare();
+    expect(window.location.search).toBe('?code=synthetic-code&state=ABCDEFGHIJKLMNOPQRSTUVWX');
   });
 
   it('reports the current desktop version when the signed channel has no update', async () => {

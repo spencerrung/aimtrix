@@ -4,6 +4,7 @@ import { BaseKeyProvider, isE2EESupported, Room as LiveKitRoom, RoomEvent, Track
 import E2EEWorker from 'livekit-client/e2ee-worker?worker&inline';
 import type { GroupCallParticipant, GroupCallSummary } from './viewModels';
 import { authorizeGroupCall, discoverGroupCallTransport } from './groupCallTransport';
+import { allowClearRtcMembership } from './rtcMembershipEncryption';
 
 class MatrixMediaKeys extends BaseKeyProvider {
   public constructor() { super({ ratchetWindowSize: 10, keyringSize: 256 }); }
@@ -36,11 +37,13 @@ export class GroupCallEngine {
   private state: GroupCallSummary;
   private disposed = false;
   private releasing?: Promise<void>;
+  private membershipPolicy?: ReturnType<typeof allowClearRtcMembership>;
 
   public constructor(
     private readonly client: MatrixClient,
     roomId: string,
     private readonly changed: (summary: GroupCallSummary) => void,
+    private readonly mode: 'compatibility' | 'matrix_2_0' = 'compatibility',
   ) {
     this.state = { roomId, state: 'joining', encrypted: false, microphoneMuted: true, videoMuted: true, screensharing: false, participants: [] };
     this.changed(this.state);
@@ -143,7 +146,7 @@ export class GroupCallEngine {
       if (!deviceId) throw new Error('A Matrix device is required for encrypted group calls.');
       const identity = { userId, deviceId, memberId: `${userId}:${deviceId}` };
       phase = 'authorization';
-      const authorization = await authorizeGroupCall(this.client, transport, identity, this.state.roomId, this.abort.signal);
+      const authorization = await authorizeGroupCall(this.client, transport, identity, this.state.roomId, this.abort.signal, this.mode, session.slotId ?? 'm.call#ROOM');
       if (this.abort.signal.aborted) return;
 
       phase = 'worker';
@@ -168,7 +171,8 @@ export class GroupCallEngine {
       session.on(MatrixRTCSessionEvent.MembershipManagerError, this.onMembershipError);
       session.reemitEncryptionKeys();
       phase = 'membership';
-      session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio' });
+      if (this.mode === 'matrix_2_0') this.membershipPolicy = allowClearRtcMembership(this.client, this.state.roomId);
+      session.joinRTCSession(identity, [transport], transport, { manageMediaKeys: true, callIntent: video ? 'video' : 'audio', unstableSendStickyEvents: this.mode === 'matrix_2_0' });
       if (this.abort.signal.aborted) return;
       phase = 'key';
       let keyTimer!: number;
@@ -279,7 +283,10 @@ export class GroupCallEngine {
     const room = this.room;
     this.room = undefined;
     if (room) await room.disconnect().catch(() => undefined);
-    if (session?.isJoined()) await session.leaveRoomSession(5000).catch(() => undefined);
+    const left = session?.isJoined() ? await session.leaveRoomSession(5000).catch(() => false) : session?.membershipStatus === 'Disconnected';
+    if (!session || left) this.membershipPolicy?.release();
+    else this.membershipPolicy?.retainUntilDisconnected(session);
+    this.membershipPolicy = undefined;
     this.worker?.terminate();
     this.worker = undefined;
   }

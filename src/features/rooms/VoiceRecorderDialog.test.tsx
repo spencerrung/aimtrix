@@ -53,3 +53,33 @@ it('keeps the recorder recoverable after microphone denial', async () => {
   expect(await screen.findByRole('alert')).toHaveTextContent('denied');
   expect(screen.getByRole('button', { name: 'Start recording' })).toBeEnabled();
 });
+
+it('discards a partial clip after a recorder error and allows another attempt', async () => {
+  const track = { stop: vi.fn(), onended: null };
+  Object.defineProperty(navigator, 'mediaDevices', { configurable: true, value: {
+    getUserMedia: vi.fn().mockResolvedValue({ getTracks: () => [track], getAudioTracks: () => [track] }),
+  } });
+  class FailingRecorder {
+    static instance: FailingRecorder;
+    static isTypeSupported = (type: string) => type === 'audio/webm;codecs=opus';
+    state = 'inactive';
+    mimeType = 'audio/webm;codecs=opus';
+    ondataavailable?: (event: { data: Blob }) => void;
+    onstop?: () => void;
+    onerror?: () => void;
+    constructor() { FailingRecorder.instance = this; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.ondataavailable?.({ data: new Blob(['partial audio'], { type: this.mimeType }) }); this.onstop?.(); }
+  }
+  vi.stubGlobal('MediaRecorder', FailingRecorder);
+  const send = vi.fn();
+  render(<VoiceRecorderDialog roomName="Welcome" maxBytes={1_000_000} onSend={send} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Start recording' }));
+  await screen.findByRole('button', { name: 'Stop recording' });
+  FailingRecorder.instance.onerror?.();
+  expect(await screen.findByRole('alert')).toHaveTextContent('interrupted');
+  expect(screen.queryByRole('button', { name: 'Send voice message' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Start recording' })).toBeEnabled();
+  expect(send).not.toHaveBeenCalled();
+  expect(track.stop).toHaveBeenCalled();
+});

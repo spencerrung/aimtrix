@@ -2,6 +2,25 @@
 
 Status: 0.x release-gate checklist
 
+## Evidence state — 2026-10-03
+
+The automated native-adapter checks cover Tauri and Capacitor secure credential
+stores retaining two distinct accounts across a new shell instance, switching
+back to the first account, and forgetting only the other dormant account. They also
+cover native delegated-auth cold-start callback translation, rejection of
+duplicate authorization parameters, local notification ownership, and native
+push-token rotation. These are mocked plugin/webview checks, not a clean OS
+install, a physical-device callback, or provider delivery. The disposable
+MAS/Synapse browser proof is linked in [delegated authentication](delegated-auth.md).
+
+| Gate | Current evidence | Outstanding evidence |
+| --- | --- | --- |
+| #174 delegated auth | Disposable Linux Chromium/MAS sign-in, encrypted recovery, revocation; native callback parser and plugin tests | Live token rotation, another issuer/UIA policy, physical desktop/mobile system-browser return |
+| #175 native release | Native adapter tests and compile/packaging workflow | Dated clean installs and upgrade/rollback on each claimed OS, secure-store retention on real hardware, signing failure, keyboard/media/safe-area checks |
+| #176 push delivery | Local gateway/service-worker privacy proofs and native token/notification adapter tests | Configured disposable gateway/provider, real closed-app Web Push/APNs/FCM delivery, taps after cold launch, provider token rotation and logout on device |
+
+None of the outstanding gates is counted as passed by the adapter tests.
+
 See the dated [capability baseline](capability-baseline.md) for current command results and explicitly untested boundaries. This checklist defines required evidence; an unchecked manual scenario is not made complete by a passing browser suite.
 
 This is the repeatable acceptance plan for the hosted Aimtrix PWA and native clients. The [release operations runbook](release-operations.md) defines promotion ownership, evidence, rollback, and incident response; the [mobile-wrapper evaluation](mobile.md) records the current Capacitor-versus-Tauri recommendation and native blockers. The [disposable live Matrix harness](live-matrix-tests.md) adds dated Linux Chromium/Synapse/Dex evidence for its explicitly listed protocol journeys. The separate demo-based browser suite proves browser-detectable behavior; it does not prove APNs/FCM/Web Push delivery, E2EE interoperability with a live homeserver, or OS-level install behavior. Those require the manual checks below.

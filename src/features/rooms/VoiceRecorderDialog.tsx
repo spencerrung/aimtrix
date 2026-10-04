@@ -48,6 +48,7 @@ export function VoiceRecorderDialog({ roomName, maxBytes, microphoneId, onSend, 
   const generation = useRef(0);
   const timer = useRef<number | undefined>(undefined);
   const overLimit = useRef(false);
+  const failed = useRef(false);
   const stopTracks = () => { stream.current?.getTracks().forEach((track) => track.stop()); stream.current = undefined; };
   const clearTimer = () => { if (timer.current !== undefined) window.clearInterval(timer.current); timer.current = undefined; };
   useEffect(() => () => { generation.current++; clearTimer(); if (recorder.current?.state === 'recording') recorder.current.stop(); stopTracks(); }, []);
@@ -71,6 +72,7 @@ export function VoiceRecorderDialog({ roomName, maxBytes, microphoneId, onSend, 
     const chunks: Blob[] = [];
     let bytes = 0;
     overLimit.current = false;
+    failed.current = false;
     let instance: MediaRecorder;
     try { instance = new MediaRecorder(input, { mimeType }); }
     catch { stopTracks(); setPhase('idle'); setError('Recording could not start on this device.'); return; }
@@ -81,11 +83,12 @@ export function VoiceRecorderDialog({ roomName, maxBytes, microphoneId, onSend, 
       if (bytes > maxBytes) { overLimit.current = true; if (instance.state === 'recording') instance.stop(); return; }
       chunks.push(event.data);
     };
-    instance.onerror = () => { if (generation.current === current) { setError('The microphone was interrupted. Try recording again.'); if (instance.state === 'recording') instance.stop(); } };
+    instance.onerror = () => { if (generation.current === current) { failed.current = true; setError('The microphone was interrupted. Try recording again.'); if (instance.state === 'recording') instance.stop(); } };
     instance.onstop = () => {
       clearTimer(); stopTracks();
       if (generation.current !== current) return;
       const durationMs = Math.min(MAX_DURATION_MS, Date.now() - started.current);
+      if (failed.current) { setPhase('idle'); return; }
       if (overLimit.current) { setError('This recording exceeds the attachment size limit. Try a shorter message.'); setPhase('idle'); return; }
       if (!chunks.length || durationMs < 250) { setError('No audio was recorded. Try again.'); setPhase('idle'); return; }
       const type = instance.mimeType || mimeType;

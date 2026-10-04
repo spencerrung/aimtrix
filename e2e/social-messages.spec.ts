@@ -65,3 +65,23 @@ test('denied browser geolocation retains manual sharing', async ({ page, context
   await dialog.getByRole('button', { name: 'Share this location' }).click();
   await expect(page.getByText('Shared: 51.5072,-0.1276')).toBeVisible();
 });
+
+test('manual location selection wins over a late device result', async ({ page }) => {
+  await page.evaluate(() => {
+    const browser = window as typeof window & { completeLocation?: () => void };
+    Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
+      getCurrentPosition: (success: (position: GeolocationPosition) => void) => {
+        browser.completeLocation = () => success({ coords: { latitude: 40.7128, longitude: -74.006 } } as GeolocationPosition);
+      },
+    } });
+  });
+  await page.getByRole('button', { name: 'Share a location' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Share a location' });
+  await dialog.getByRole('button', { name: 'Use my current location' }).click();
+  await dialog.getByRole('spinbutton', { name: 'Latitude' }).fill('51.5072');
+  await dialog.getByRole('spinbutton', { name: 'Longitude' }).fill('-0.1276');
+  await page.evaluate(() => (window as typeof window & { completeLocation?: () => void }).completeLocation?.());
+  await expect(dialog.getByText('geo:51.5072,-0.1276')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Share this location' }).click();
+  await expect(page.getByText('Shared: 51.5072,-0.1276')).toBeVisible();
+});

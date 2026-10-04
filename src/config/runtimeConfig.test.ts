@@ -25,10 +25,18 @@ describe('parseRuntimeConfig', () => {
     expect(result.config.defaultTheme).toBe('midnight');
     expect(result.config.features.demoMode).toBe(false);
     expect(result.config.features.groupCalls).toBe(false);
+    expect(result.config.features.matrixRtcMode).toBe('compatibility');
     expect(result.config.features.stickers).toBe(true);
     expect(result.config.emojiPacks.standard).toBe(true);
     expect(result.config.emojiPacks.bufo).toBe(true);
     expect(result.warnings).toEqual([]);
+  });
+
+  it('requires explicit modern MatrixRTC opt-in', () => {
+    expect(parseRuntimeConfig({ features: { groupCalls: true, matrixRtcMode: 'matrix_2_0' } }).config.features.matrixRtcMode).toBe('matrix_2_0');
+    const invalid = parseRuntimeConfig({ features: { matrixRtcMode: 'unknown' } });
+    expect(invalid.config.features.matrixRtcMode).toBe('compatibility');
+    expect(invalid.warnings).toContain('features.matrixRtcMode is unknown; compatibility mode was used.');
   });
 
   it('accepts safe optional media catalogs without exposing provider assumptions', () => {

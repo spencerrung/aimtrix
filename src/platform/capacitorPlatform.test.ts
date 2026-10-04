@@ -115,6 +115,22 @@ describe('Capacitor platform', () => {
     expect(mocks.storage.size).toBe(2);
   });
 
+  it('retains separate secure accounts through a shell restart and removes only the forgotten account', async () => {
+    const first = { baseUrl: 'https://one.example', serverName: 'one.example', userId: '@alice:one.example', deviceId: 'ALICE', accessToken: 'synthetic-a' };
+    const second = { baseUrl: 'https://two.example', serverName: 'two.example', userId: '@bob:two.example', deviceId: 'BOB', accessToken: 'synthetic-b' };
+    const native = createCapacitorPlatform();
+    await native.credentials.save(first);
+    await native.credentials.save(second);
+    expect(mocks.storage.size).toBe(1);
+    const restarted = createCapacitorPlatform();
+    expect((await restarted.accounts?.list())?.map((entry) => entry.userId)).toEqual([first.userId, second.userId]);
+    await restarted.accounts?.select(JSON.stringify([first.baseUrl, first.userId]));
+    expect(await restarted.credentials.load()).toEqual(first);
+    await restarted.accounts?.remove(JSON.stringify([second.baseUrl, second.userId]));
+    expect((await restarted.accounts?.list())?.map((entry) => entry.userId)).toEqual([first.userId]);
+    expect(mocks.storage.size).toBe(1);
+  });
+
   it('registers native push, persists the token, and reports later token rotation', async () => {
     const platform = createCapacitorPlatform();
     const refresh = vi.fn();
@@ -144,6 +160,13 @@ describe('Capacitor platform', () => {
 
 
 describe('Capacitor Matrix destinations', () => {
+  it('moves a native OAuth callback into the webview on cold start', async () => {
+    const platform = createCapacitorPlatform();
+    mocks.getLaunchUrl.mockResolvedValue({ url: 'aimtrix://sso?code=synthetic-code&state=ABCDEFGHIJKLMNOPQRSTUVWX' });
+    await platform.deepLinks.prepare();
+    expect(window.location.search).toBe('?code=synthetic-code&state=ABCDEFGHIJKLMNOPQRSTUVWX');
+  });
+
   it('preserves aliases, event IDs and via on cold start', async () => {
     const platform = createCapacitorPlatform();
     mocks.getLaunchUrl.mockResolvedValue({ url: 'https://matrix.to/#/%23lounge:test/$event?via=test&via=other.test' });

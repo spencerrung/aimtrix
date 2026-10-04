@@ -109,6 +109,7 @@ import type {
   WorkspaceSnapshot,
 } from './viewModels';
 import type { GroupCallEngine } from './GroupCallEngine';
+import { clearRtcMembershipPolicy } from './rtcMembershipEncryption';
 import type { GroupCallActivity } from './GroupCallActivity';
 
 export interface LoginCredentials {
@@ -2177,7 +2178,7 @@ export class MatrixController {
         if (this.client !== client || (this.groupCallEngine && this.groupCallEngine !== holder.engine)) return;
         this.groupCallSummary = summary;
         this.scheduleWorkspacePublish();
-      });
+      }, this.config.features.matrixRtcMode);
       const engine = holder.engine;
       this.groupCallEngine = engine;
       this.callDevices = devices;
@@ -4073,6 +4074,7 @@ export class MatrixController {
     this.snapshotCache.members.clear();
     this.clearMediaCache();
     if (groupCallLeaving) await groupCallLeaving;
+    if (client) clearRtcMembershipPolicy(client);
     await Promise.allSettled(privateWrites);
     this.privateSearchRedactions.clear();
     this.privateSearchRoomRevisions.clear();
