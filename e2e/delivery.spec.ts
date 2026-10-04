@@ -38,7 +38,7 @@ test('failed messages keep visible keyboard and touch recovery controls across t
     await page.screenshot({ path: `/tmp/aimtrix-05-${info.project.name}-${theme}-delivery.png` });
   }
   await row.getByRole('button', { name: 'Retry message', exact: true }).click();
-  await expect(row.getByText('Accepted by server', { exact: true })).toBeVisible();
+  await expect(row.getByRole('img', { name: 'Sent to server' })).toBeVisible();
   await expect(row).toHaveCount(1);
   await expect(composer).toHaveText('A newer synthetic draft');
 });

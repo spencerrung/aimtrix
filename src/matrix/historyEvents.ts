@@ -4,6 +4,15 @@ export const HISTORY_MESSAGE_LIMIT = 250;
 export const HISTORY_RAW_LIMIT = 10_000;
 export const supportedMessageTypes = new Set(['m.text', 'm.notice', 'm.emote', 'm.image', 'm.file', 'm.audio', 'm.video', 'm.location']);
 
+/** Remove the plain-text reply quotation included for clients without reply support. */
+export function stripReplyFallback(body: string): string {
+  const lines = body.split('\n');
+  let index = 0;
+  while (index < lines.length && lines[index].startsWith('>')) index += 1;
+  if (index > 0 && lines[index] === '') index += 1;
+  return lines.slice(index).join('\n') || body;
+}
+
 export function historyEventContent(event: MatrixEvent): Record<string, unknown> {
   return event.getOriginalContent?.() ?? event.getContent();
 }

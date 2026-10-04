@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Check, CheckCheck } from 'lucide-react';
 import type { MessageSummary } from '../../matrix/viewModels';
 import { deliveryFailureCopy } from '../../matrix/messageDelivery';
 import { useAction } from '../../components/useAction';
@@ -10,7 +11,7 @@ export interface MessageDeliveryActions {
 
 const labels = {
   queued: 'Queued…', encrypting: 'Encrypting…', sending: 'Sending…',
-  failed: 'Send not confirmed', accepted: 'Accepted by server',
+  failed: 'Send not confirmed',
 };
 
 export function MessageDeliveryStatus({ message, onRetryMessage, onCancelMessage }: MessageDeliveryActions & { message: MessageSummary }) {
@@ -20,7 +21,17 @@ export function MessageDeliveryStatus({ message, onRetryMessage, onCancelMessage
   const container = useRef<HTMLDivElement>(null);
   if (!message.isOwn || !message.delivery) return null;
   const status = message.delivery;
-  if (status === 'accepted') return <span className="sending-label" title="The homeserver accepted this message. This does not confirm that another device has read or decrypted it.">{labels[status]}</span>;
+  if (status === 'accepted') {
+    const readers = message.readBy?.map((reader) => reader.displayName) ?? [];
+    const read = readers.length > 0;
+    const label = read ? `Read by ${readers.join(', ')}` : 'Sent to server';
+    const detail = read
+      ? `${label}. A read receipt does not prove that the message was decrypted on another device.`
+      : 'Sent to server. Delivery to another device has not been confirmed.';
+    return <span className={`message-delivery-mark message-delivery-mark--${read ? 'read' : 'accepted'}`} role="img" aria-label={label} title={detail}>
+      {read ? <CheckCheck size={14} aria-hidden="true" /> : <Check size={14} aria-hidden="true" />}
+    </span>;
+  }
   const recover = (cancel: boolean) => {
     const action = cancel ? onCancelMessage : onRetryMessage;
     if (!action) return;
@@ -42,7 +53,7 @@ export function MessageDeliveryStatus({ message, onRetryMessage, onCancelMessage
     });
   };
   return <div ref={container} onFocusCapture={() => container.current?.scrollIntoView?.({ block: 'nearest' })} className={`message-delivery${status === 'failed' ? ' message-delivery--failed' : ''}`}>
-    <span role="status">{message.pendingEdit ? 'Edit: ' : ''}{labels[status]}</span>
+    <span role="status" className={`message-delivery-mark message-delivery-mark--${status}`}><Check size={14} aria-hidden="true" /> {message.pendingEdit ? 'Edit: ' : ''}{labels[status]}</span>
     {status === 'failed' ? <p>{message.deliveryError ?? deliveryFailureCopy()}</p> : null}
     <div className="message-delivery__actions">
       {status === 'failed' && onRetryMessage ? <button className="aqua-button" type="button" disabled={busy} onClick={() => recover(false)}>{busy && !cancelling ? 'Retrying…' : 'Retry message'}</button> : null}

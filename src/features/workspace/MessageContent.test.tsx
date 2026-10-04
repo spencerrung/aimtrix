@@ -17,6 +17,37 @@ describe('shared message content', () => {
     expect(screen.getByText('A helpful caption')).toBeVisible();
   });
 
+  it('opens a captioned image from its preview and resolves the authenticated original for viewing and download', async () => {
+    const resolve = vi.fn().mockImplementation(async (_source: string, _size: number, _encrypted: unknown, _mime: string, original?: boolean) => original ? 'blob:original' : 'blob:preview');
+    render(<MediaResolverContext.Provider value={resolve}><MessageContent message={{ ...message, kind: 'media', body: 'A helpful caption', fileName: 'original.png', mediaUrl: 'mxc://test/image', mediaKind: 'image', mimeType: 'image/png' }} /></MediaResolverContext.Provider>);
+    const preview = await screen.findByRole('button', { name: 'View original.png full size' });
+    expect(within(preview).getByRole('img', { name: 'original.png' })).toHaveAttribute('src', 'blob:preview');
+    expect(screen.getByText('A helpful caption')).toBeVisible();
+    fireEvent.click(preview);
+    const viewer = screen.getByRole('dialog', { name: 'Viewing original.png' });
+    await waitFor(() => expect(within(viewer).getByRole('img', { name: 'original.png' })).toHaveAttribute('src', 'blob:original'));
+    expect(within(viewer).getByRole('link', { name: 'Download image' })).toHaveAttribute('href', 'blob:original');
+    expect(within(viewer).getByRole('link', { name: 'Download image' })).toHaveAttribute('download', 'original.png');
+    expect(resolve).toHaveBeenCalledWith('mxc://test/image', 2400, undefined, 'image/png', true);
+  });
+
+  it('offers a retry when the original image is unavailable without substituting a cropped preview', async () => {
+    let originalRequests = 0;
+    const resolve = vi.fn().mockImplementation(async (_source: string, _size: number, _encrypted: unknown, _mime: string, original?: boolean) => {
+      if (!original) return 'blob:preview';
+      return ++originalRequests === 1 ? undefined : 'blob:original';
+    });
+    render(<MediaResolverContext.Provider value={resolve}><MessageContent message={{ ...message, kind: 'media', body: 'A caption', fileName: 'photo.png', mediaUrl: 'mxc://test/image', mediaKind: 'image', mimeType: 'image/png' }} /></MediaResolverContext.Provider>);
+    fireEvent.click(await screen.findByRole('button', { name: 'View photo.png full size' }));
+    const viewer = screen.getByRole('dialog', { name: 'Viewing photo.png' });
+    expect(await within(viewer).findByRole('alert')).toHaveTextContent('The original image could not be loaded');
+    expect(within(viewer).queryByRole('img', { name: 'photo.png' })).not.toBeInTheDocument();
+    expect(within(viewer).queryByRole('link', { name: 'Download image' })).not.toBeInTheDocument();
+    fireEvent.click(within(viewer).getByRole('button', { name: 'Retry image' }));
+    await waitFor(() => expect(within(viewer).getByRole('img', { name: 'photo.png' })).toHaveAttribute('src', 'blob:original'));
+    expect(originalRequests).toBe(2);
+  });
+
   it('renders the supported rich subset literally and uses the same code-copy path', async () => {
     render(<MessageContent message={rich('<p><strong>**Literal stars**</strong> <a href="https://matrix.to/#/@buddy:test">Buddy</a></p><blockquote>Quoted</blockquote><ol start="3"><li>Third</li></ol><pre><code class="language-typescript">const value = 1;\n</code></pre>')} />);
     expect(screen.getByText('**Literal stars**').tagName).toBe('STRONG');

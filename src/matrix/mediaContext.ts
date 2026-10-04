@@ -8,6 +8,7 @@ export type MediaResolver = (
   size: number,
   encryptedFile?: EncryptedMediaInfo,
   mimeType?: string,
+  original?: boolean,
 ) => Promise<string | undefined>;
 
 export const MediaResolverContext = createContext<MediaResolver | undefined>(undefined);

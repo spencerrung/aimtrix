@@ -1,7 +1,7 @@
 import { lazy, Suspense, useContext, useEffect, useMemo, useState, useRef, type CSSProperties, type ReactNode } from 'react';
 import { Images, Paperclip, X } from 'lucide-react';
 import { Dialog, DialogClose } from '../../components/Dialog';
-import { useMediaSource } from '../../matrix/useMediaSource';
+import { useMediaSource, useMediaSourceState } from '../../matrix/useMediaSource';
 import type { MessageSummary } from '../../matrix/viewModels';
 import type { FormattedMessageNode } from '../../matrix/incomingFormatting';
 import { emojiReactionKey, type EmojiPackEntry } from '../media/emojiPacks';
@@ -245,7 +245,8 @@ export function MessageContent({ message, dataSaver = false, autoplayMedia = tru
   }, [viewer, position, images]);
   const mediaTrigger = useRef<HTMLButtonElement>(null);
   const mediaSrc = useMediaSource(revealed ? message.mediaUrl : undefined, message.kind === 'sticker' ? 320 : 720, message.encryptedFile, message.mimeType);
-  const viewerSource = useMediaSource(viewer ? viewedImage.mediaUrl : undefined, 2400, viewedImage.encryptedFile, viewedImage.mimeType);
+  const viewerMedia = useMediaSourceState(viewer ? viewedImage.mediaUrl : undefined, 2400, viewedImage.encryptedFile, viewedImage.mimeType, true);
+  const viewerSource = viewerMedia.url;
   return <>
     {!revealed && message.mediaUrl ? <button className="message-media-gate" type="button" onClick={() => setRevealed(true)}><Images size={16} /> Load {message.mimeType === 'image/gif' ? 'animated media' : 'media'}</button>
       : mediaSrc && message.mediaKind === 'video' ? <video className="message-media" src={mediaSrc} controls preload="metadata" onLoadedMetadata={onMediaLoad} />
@@ -256,7 +257,7 @@ export function MessageContent({ message, dataSaver = false, autoplayMedia = tru
       </div>
       : mediaSrc && message.mediaKind === 'file' ? message.codeFile ? <CodeFileMessage message={message} source={mediaSrc} /> : <a className="message-file" href={mediaSrc} download={message.fileName ?? message.body}><Paperclip size={15} /> {message.fileName ?? message.body}</a>
       : mediaSrc ? message.mediaKind === 'image' && message.kind !== 'sticker'
-        ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.body} full size`} onClick={() => { setViewedImageId(message.id); setViewer(true); }}><img className="message-media" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} /></button>
+        ? <button ref={mediaTrigger} className="message-media-button" type="button" aria-label={`View ${message.fileName ?? message.body} full size`} onClick={() => { setViewedImageId(message.id); setViewer(true); }}><img className="message-media" src={mediaSrc} alt={message.fileName ?? message.body} loading="lazy" onLoad={onMediaLoad} /></button>
         : <img className="message-sticker" src={mediaSrc} alt={message.body} loading="lazy" onLoad={onMediaLoad} />
       : message.kind === 'poll' && message.poll ? <Suspense fallback={<span role="status">Loading poll…</span>}><PollCard message={message} /></Suspense>
       : message.kind === 'location' && message.location ? <div className="message-location">
@@ -272,12 +273,14 @@ export function MessageContent({ message, dataSaver = false, autoplayMedia = tru
           : <MessageText body={message.body} emojiCatalog={emojiCatalog} mentions={message.mentions} />}
       </div>}
     {message.fileName && message.body !== message.fileName && !message.voiceMessage && (mediaSrc || !revealed) ? <div className="message-caption">{message.formatted?.length ? <RichMessage nodes={message.formatted} dataSaver={dataSaver} autoplayMedia={autoplayMedia} onMediaLoad={onMediaLoad} /> : <MessageText body={message.body} emojiCatalog={emojiCatalog} mentions={message.mentions} />}</div> : null}
-    {viewer ? <Dialog className="media-viewer" backdropClassName="media-viewer-backdrop" aria-label={`Viewing ${viewedImage.body}`} onClose={() => { setViewer(false); setActualSize(false); }}>
-      <header><strong>{viewedImage.body}</strong><span>
+    {viewer ? <Dialog className="media-viewer" backdropClassName="media-viewer-backdrop" aria-label={`Viewing ${viewedImage.fileName ?? viewedImage.body}`} onClose={() => { setViewer(false); setActualSize(false); }}>
+      <header><strong>{viewedImage.fileName ?? viewedImage.body}</strong><span>
         {images.length > 1 ? <><small>{position + 1} of {images.length} loaded images</small><button type="button" disabled={position === 0} onClick={() => navigate(-1)}>Previous image</button><button type="button" disabled={position === images.length - 1} onClick={() => navigate(1)}>Next image</button></> : null}
         {viewerSource ? <a href={viewerSource} download={viewedImage.fileName ?? viewedImage.body}>Download image</a> : null}
         <button type="button" data-initial-focus aria-pressed={actualSize} onClick={() => setActualSize((value) => !value)}>{actualSize ? 'Fit image' : 'Actual size'}</button><DialogClose aria-label="Close image viewer"><X size={18} /></DialogClose></span></header>
-      {viewerSource ? <img className={actualSize ? 'is-actual-size' : undefined} src={viewerSource} alt={viewedImage.body} /> : <p role="status">Loading image…</p>}
+      {viewerSource ? <img className={actualSize ? 'is-actual-size' : undefined} src={viewerSource} alt={viewedImage.fileName ?? viewedImage.body} />
+        : viewerMedia.status === 'unavailable' ? <div className="media-viewer__unavailable" role="alert"><p>The original image could not be loaded. Check your connection or ask for a smaller file.</p><button type="button" onClick={viewerMedia.retry}>Retry image</button></div>
+          : <p role="status">Loading image…</p>}
     </Dialog> : null}
   </>;
 }

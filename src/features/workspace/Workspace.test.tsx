@@ -86,6 +86,7 @@ function renderWorkspace(
     onHistoryDetached?: (roomId: string, detached: boolean) => void;
     onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
     onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
+    nudgeEffectsAllowed?: () => boolean;
     onResolveNavigationTarget?: (target: import('../../matrix/matrixLinks').MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string; threadRootId?: string }>;
     onMarkRoomUnread?: (roomId: string, eventId?: string) => Promise<void>;
     onMarkThreadRead?: (roomId: string, rootId: string, options?: { eventId?: string }) => Promise<void>;
@@ -143,6 +144,7 @@ function renderWorkspace(
       onMarkRoomRead={overrides.onMarkRoomRead}
       onMarkRoomUnread={overrides.onMarkRoomUnread}
       onSetRoomFavorite={overrides.onSetRoomFavorite}
+      nudgeEffectsAllowed={overrides.nudgeEffectsAllowed}
       onResolveNavigationTarget={overrides.onResolveNavigationTarget}
       onMarkThreadRead={overrides.onMarkThreadRead}
       onSendMessage={overrides.onSendMessage}
@@ -2161,6 +2163,23 @@ describe('Workspace history navigation', () => {
     await act(async () => {});
   });
 
+  it('restores a detached live room reading position after visiting another conversation', async () => {
+    const workspace = historyWorkspace('live');
+    workspace.historyByRoom!['dev-shack'] = { mode: 'live', revision: 1, canLoadOlder: true, canLoadNewer: false };
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    renderWorkspace({ workspace });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    timeline.scrollTop = 300;
+    fireEvent.scroll(timeline);
+    fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    timeline.scrollTop = 50;
+    fireEvent.scroll(timeline);
+    fireEvent.click(screen.getByRole('button', { name: /Welcome Lounge/ }));
+    expect(timeline.scrollTop).toBe(300);
+    expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+  });
+
   it('does not replay a historical nudge when paging through old messages', async () => {
     vi.useFakeTimers();
     try {
@@ -2178,11 +2197,38 @@ describe('Workspace history navigation', () => {
       live.historyByRoom!.welcome.mode = 'live';
       rerenderWorkspace(live);
       act(() => vi.advanceTimersByTime(10));
+      expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
+      const fresh = structuredClone(live);
+      fresh.messagesByRoom.welcome.push({ ...fresh.messagesByRoom.welcome[0], id: 'fresh-live-nudge', timestamp: Date.now(), nudge: true });
+      rerenderWorkspace(fresh);
+      act(() => vi.advanceTimersByTime(10));
+      expect(container.querySelector('.aimtrix-window')).toHaveClass('is-nudging');
+      rerenderWorkspace(structuredClone(fresh));
       expect(container.querySelector('.aimtrix-window')).toHaveClass('is-nudging');
       rerenderWorkspace(context);
+      act(() => vi.advanceTimersByTime(0));
       expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
     } finally { vi.useRealTimers(); }
     await act(async () => {});
+  });
+
+  it('does not shake for a live nudge while account quiet mode is active', () => {
+    const workspace = historyWorkspace('live');
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace, nudgeEffectsAllowed: () => false });
+    const incoming = structuredClone(workspace);
+    incoming.messagesByRoom.welcome.push({ ...incoming.messagesByRoom.welcome[0], id: 'quiet-nudge', nudge: true });
+    rerenderWorkspace(incoming);
+    expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
+  });
+
+  it('does not shake for a live nudge in a room with custom notification rules', () => {
+    const workspace = historyWorkspace('live');
+    workspace.rooms.find((room) => room.id === 'welcome')!.notificationMode = 'custom';
+    const { container, rerenderWorkspace } = renderWorkspace({ workspace });
+    const incoming = structuredClone(workspace);
+    incoming.messagesByRoom.welcome.push({ ...incoming.messagesByRoom.welcome[0], id: 'custom-rule-nudge', nudge: true });
+    rerenderWorkspace(incoming);
+    expect(container.querySelector('.aimtrix-window')).not.toHaveClass('is-nudging');
   });
 
   it('blocks read receipts from a cached live room until a notification target has committed', async () => {

@@ -18,6 +18,20 @@ function setup(overrides: Partial<ComponentProps<typeof HomeActivity>> = {}) {
   render(<Fixture />); return props;
 }
 describe('HomeActivity', () => {
+  it('shows room identity and rich code without activating links or revealing spoilers', () => {
+    setup({ activity: { ...activity, items: [{ ...activity.items[0], formatted: [
+      { type: 'element', tag: 'p', children: [{ type: 'element', tag: 'strong', children: [{ type: 'text', text: 'Bold text' }] }] },
+      { type: 'element', tag: 'pre', children: [{ type: 'element', tag: 'code', children: [{ type: 'text', text: 'const value = 1;' }] }] },
+      { type: 'spoiler', children: [{ type: 'text', text: 'Private spoiler' }] },
+      { type: 'link', href: 'https://example.org', children: [{ type: 'text', text: 'Example link' }] },
+    ] }] } });
+    expect(screen.getByText('Bold text').tagName).toBe('STRONG');
+    expect(screen.getByText('const value = 1;').closest('code')).toBeInTheDocument();
+    expect(screen.getByText('Spoiler hidden')).toBeVisible();
+    expect(screen.queryByText('Private spoiler')).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Example link' })).not.toBeInTheDocument();
+    expect(document.querySelector('.home-activity__card .avatar')).toBeInTheDocument();
+  });
   it('refreshes once on first visit and never marks hidden activity read', async () => {
     const props = setup(); await waitFor(() => expect(props.actions?.refresh).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByRole('button', { name: 'Unread' }));

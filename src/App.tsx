@@ -244,6 +244,7 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
       desktopNotifications: preferences.desktopNotifications,
       notificationSounds: preferences.notificationSounds,
       soundVolume: preferences.soundVolume,
+      nudgeEffects: preferences.nudgeEffects,
     });
     if (snapshot.status === 'ready') controller.savePersonalization(preferences);
   }, [controller, preferences, snapshot.status, profileOwner, preferencesOwner, preferenceKey]);
@@ -392,6 +393,7 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
         onRetryMessage={(roomId, eventId) => controller.retryMessage(roomId, eventId)}
         onCancelMessage={(roomId, eventId) => controller.cancelMessage(roomId, eventId)}
         onSendNudge={(roomId) => controller.sendNudge(roomId)}
+        nudgeEffectsAllowed={() => controller.nudgeEffectsAllowed()}
         onSendLocation={(roomId, latitude, longitude, description, threadRootId) => controller.sendLocation(roomId, latitude, longitude, description, threadRootId)}
         onSendPoll={(roomId, question, answers, disclosed, threadRootId) => controller.sendPoll(roomId, question, answers, disclosed, threadRootId)}
         onLoadPoll={(roomId, pollId) => controller.loadPoll(roomId, pollId)}

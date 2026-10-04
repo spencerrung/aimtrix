@@ -18,6 +18,7 @@ type ControllerInternals = {
   attachThreadListeners: (room: unknown) => void;
   notifyForMessage: (event: unknown, room: unknown) => void;
   playMessageTone: () => void;
+  playNudgeTone: () => void;
   handleDecrypted: (event: unknown) => void;
   handleTimeline: (event: MatrixEvent, room: Room, toStart: boolean, removed: boolean) => void;
   migrateLegacyRootSpaceOrder: () => void;
@@ -687,6 +688,89 @@ describe('MatrixController protocol integration', () => {
     expect(playMessageTone).toHaveBeenCalledOnce();
   });
 
+  it('plays one distinct nudge tone for a live notice even when ordinary notices have no push action', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const internals = controller as unknown as ControllerInternals;
+    internals.connection = 'online';
+    internals.playMessageTone = vi.fn();
+    internals.playNudgeTone = vi.fn();
+    inject(controller, {
+      getPushActionsForEvent: vi.fn().mockReturnValue({ notify: false }),
+      getPushDetailsForEvent: vi.fn().mockReturnValue({ rule: { rule_id: '.m.rule.suppress_notices', default: true } }),
+    });
+    const event = {
+      getType: () => 'm.room.message', getId: () => '$nudge:test',
+      getContent: () => ({ msgtype: 'm.notice', body: 'Sent a nudge.', 'dev.alucard.aimtrix.nudge.v1': { version: 1 } }),
+    };
+    const room = { roomId: '!room:test' };
+
+    internals.notifyForMessage(event, room);
+    internals.notifyForMessage(event, room);
+    expect(internals.playNudgeTone).toHaveBeenCalledOnce();
+    expect(internals.playMessageTone).not.toHaveBeenCalled();
+  });
+
+  it('keeps nudge tones silent when effects are disabled or the room is muted', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const internals = controller as unknown as ControllerInternals;
+    internals.connection = 'online';
+    internals.playNudgeTone = vi.fn();
+    inject(controller, {
+      getPushActionsForEvent: vi.fn().mockReturnValue({ notify: false }),
+      getPushDetailsForEvent: vi.fn().mockReturnValue({ rule: { rule_id: '.m.rule.suppress_notices', default: true } }),
+    });
+    const event = (id: string) => ({
+      getType: () => 'm.room.message', getId: () => id,
+      getContent: () => ({ msgtype: 'm.notice', 'dev.alucard.aimtrix.nudge.v1': { version: 1 } }),
+    });
+    const room = { roomId: '!room:test' };
+    controller.setNotificationPreferences({ desktopNotifications: false, notificationSounds: true, soundVolume: 0.55, nudgeEffects: false });
+    internals.notifyForMessage(event('$disabled:test'), room);
+    expect(internals.playNudgeTone).not.toHaveBeenCalled();
+
+    controller.setNotificationPreferences({ desktopNotifications: false, notificationSounds: true, soundVolume: 0.55, nudgeEffects: true });
+    (internals.client as MatrixClient).pushRules = { global: { override: [{ rule_id: 'mute-room', enabled: true, actions: [], conditions: [{ kind: 'event_property_is', key: 'room_id', value: '!room:test' }] }] } } as unknown as MatrixClient['pushRules'];
+    internals.notifyForMessage(event('$muted:test'), room);
+    expect(internals.playNudgeTone).not.toHaveBeenCalled();
+
+    (internals.client as MatrixClient).pushRules = { global: { override: [{ rule_id: '.m.rule.master', enabled: true }] } } as unknown as MatrixClient['pushRules'];
+    expect(controller.nudgeEffectsAllowed()).toBe(false);
+    internals.notifyForMessage(event('$dnd:test'), room);
+    expect(internals.playNudgeTone).not.toHaveBeenCalled();
+  });
+
+  it('does not bypass explicit sender or matching content mutes beneath notice suppression', () => {
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    const internals = controller as unknown as ControllerInternals;
+    internals.connection = 'online';
+    internals.playNudgeTone = vi.fn();
+    const winning = { rule: { rule_id: '.m.rule.suppress_notices', default: true } };
+    const getPushDetailsForEvent = vi.fn().mockReturnValue(winning);
+    inject(controller, { getPushActionsForEvent: vi.fn().mockReturnValue({ notify: false }), getPushDetailsForEvent });
+    const client = internals.client as MatrixClient;
+    const event = (id: string, sender: string) => ({
+      getType: () => 'm.room.message', getId: () => id, getSender: () => sender,
+      getContent: () => ({ msgtype: 'm.notice', body: 'Sent a nudge.', 'dev.alucard.aimtrix.nudge.v1': { version: 1 } }),
+    });
+    const room = { roomId: '!room:test' };
+    client.pushRules = { global: {
+      sender: [{ rule_id: '@silenced:test', default: false, enabled: true, actions: ['dont_notify'] }],
+      content: [{ rule_id: 'mute-nudges', default: false, enabled: true, actions: ['dont_notify'], pattern: '*nudge*' }],
+    } } as unknown as MatrixClient['pushRules'];
+
+    internals.notifyForMessage(event('$sender:test', '@silenced:test'), room);
+    internals.notifyForMessage(event('$content:test', '@other:test'), room);
+    expect(internals.playNudgeTone).not.toHaveBeenCalled();
+
+    client.pushRules = { global: { content: [{ rule_id: 'unrelated', default: false, enabled: true, actions: [], pattern: '*unrelated*' }] } } as unknown as MatrixClient['pushRules'];
+    internals.notifyForMessage(event('$allowed:test', '@other:test'), room);
+    expect(internals.playNudgeTone).toHaveBeenCalledOnce();
+
+    getPushDetailsForEvent.mockReturnValue({ rule: { rule_id: 'custom-silence', default: false } });
+    internals.notifyForMessage(event('$custom:test', '@other:test'), room);
+    expect(internals.playNudgeTone).toHaveBeenCalledOnce();
+  });
+
   it('keeps native foreground notification content generic and routes its tap', () => {
     const platform = pushPlatform();
     platform.capabilities.platform = 'android';
@@ -905,6 +989,26 @@ describe('MatrixController protocol integration', () => {
 
     await controller.resolveMedia('mxc://test/photo', 320, undefined, 'image/png');
     expect(mxcUrlToHttp).toHaveBeenCalledWith('mxc://test/photo', 320, 320, 'crop', false, true, true);
+    await controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true);
+    expect(mxcUrlToHttp).toHaveBeenLastCalledWith('mxc://test/photo', undefined, undefined, undefined, false, true, true);
+    expect(mxcUrlToHttp).toHaveBeenCalledTimes(3);
+    vi.unstubAllGlobals();
+  });
+
+  it('does not cache failed authenticated original media so the viewer can retry', async () => {
+    const mxcUrlToHttp = vi.fn().mockReturnValue('https://matrix.test/media/original');
+    const fetchMedia = vi.fn()
+      .mockResolvedValueOnce(new Response('', { status: 503 }))
+      .mockResolvedValueOnce(new Response('synthetic image bytes', { status: 200, headers: { 'content-type': 'image/png' } }));
+    vi.stubGlobal('fetch', fetchMedia);
+    Object.defineProperty(URL, 'createObjectURL', { value: vi.fn().mockReturnValue('blob:original'), configurable: true });
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
+    inject(controller, { getAccessToken: () => 'synthetic-token', mxcUrlToHttp } as unknown as Partial<MatrixClient>);
+    await expect(controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true)).resolves.toBeUndefined();
+    await expect(controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true)).resolves.toBe('blob:original');
+    expect(fetchMedia).toHaveBeenCalledTimes(2);
+    expect(fetchMedia).toHaveBeenNthCalledWith(2, 'https://matrix.test/media/original', { headers: { Accept: 'image/png', Authorization: 'Bearer synthetic-token' } });
+    expect(mxcUrlToHttp).toHaveBeenCalledWith('mxc://test/photo', undefined, undefined, undefined, false, true, true);
     vi.unstubAllGlobals();
   });
 

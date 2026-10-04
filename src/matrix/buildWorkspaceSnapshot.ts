@@ -1,6 +1,6 @@
 import { roomNotificationMode } from './notificationRules';
 import { decryptionGuidance } from './decryptionGuidance';
-import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent, supportedMessageTypes } from './historyEvents';
+import { boundedTimelineEvents, HISTORY_RAW_LIMIT, historyRelation, isVisibleTimelineEvent, stripReplyFallback, supportedMessageTypes } from './historyEvents';
 import { MAX_FORMATTED_BODY_LENGTH, parseIncomingFormatting } from './incomingFormatting';
 import type { HistoryView } from './RoomHistory';
 import type { ThreadHistoryView } from './ThreadHistory';
@@ -258,14 +258,6 @@ function mediaSource(mxcUrl?: string | null): string | undefined {
 
 function memberAvatar(member?: RoomMember | null): string | undefined {
   return mediaSource(member?.getMxcAvatarUrl());
-}
-
-function stripReplyFallback(body: string): string {
-  const lines = body.split('\n');
-  let index = 0;
-  while (index < lines.length && lines[index].startsWith('>')) index += 1;
-  if (index > 0 && lines[index] === '') index += 1;
-  return lines.slice(index).join('\n') || body;
 }
 
 function eventBody(

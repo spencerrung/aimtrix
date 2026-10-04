@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.3.0-rc.4 — 2026-10-04
+
+PWA device-testing candidate replacing `0.3.0-rc.3` after the first hosted feedback pass.
+
+- Replace repeated outgoing delivery prose with accessible server-sent and receipt-backed read marks, while keeping failed sends recoverable.
+- Open captioned images from authenticated original media, with an explicit failure and retry state instead of a cropped thumbnail.
+- Fit the buddy-list filter, give Home activity room identity and safe formatted previews, make live nudges perceptible within sound/motion settings, and restore reading anchors across live room and DM switches.
+
+The prior homelab image `v0.3.0-rc.3` remains available for rollback. Physical-device and provider-specific acceptance remains open.
+
 ## 0.3.0-rc.3 — 2026-10-04
 
 PWA device-testing candidate replacing `0.3.0-rc.2`.

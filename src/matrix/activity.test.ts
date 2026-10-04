@@ -29,6 +29,24 @@ function setup() {
 const notification = (event: ReturnType<typeof raw>, read = false) => ({ room_id: '!room:test', event, ts: event.origin_server_ts, read, actions: [] });
 
 describe('ActivityStore', () => {
+  it('provides a safe formatted preview without reply fallback or active HTML', async () => {
+    const f = setup();
+    const event = { ...raw('$rich'), content: { msgtype: 'm.text', body: '> <@other:test> Previous text\n\nActual reply',
+      'm.relates_to': { rel_type: 'm.thread', event_id: '$parent', 'm.in_reply_to': { event_id: '$parent' } }, format: 'org.matrix.custom.html',
+      formatted_body: '<mx-reply>Previous text</mx-reply><p><strong>Actual reply</strong></p><pre><code>const value = 1;</code></pre><script>unsafe</script>' } };
+    f.http.mockResolvedValueOnce({ notifications: [notification(event)] });
+    await f.store.loadOlder();
+    const item = f.store.snapshot().items[0];
+    expect(item.body).toBe('Actual reply');
+    expect(JSON.stringify(item.formatted)).toContain('const value = 1;');
+    expect(JSON.stringify(item.formatted)).not.toMatch(/Previous text|unsafe/);
+    expect(f.store.snapshot().items[0].formatted).toBe(item.formatted);
+    const mapped = f.mapper.mock.results[0].value as MatrixEvent;
+    vi.spyOn(mapped, 'getContent').mockReturnValue({ ...event.content, formatted_body: '<p>Updated reply</p>' });
+    expect(JSON.stringify(f.store.snapshot().items[0].formatted)).toContain('Updated reply');
+    vi.spyOn(mapped, 'getContent').mockReturnValue({ ...event.content, formatted_body: `<p>${'x'.repeat(8193)}</p>` });
+    expect(f.store.snapshot().items[0].formatted).toBeUndefined();
+  });
   it('keeps separate thread notification events and paginates without timeline writes', async () => {
     const f = setup();
     f.http.mockResolvedValueOnce({ notifications: [notification(raw('$one', '$root')), notification(raw('$two', '$root', 2))], next_token: 'older' })
