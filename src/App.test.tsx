@@ -7,6 +7,7 @@ import { defaultProfilePersonalization, type ProfilePersonalization } from './se
 import type { MatrixControllerSnapshot } from './matrix/MatrixController';
 import type { MatrixNavigationTarget } from './matrix/matrixLinks';
 import type { PushRoute } from './pwa/pushRouting';
+import { draftStorageKey } from './features/workspace/structuredDrafts';
 
 const harness = vi.hoisted(() => ({
   snapshot: {} as MatrixControllerSnapshot,
@@ -24,6 +25,7 @@ const harness = vi.hoisted(() => ({
   scope: undefined as { userId: string; homeserver: string } | undefined,
   chooseAccount: vi.fn<(id: string | null) => Promise<void>>(),
   registerPush: vi.fn<() => Promise<void>>(),
+  forgetDormant: vi.fn<(id: string) => Promise<{ cleaned: boolean }>>(),
 }));
 vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   constructor() { return new Proxy(this, { get: (target, key) => Reflect.get(target, key) ?? (() => undefined) }); }
@@ -42,24 +44,27 @@ vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   listAccounts = async () => harness.accounts;
   chooseAnotherAccount = (id: string | null) => harness.chooseAccount(id);
   registerPushNotifications = () => harness.registerPush();
+  forgetDormantAccount = (id: string) => harness.forgetDormant(id);
 } }));
 vi.mock('./config/runtimeConfig', async (original) => {
   const actual = await original<typeof import('./config/runtimeConfig')>();
   return { ...actual, loadRuntimeConfig: async () => ({ config: actual.defaultRuntimeConfig, warnings: [] }) };
 });
-vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread, onSetRoomFavorite, onResolveNavigationTarget, pushRoute }: {
+vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread, onSetRoomFavorite, onResolveNavigationTarget, onForgetAccount, pushRoute }: {
   workspace: typeof demoWorkspace; profilePersonalization: ProfilePersonalization; onProfilePersonalizationChange: (next: ProfilePersonalization) => Promise<void>;
   onMarkRoomRead: (roomId: string, options: { eventId: string; explicit: boolean }) => Promise<void>;
   onMarkThreadRead: (roomId: string, rootId: string, options: { eventId: string }) => Promise<void>;
   onMarkRoomUnread: (roomId: string, eventId: string) => Promise<void>;
   onSetRoomFavorite: (roomId: string, favorite: boolean) => Promise<void>;
   onResolveNavigationTarget: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
+  onForgetAccount?: (id: string) => Promise<void>;
   pushRoute?: PushRoute;
 }) => <main><span>{workspace.user.id}</span><span data-testid="profile-bio">{profilePersonalization.bio}</span><button onClick={() => void onProfilePersonalizationChange({ ...profilePersonalization, bio: 'Old pending update' })}>Update profile</button>
   <button onClick={() => void onMarkRoomRead('synthetic-room', { eventId: '$viewed', explicit: true })}>Read main</button>
   <button onClick={() => void onMarkThreadRead('synthetic-room', '$root', { eventId: '$reply' })}>Read thread</button>
   <button onClick={() => void onMarkRoomUnread('synthetic-room', '$return')}>Unread reminder</button>
   <button onClick={() => void onSetRoomFavorite('synthetic-room', true)}>Favorite room</button>
+  <button onClick={() => { const id = harness.accounts[0]?.id; if (id) void onForgetAccount?.(id); }}>Forget dormant account</button>
   <button onClick={() => void onResolveNavigationTarget({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] })}>Resolve destination</button>
   <span data-testid="incoming-route">{JSON.stringify(pushRoute)}</span>
 </main> }));
@@ -74,6 +79,7 @@ beforeEach(() => {
   harness.accounts = []; harness.scope = undefined;
   harness.chooseAccount.mockReset().mockResolvedValue(undefined);
   harness.registerPush.mockReset().mockResolvedValue(undefined);
+  harness.forgetDormant.mockReset().mockResolvedValue({ cleaned: true });
   harness.favorite.mockReset().mockResolvedValue(undefined);
   harness.resolveNavigation.mockReset().mockResolvedValue({ roomId: '!lounge:test', eventId: '$event' });
   window.history.replaceState({}, '', '/');
@@ -84,6 +90,21 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('App account privacy', () => {
+  it('cleans a forgotten account’s drafts, preferences and last-room state', async () => {
+    const dormant = { id: JSON.stringify(['https://other.test', '@two:other.test']), userId: '@two:other.test',
+      homeserver: 'https://other.test', serverName: 'other.test', active: false, recovery: false };
+    harness.accounts = [dormant];
+    localStorage.setItem(draftStorageKey({ userId: dormant.userId, homeserver: dormant.homeserver }), 'synthetic-draft');
+    localStorage.setItem(`aimtrix.preferences.v2:${dormant.id}`, 'synthetic-preferences');
+    localStorage.setItem(`aimtrix.location.v2:${dormant.id}`, 'synthetic-room');
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Forget dormant account' })).toBeVisible());
+    fireEvent.click(screen.getByRole('button', { name: 'Forget dormant account' }));
+    await waitFor(() => expect(harness.forgetDormant).toHaveBeenCalledWith(dormant.id));
+    await waitFor(() => expect(localStorage.getItem(`aimtrix.location.v2:${dormant.id}`)).toBeNull());
+    expect(localStorage.getItem(draftStorageKey({ userId: dormant.userId, homeserver: dormant.homeserver }))).toBeNull();
+    expect(localStorage.getItem(`aimtrix.preferences.v2:${dormant.id}`)).toBeNull();
+  });
   it('offers a non-destructive account switch while recovery is required', async () => {
     harness.snapshot = { status: 'reauthentication-required', recovery: { userId: '@one:example.test', homeserver: 'https://one.test', softLogout: true } };
     harness.accounts = [{ id: 'one', userId: '@one:example.test', homeserver: 'https://one.test', serverName: 'one.test', active: true, recovery: true },

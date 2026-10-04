@@ -123,9 +123,18 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
   }, [controller, draftStore, structuredDraftStore, reportDraftState, refreshAccounts, onClearPushRoute]);
   const forgetDormantAccount = useCallback(async (id: string) => {
     const result = await controller.forgetDormantAccount(id);
-    setAccountCleanupError(!result.cleaned);
+    const account = accounts.find((candidate) => candidate.id === id);
+    let cleaned = result.cleaned;
+    if (account) {
+      cleaned = structuredDraftStore.clear({ userId: account.userId, homeserver: account.homeserver }).cleared && cleaned;
+      try {
+        localStorage.removeItem(`aimtrix.preferences.v2:${id}`);
+        localStorage.removeItem(`aimtrix.location.v2:${id}`);
+      } catch { cleaned = false; }
+    }
+    setAccountCleanupError(!cleaned);
     await refreshAccounts();
-  }, [controller, refreshAccounts]);
+  }, [controller, accounts, structuredDraftStore, refreshAccounts]);
   const threadAttentionActions = useMemo(() => ({
     load: (roomId: string, rootId: string) => controller.loadThreadAttention(roomId, rootId),
     follow: (roomId: string, rootId: string, value: boolean) => controller.activity.setThreadFollow(roomId, rootId, value),
