@@ -110,9 +110,9 @@ export function parseUserPreferences(value: unknown): UserPreferences {
   };
 }
 
-export function loadUserPreferences(storage: Storage = localStorage): UserPreferences {
+export function loadUserPreferences(storage: Storage = localStorage, key = PREFERENCES_KEY): UserPreferences {
   try {
-    const serialized = storage.getItem(PREFERENCES_KEY);
+    const serialized = storage.getItem(key);
     return serialized ? parseUserPreferences(JSON.parse(serialized)) : { ...defaultUserPreferences };
   } catch {
     return { ...defaultUserPreferences };
@@ -122,6 +122,7 @@ export function loadUserPreferences(storage: Storage = localStorage): UserPrefer
 export function saveUserPreferences(
   preferences: UserPreferences,
   storage: Storage = localStorage,
+  key = PREFERENCES_KEY,
 ): void {
-  storage.setItem(PREFERENCES_KEY, JSON.stringify(preferences));
+  storage.setItem(key, JSON.stringify(preferences));
 }

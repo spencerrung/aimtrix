@@ -1,5 +1,5 @@
 import type { NotificationContext } from '../pwa/notificationPolicy';
-import type { StoredMatrixSession } from '../matrix/sessionStore';
+import type { AccountCredentialStore, StoredMatrixSession } from '../matrix/sessionStore';
 import type { PushRoute } from '../pwa/pushRouting';
 
 interface SsoTarget {
@@ -159,6 +159,7 @@ export interface DeviceMedia {
 export interface AimtrixPlatform {
   capabilities: PlatformCapabilities;
   credentials: CredentialStore<StoredMatrixSession>;
+  accounts?: AccountCredentialStore;
   sso: CredentialStore<SsoPendingState>;
   notifications: NotificationService;
   push: PushService;

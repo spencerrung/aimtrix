@@ -14,9 +14,8 @@ import {
 import { relaunch } from '@tauri-apps/plugin-process';
 import { check } from '@tauri-apps/plugin-updater';
 import {
-  parseStoredMatrixSession,
+  createAccountCredentialStore,
   SESSION_KEY,
-  type StoredMatrixSession,
 } from '../matrix/sessionStore';
 import { parsePushRoute, routeUrl, type PushRoute } from '../pwa/pushRouting';
 import { nativeSsoCallbackPath, parseSsoPendingState } from './platform';
@@ -56,25 +55,7 @@ function secretStore(key: string): CredentialStore<string> {
   };
 }
 
-function createTauriCredentials(): CredentialStore<StoredMatrixSession> {
-  const store = secretStore(SESSION_KEY);
-  return {
-    async load() {
-      try {
-        const serialized = await store.load();
-        if (!serialized) return undefined;
-        const session = parseStoredMatrixSession(JSON.parse(serialized));
-        if (session) return session;
-        await store.clear();
-      } catch {
-        await store.clear().catch(() => undefined);
-      }
-      return undefined;
-    },
-    save: async (session) => store.save(JSON.stringify(session)),
-    clear: () => store.clear(),
-  };
-}
+function createTauriCredentials() { return createAccountCredentialStore(secretStore(SESSION_KEY)); }
 
 function createTauriSsoState(): CredentialStore<SsoPendingState> {
   const store = secretStore(SSO_KEY);
@@ -270,6 +251,7 @@ function createTauriInstall(): InstallAndUpdate {
 }
 
 export function createTauriPlatform(): AimtrixPlatform {
+  const credentials = createTauriCredentials();
   return {
     capabilities: {
       platform: 'desktop',
@@ -280,7 +262,8 @@ export function createTauriPlatform(): AimtrixPlatform {
       standalone: true,
       secureCredentialStorage: true,
     },
-    credentials: createTauriCredentials(),
+    credentials,
+    accounts: credentials,
     sso: createTauriSsoState(),
     notifications: createTauriNotifications(),
     push: createTauriPush(),

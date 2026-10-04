@@ -15,6 +15,7 @@ import { NetworkStatus } from './features/pwa/NetworkStatus';
 import { StartupScreen } from './features/auth/StartupScreen';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { MatrixController } from './matrix/MatrixController';
+import type { StoredAccountSummary } from './matrix/sessionStore';
 import type { PushRegistrationResult } from './matrix/MatrixController';
 import { MediaProvider } from './matrix/MediaProvider';
 import { getAimtrixPlatform } from './platform/aimtrixPlatform';
@@ -49,7 +50,7 @@ function initialTheme(configured: ThemeName): ThemeName {
   return saved === 'aqua' || saved === 'graphite' || saved === 'midnight' ? saved : configured;
 }
 
-function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: RuntimeConfigResult; pushRoute?: PushRoute; onDraftStateChange: (state: DraftStateSummary) => void }) {
+function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange }: { result: RuntimeConfigResult; pushRoute?: PushRoute; onClearPushRoute: () => void; onDraftStateChange: (state: DraftStateSummary) => void }) {
   const { config, warnings } = result;
   const platform = getAimtrixPlatform();
   const controller = useMemo(() => new MatrixController(config), [config]);
@@ -65,16 +66,21 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
   const [preferences, setPreferences] = useState<UserPreferences>(() => optionalAppearance(loadUserPreferences, { ...defaultUserPreferences }));
   const [demoPersonalization, setDemoPersonalization] = useState<ProfilePersonalization>(() => optionalAppearance((storage) => loadProfilePersonalization(storage, DEMO_PROFILE_KEY), structuredClone(defaultProfilePersonalization)));
   const [accountPersonalization, setAccountPersonalization] = useState<{ owner: string; value: ProfilePersonalization }>();
-  const profileOwner = snapshot.status === 'ready' ? snapshot.workspace.user.id : undefined;
-  const profilePersonalization = snapshot.status === 'ready' && accountPersonalization?.owner === snapshot.workspace.user.id
+  const draftScope = controller.getDraftScope?.();
+  const profileOwner = snapshot.status === 'ready' ? JSON.stringify([draftScope?.homeserver, snapshot.workspace.user.id]) : undefined;
+  const preferenceKey = profileOwner ? `aimtrix.preferences.v2:${profileOwner}` : undefined;
+  const [preferencesOwner, setPreferencesOwner] = useState<string>();
+  const profilePersonalization = snapshot.status === 'ready' && accountPersonalization && accountPersonalization.owner === profileOwner
     ? accountPersonalization.value : defaultProfilePersonalization;
   const [profileRequests] = useState(() => ({ generation: 0 }));
   useEffect(() => controller.subscribe(() => {
     if (controller.getSnapshot().status !== 'ready') profileRequests.generation++;
   }), [controller, profileRequests]);
   const [draftStore] = useState(() => new VolatileDrafts());
+  const [accounts, setAccounts] = useState<StoredAccountSummary[]>([]);
+  const [accountCleanupError, setAccountCleanupError] = useState(false);
+  const preservingAccountDrafts = useRef(false);
   const [structuredDraftStore] = useState(() => new StructuredDraftStore());
-  const draftScope = controller.getDraftScope?.();
   const lastDraftScope = useRef<DraftScope | undefined>(undefined);
   const lastDraftStatus = useRef(snapshot.status);
   const lastDraftSummary = useRef(EMPTY_DRAFT_STATE);
@@ -94,12 +100,41 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
       const scope = controller.getDraftScope?.();
       if (scope) lastDraftScope.current = scope;
       if (next.status !== 'ready' && lastDraftStatus.current === 'ready') { structuredDraftStore.suspend(); reportDraftState({ ...lastDraftSummary.current, sending: false }); }
-      if (next.status === 'signed-out' && !next.recovery && lastDraftScope.current) clearDrafts();
+      if (next.status === 'signed-out' && !next.recovery && lastDraftScope.current && !preservingAccountDrafts.current) clearDrafts();
+      if (next.status === 'ready') preservingAccountDrafts.current = false;
       lastDraftStatus.current = next.status;
     };
     update();
     return controller.subscribe(update);
   }, [controller, structuredDraftStore, clearDrafts, reportDraftState]);
+  const refreshAccounts = useCallback(async () => {
+    const next = await controller.listAccounts();
+    setAccounts(Array.isArray(next) ? next : []);
+  }, [controller]);
+  useEffect(() => { queueMicrotask(() => { void refreshAccounts().catch(() => undefined); }); }, [refreshAccounts, snapshot.status, profileOwner]);
+  const chooseAccount = useCallback(async (id: string | null, keepRoute = false) => {
+    if (!keepRoute) onClearPushRoute();
+    preservingAccountDrafts.current = true;
+    structuredDraftStore.suspend();
+    draftStore.clear();
+    reportDraftState(EMPTY_DRAFT_STATE);
+    await controller.chooseAnotherAccount(id);
+    await refreshAccounts();
+  }, [controller, draftStore, structuredDraftStore, reportDraftState, refreshAccounts, onClearPushRoute]);
+  const forgetDormantAccount = useCallback(async (id: string) => {
+    const result = await controller.forgetDormantAccount(id);
+    const account = accounts.find((candidate) => candidate.id === id);
+    let cleaned = result.cleaned;
+    if (account) {
+      cleaned = structuredDraftStore.clear({ userId: account.userId, homeserver: account.homeserver }).cleared && cleaned;
+      try {
+        localStorage.removeItem(`aimtrix.preferences.v2:${id}`);
+        localStorage.removeItem(`aimtrix.location.v2:${id}`);
+      } catch { cleaned = false; }
+    }
+    setAccountCleanupError(!cleaned);
+    await refreshAccounts();
+  }, [controller, accounts, structuredDraftStore, refreshAccounts]);
   const threadAttentionActions = useMemo(() => ({
     load: (roomId: string, rootId: string) => controller.loadThreadAttention(roomId, rootId),
     follow: (roomId: string, rootId: string, value: boolean) => controller.activity.setThreadFollow(roomId, rootId, value),
@@ -162,7 +197,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
   useEffect(() => platform.lifecycle.subscribeShutdown(() => controller.shutdown()), [controller, platform]);
 
   useEffect(() => {
-    if (snapshot.status !== 'ready' || !preferences.desktopNotifications) return;
+    if (snapshot.status !== 'ready' || preferencesOwner !== profileOwner || !preferences.desktopNotifications) return;
     void controller.registerPushNotifications();
     const refreshPushRegistration = () => {
       if (!platform.lifecycle.isHidden()) void controller.registerPushNotifications();
@@ -175,7 +210,21 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
       unsubscribe();
       unsubscribeTokenRefresh();
     };
-  }, [controller, platform, preferences.desktopNotifications, snapshot.status]);
+  }, [controller, platform, preferences.desktopNotifications, snapshot.status, preferencesOwner, profileOwner]);
+
+  useEffect(() => {
+    if (snapshot.status !== 'ready' || !profileOwner || !preferenceKey) return;
+    queueMicrotask(() => {
+      setPreferences(optionalAppearance((storage) => {
+        if (storage.getItem(preferenceKey)) return loadUserPreferences(storage, preferenceKey);
+        const migrated = storage.getItem('aimtrix.preferences.migrated.v2');
+        const initial = migrated ? { ...defaultUserPreferences } : loadUserPreferences(storage);
+        if (!migrated) storage.setItem('aimtrix.preferences.migrated.v2', profileOwner);
+        return initial;
+      }, { ...defaultUserPreferences }));
+      setPreferencesOwner(profileOwner);
+    });
+  }, [snapshot.status, profileOwner, preferenceKey]);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -184,7 +233,8 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
     root.dataset.messageScale = preferences.messageScale;
     root.dataset.motion = preferences.motion;
     root.dataset.messageSurface = preferences.messageSurface;
-    optionalAppearance((storage) => saveUserPreferences(preferences, storage), undefined);
+    if (snapshot.status === 'ready' && profileOwner && preferencesOwner !== profileOwner) return;
+    optionalAppearance((storage) => saveUserPreferences(preferences, storage, preferenceKey), undefined);
     controller.setCallDevices({
       microphoneId: preferences.microphoneId,
       cameraId: preferences.cameraId,
@@ -196,10 +246,10 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
       soundVolume: preferences.soundVolume,
     });
     if (snapshot.status === 'ready') controller.savePersonalization(preferences);
-  }, [controller, preferences, snapshot.status]);
+  }, [controller, preferences, snapshot.status, profileOwner, preferencesOwner, preferenceKey]);
 
   useEffect(() => {
-    if (snapshot.status !== 'ready') return;
+    if (snapshot.status !== 'ready' || preferencesOwner !== profileOwner) return;
     const remote = controller.loadPersonalization();
     if (remote) {
       queueMicrotask(() => setPreferences((current) => ({
@@ -210,9 +260,9 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         messageSurface: current.messageSurface,
       })));
     } else {
-      controller.savePersonalization(optionalAppearance(loadUserPreferences, { ...defaultUserPreferences }));
+      controller.savePersonalization(optionalAppearance((storage) => loadUserPreferences(storage, preferenceKey), { ...defaultUserPreferences }));
     }
-  }, [controller, snapshot.status]);
+  }, [controller, snapshot.status, preferencesOwner, profileOwner, preferenceKey]);
 
   useEffect(() => {
     optionalAppearance((storage) => {
@@ -258,8 +308,17 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
     return <StartupScreen message={snapshot.message} />;
   }
 
+  const savedAccountChoices = <section className="saved-accounts" aria-label="Other saved Matrix accounts">
+    <strong>Use another account on this device</strong>
+    {accounts.filter((account) => !account.active).map((account) =>
+      <button className="aqua-button" type="button" key={account.id} onClick={() => void chooseAccount(account.id)}>
+        {account.userId} · {account.serverName}
+      </button>)}
+    <button className="aqua-button" type="button" onClick={() => void chooseAccount(null)}>Add another account</button>
+  </section>;
+
   if (snapshot.status === 'reauthentication-required') {
-    return <>{draftCleanupNotice}<SessionRecoveryScreen recovery={snapshot.recovery} error={snapshot.error} onSignIn={() => controller.reauthenticate()} onForget={forgetSession} /></>;
+    return <>{draftCleanupNotice}<SessionRecoveryScreen recovery={snapshot.recovery} error={snapshot.error} onSignIn={() => controller.reauthenticate()} onForget={forgetSession} />{savedAccountChoices}</>;
   }
 
   if (snapshot.status === 'error') {
@@ -269,7 +328,7 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         issue={snapshot.issue}
         onRetry={() => void controller.retry()}
         onForget={forgetSession}
-      /></>
+      />{savedAccountChoices}</>
     );
   }
 
@@ -285,6 +344,8 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onSso={(credentials) => controller.startSso(credentials)}
         onDiscover={(credentials) => controller.discoverLoginMethods(credentials)}
         onDemo={() => setDemo(true)}
+        accounts={accounts.filter((account) => !account.active)}
+        onChooseAccount={(id) => chooseAccount(id)}
       /></>
     );
   }
@@ -301,28 +362,32 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         connectionNotice={snapshot.issue ? <ConnectionBanner issue={snapshot.issue} onRetry={() => controller.retry()} /> : undefined}
         config={config}
         theme={theme}
-        preferences={preferences}
+        preferences={preferencesOwner === profileOwner ? preferences : defaultUserPreferences}
         profilePersonalization={profilePersonalization}
         onThemeChange={setTheme}
         onPreferencesChange={setPreferences}
         onProfilePersonalizationChange={async (next) => {
-          const account = snapshot.workspace.user.id;
+          const account = profileOwner;
           const generation = profileRequests.generation;
           await controller.updateProfilePersonalization(next);
           const current = controller.getSnapshot();
-          if (current.status === 'ready' && current.workspace.user.id === account && generation === profileRequests.generation) {
+          if (current.status === 'ready' && JSON.stringify([controller.getDraftScope()?.homeserver, current.workspace.user.id]) === account && generation === profileRequests.generation) {
             setAccountPersonalization({ owner: account, value: next });
           }
         }}
         onUploadProfileBanner={(file) => controller.uploadProfileBanner(file)}
         onUpdateProfile={(update) => controller.updateProfile(update)}
         matrixSettingsActions={matrixSettingsActions}
+        accounts={accounts}
+        onChooseAccount={chooseAccount}
+        onForgetAccount={forgetDormantAccount}
+        accountCleanupError={accountCleanupError}
         incomingVerification={snapshot.incomingVerification}
         incomingVerificationActions={{ accept: (id, signal) => controller.acceptIncomingVerification(id, signal), decline: (id) => controller.declineIncomingVerification(id), showQr: (id, signal) => controller.showIncomingVerificationQr(id, signal), scanQr: (id, bytes, signal) => controller.scanIncomingVerificationQr(id, bytes, signal), confirmQr: (id) => controller.confirmIncomingVerificationQr(id) }}
           threadAttentionActions={threadAttentionActions}
           activityActions={{ refresh: () => controller.activity.refresh(), loadOlder: () => controller.activity.loadOlder(), loadMoreThreads: () => controller.activity.loadMoreThreads(), setThreadFollow: (roomId, rootId, following) => controller.activity.setThreadFollow(roomId, rootId, following) }}
         install={platform.install}
-        pushRoute={pushRoute}
+        pushRoute={!pushRoute?.accountId || pushRoute.accountId === profileOwner ? pushRoute : undefined}
         onSendMessage={(roomId, body, mentions, inlineEmojis) => controller.sendMessage(roomId, body, mentions, inlineEmojis)}
         onRetryMessage={(roomId, eventId) => controller.retryMessage(roomId, eventId)}
         onCancelMessage={(roomId, eventId) => controller.cancelMessage(roomId, eventId)}
@@ -416,6 +481,11 @@ function ConfiguredApp({ result, pushRoute, onDraftStateChange }: { result: Runt
         onLeaveRoom={(roomId) => controller.leaveRoom(roomId)}
         onSignOut={() => { clearDrafts(); void controller.logout(); }}
       /></Suspense>
+      {pushRoute?.accountId && profileOwner && pushRoute.accountId !== profileOwner ?
+        <ConfirmDialog title="Open with another Matrix account?"
+          description={`This destination belongs to ${accounts.find((account) => account.id === pushRoute.accountId)?.userId ?? 'another account'}. Switch accounts to open it without showing it in the current workspace.`}
+          actionLabel="Switch account" onClose={onClearPushRoute}
+          onConfirm={() => chooseAccount(accounts.some((account) => account.id === pushRoute.accountId) ? pushRoute.accountId! : null, true)} /> : null}
     </MediaProvider>
   );
 }
@@ -436,6 +506,10 @@ export default function App() {
     'Encrypted account storage is preserved.',
   ].filter(Boolean).join(' ');
   const [pushRoute, setPushRoute] = useState<PushRoute | undefined>(() => parsePushRoute(new URL(window.location.href)));
+  const clearPushRoute = useCallback(() => {
+    setPushRoute(undefined);
+    window.history.replaceState(window.history.state, '', routeUrl({}, window.location.href));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -476,7 +550,7 @@ export default function App() {
 
   return (
     <>
-      {!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} onDraftStateChange={setDraftState} />}
+      {!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} onClearPushRoute={clearPushRoute} onDraftStateChange={setDraftState} />}
       <NetworkStatus />
       <InstallPrompt />
       {updateWorker ? (

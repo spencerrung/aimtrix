@@ -6,7 +6,12 @@ import { randomBytes } from 'node:crypto';
 import { setTimeout as delay } from 'node:timers/promises';
 import { invariant, until, register, matrixApi } from './stack.mjs';
 
-export const session = (page) => page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+export const session = (page) => page.evaluate(() => {
+  const stored = JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1'));
+  return stored?.kind === 'aimtrix.account-vault.v1'
+    ? stored.accounts.find((account) => JSON.stringify([account.baseUrl, account.userId]) === stored.active)
+    : stored;
+});
 export async function login(page, origin, user, password) {
   await page.goto(origin);
   await page.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill(`@${user}:aimtrix.test`);
@@ -2872,6 +2877,78 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await settings.getByRole('button', { name: 'Restore existing room keys', exact: true }).click();
         await settings.locator('.settings-success').filter({ hasText: 'Recovery complete.' }).waitFor({ timeout: 90000 });
         invariant(await settings.getByLabel('Existing recovery key', { exact: true }).inputValue() === '', stage);
+        await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
+      } catch { throw new Error(stage); }
+    });
+    await check('encrypted-account-switch-and-local-isolation', async () => {
+      let stage = 'account-switch-create-room';
+      try {
+        const privateRoom = `Synthetic account isolation ${randomBytes(6).toString('hex')}`;
+        const marker = `Synthetic account marker ${randomBytes(6).toString('hex')}`;
+        const draft = `Synthetic dormant draft ${randomBytes(6).toString('hex')}`;
+        await alice.getByRole('button', { name: 'Join or create room' }).click();
+        const create = alice.getByRole('dialog', { name: 'Add a conversation' });
+        await create.getByRole('button', { name: 'Create room', exact: true }).first().click();
+        await create.getByLabel('Room name', { exact: true }).fill(privateRoom);
+        await create.getByLabel('Encrypt this room').check();
+        await create.locator('form').getByRole('button', { name: 'Create room', exact: true }).click();
+        await create.waitFor({ state: 'hidden' });
+        await openRoom(alice, privateRoom);
+        stage = 'account-switch-encrypted-send';
+        const composer = alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true });
+        await composer.fill(marker);
+        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+        await alice.locator('.timeline-message').filter({ hasText: marker }).waitFor();
+        await composer.fill(draft);
+        const savedDraft = () => alice.evaluate(({ userId, homeserver, body }) => {
+          const key = `aimtrix.private-drafts.v1:${encodeURIComponent(JSON.stringify({ userId, homeserver: new URL(homeserver).href.replace(/\/+$/, '') }))}`;
+          const raw = localStorage.getItem(key);
+          try { return Boolean(raw && JSON.parse(raw).drafts?.some((item) => item.value?.body === body)); }
+          catch { return false; }
+        }, { userId: accounts.alice.user_id, homeserver: stack.origins.synapse, body: draft });
+        stage = 'account-switch-draft-saved';
+        await until(savedDraft, stage, 10000);
+        stage = 'account-switch-add';
+        await alice.getByRole('button', { name: 'Open settings' }).click();
+        let settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+        await settings.getByRole('button', { name: 'Add another account' }).click();
+        await alice.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill(accounts.bob.user_id);
+        await alice.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
+        await alice.getByRole('button', { name: 'Sign On', exact: true }).click();
+        await alice.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
+        const bobOnAlicePage = await session(alice);
+        invariant(bobOnAlicePage.userId === accounts.bob.user_id && bobOnAlicePage.deviceId !== bobSession.deviceId, stage);
+        invariant(await alice.locator('.buddy-row').filter({ hasText: privateRoom }).count() === 0 &&
+          await alice.getByText(marker, { exact: true }).count() === 0, 'account-switch-no-cross-account-room');
+        stage = 'account-switch-return-settings';
+        await alice.getByRole('button', { name: 'Open settings' }).click();
+        settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+        stage = 'account-switch-return-select';
+        await settings.locator('.account-list__row').filter({ hasText: accounts.alice.user_id }).getByRole('button', { name: 'Switch' }).click();
+        stage = 'account-switch-return-session';
+        await until(async () => (await session(alice))?.userId === accounts.alice.user_id, stage, 60000);
+        stage = 'account-switch-return-ready';
+        await alice.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
+        stage = 'account-switch-return-room';
+        await openRoom(alice, privateRoom);
+        stage = 'account-switch-return-message';
+        await alice.locator('.timeline-message').filter({ hasText: marker }).first().waitFor({ timeout: 45000 });
+        stage = 'account-switch-draft-store-retained';
+        await until(savedDraft, stage, 10000);
+        stage = 'account-switch-dormant-draft-restored';
+        await until(async () => (await alice.getByRole('textbox', { name: `Message ${privateRoom}`, exact: true }).textContent())?.trim() === draft,
+          stage, 10000);
+        stage = 'account-switch-forget-dormant';
+        await alice.getByRole('button', { name: 'Open settings' }).click();
+        settings = alice.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+        await settings.locator('.account-list__row').filter({ hasText: accounts.bob.user_id }).getByRole('button', { name: 'Forget' }).click();
+        await alice.getByRole('dialog', { name: 'Forget this account?' }).getByRole('button', { name: 'Forget account' }).click();
+        await until(async () => await settings.locator('.account-list__row').filter({ hasText: accounts.bob.user_id }).count() === 0,
+          'account-switch-dormant-removed', 45000);
+        invariant((await session(alice)).userId === accounts.alice.user_id, 'account-switch-active-preserved');
         await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
       } catch { throw new Error(stage); }
     });

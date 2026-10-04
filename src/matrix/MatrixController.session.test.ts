@@ -4,7 +4,7 @@ import type { ValidatedAuthMetadata } from 'matrix-js-sdk/lib/oauth/index.js';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
 import type { AimtrixPlatform } from '../platform/platform';
 import { MatrixController } from './MatrixController';
-import { databaseNames, type StoredMatrixSession } from './sessionStore';
+import { accountId, createAccountCredentialStore, databaseNames, type StoredMatrixSession } from './sessionStore';
 
 const { createClient } = vi.hoisted(() => ({ createClient: vi.fn() }));
 vi.mock('matrix-js-sdk', async (importOriginal) => ({
@@ -97,6 +97,48 @@ afterEach(() => {
 });
 
 describe('MatrixController session lifecycle', () => {
+  it('switches identities only after private teardown and preserves the dormant credential', async () => {
+    let serialized: string | undefined;
+    const vault = createAccountCredentialStore({
+      load: async () => serialized,
+      save: async (value) => { serialized = value; },
+      clear: async () => { serialized = undefined; },
+    });
+    const other = { ...session, baseUrl: 'https://other.example.test', serverName: 'other.example.test',
+      userId: '@other:other.example.test', deviceId: 'OTHER', accessToken: 'synthetic-other-token' };
+    await vault.save(session);
+    await vault.save(other);
+    await vault.select(accountId(session));
+    const oldClient = fakeClient();
+    const nextClient = fakeClient();
+    createClient.mockReturnValueOnce(oldClient).mockReturnValueOnce(nextClient);
+    const { platform } = platformFixture();
+    platform.credentials = vault;
+    platform.accounts = vault;
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    controllers.push(controller);
+    await controller.initialize();
+    const internals = controller as unknown as Internals;
+    const leaving = deferred<void>();
+    internals.groupCallEngine = { leave: () => leaving.promise };
+    internals.inMemoryRecoveryKey = new Uint8Array([1, 2, 3]);
+    internals.snapshotCache.messages.set('old', { body: 'synthetic old account content' });
+    const switching = controller.chooseAnotherAccount(accountId(other));
+    expect(controller.getSnapshot().status).toBe('connecting');
+    expect(internals.client).toBeUndefined();
+    expect(internals.inMemoryRecoveryKey).toBeUndefined();
+    expect(internals.snapshotCache.messages.size).toBe(0);
+    expect(nextClient.initRustCrypto).not.toHaveBeenCalled();
+    leaving.resolve();
+    await switching;
+    expect(nextClient.initRustCrypto).toHaveBeenCalledOnce();
+    expect(controller.getDraftScope()).toEqual({ userId: other.userId, homeserver: other.baseUrl });
+    expect(await vault.list()).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: accountId(session), active: false }),
+      expect.objectContaining({ id: accountId(other), active: true }),
+    ]));
+  });
+
   it('finishes expired-client teardown before a replacement client can connect', async () => {
     const oldClient = fakeClient();
     const replacement = fakeClient();
