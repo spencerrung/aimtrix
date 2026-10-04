@@ -45,7 +45,7 @@ export async function freePort() {
   await new Promise((resolve) => listener.close(resolve));
   return port;
 }
-export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false, delegatedAuth = false } = {}) {
+export async function createStack({ elementUi = false, syncResponseCache = false, federation = false, largeAccount = false, delegatedAuth = false, stickyEvents = false } = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'aimtrix-matrix-'));
   const project = `aimtrix-matrix-${randomBytes(6).toString('hex')}`;
   const ports = { synapse: await freePort(), ...(delegatedAuth ? { mas: await freePort() } : { dex: await freePort() }),
@@ -115,6 +115,7 @@ export async function createStack({ elementUi = false, syncResponseCache = false
       // incremental sync responses from this same disposable device.
       caches: { sync_response_cache_duration: syncResponseCache ? '2m' : '0s' },
       log_config: '/config/logging.json', enable_registration: false, registration_shared_secret: credentials.registration,
+      ...(stickyEvents ? { experimental_features: { msc4354_enabled: true } } : {}),
       // The disposable community journey explicitly permits room publication.
       room_list_publication_rules: [{ action: 'allow', user_id: '*', room_id: '*', alias: '*' }],
       macaroon_secret_key: secret(), form_secret: secret(), trusted_key_servers: [], federation_domain_whitelist: [],
