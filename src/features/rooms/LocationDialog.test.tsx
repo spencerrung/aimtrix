@@ -44,3 +44,23 @@ it('keeps manual sharing available when device permission is denied', async () =
     await waitFor(() => expect(send).toHaveBeenCalledWith(40, -74, ''));
   } finally { Object.defineProperty(navigator, 'geolocation', { configurable: true, value: original }); }
 });
+
+it('does not replace manually chosen coordinates when a pending device lookup finishes', async () => {
+  const original = navigator.geolocation;
+  let resolveLocation: ((position: { coords: { latitude: number; longitude: number } }) => void) | undefined;
+  Object.defineProperty(navigator, 'geolocation', { configurable: true, value: {
+    getCurrentPosition: (success: typeof resolveLocation) => { resolveLocation = success; },
+  } });
+  const send = vi.fn().mockResolvedValue(undefined);
+  try {
+    render(<LocationDialog roomName="Welcome" onSend={send} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Use my current location' }));
+    expect(screen.getByRole('button', { name: 'Finding location…' })).toBeDisabled();
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Latitude' }), { target: { value: '51.5072' } });
+    fireEvent.change(screen.getByRole('spinbutton', { name: 'Longitude' }), { target: { value: '-0.1276' } });
+    resolveLocation?.({ coords: { latitude: 40.7128, longitude: -74.006 } });
+    expect(screen.getByText('geo:51.5072,-0.1276')).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Share this location' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith(51.5072, -0.1276, ''));
+  } finally { Object.defineProperty(navigator, 'geolocation', { configurable: true, value: original }); }
+});

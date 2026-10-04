@@ -31,6 +31,14 @@ export function LocationDialog({ roomName, onSend, onClose }: {
       enableHighAccuracy: false, maximumAge: 60_000, timeout: 10_000,
     });
   };
+  const editCoordinate = (coordinate: 'latitude' | 'longitude', value: string) => {
+    // A pending permission prompt may resolve after the user has chosen a
+    // different point. Manual edits always take precedence over that result.
+    lookup.current += 1;
+    setFinding(false);
+    if (coordinate === 'latitude') setLatitude(value);
+    else setLongitude(value);
+  };
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (pending.current || !uri) return;
@@ -44,8 +52,8 @@ export function LocationDialog({ roomName, onSend, onClose }: {
     <form onSubmit={(event) => void submit(event)}>
       <p>Choose one static point to share with everyone who can read {roomName}. Aimtrix does not load a map or track your movement.</p>
       <button className="aqua-button" type="button" disabled={busy || finding} onClick={findCurrent}>{finding ? 'Finding location…' : 'Use my current location'}</button>
-      <label>Latitude<input type="number" min={-90} max={90} step="any" value={latitude} onChange={(event) => setLatitude(event.target.value)} data-initial-focus /></label>
-      <label>Longitude<input type="number" min={-180} max={180} step="any" value={longitude} onChange={(event) => setLongitude(event.target.value)} /></label>
+      <label>Latitude<input type="number" min={-90} max={90} step="any" value={latitude} onChange={(event) => editCoordinate('latitude', event.target.value)} data-initial-focus /></label>
+      <label>Longitude<input type="number" min={-180} max={180} step="any" value={longitude} onChange={(event) => editCoordinate('longitude', event.target.value)} /></label>
       <label>Description (optional)<input maxLength={200} value={description} onChange={(event) => setDescription(event.target.value)} placeholder="Meeting spot" /></label>
       {uri ? <div className="location-dialog__preview"><strong>Location preview</strong><span>{description.trim() || 'Shared location'}</span><code>{uri}</code></div> : <p className="settings-hint">Enter valid latitude and longitude to preview the point.</p>}
       {error ? <p role="alert" className="settings-error">{error}</p> : null}
