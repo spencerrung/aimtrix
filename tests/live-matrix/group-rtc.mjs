@@ -153,9 +153,11 @@ try {
       if (!await publisher.evaluate(() => window.__rtcDisplayTracks.length > 0)) throw new Error('synthetic-screen-capture-unused');
       stage = `${prefix}screen-stop`;
       await publisherShelf.getByRole('button', { name: 'Stop sharing group screen' }).click();
+      stage = `${prefix}screen-remote-cleanup`;
+      await until(async () => (await subscriberShelf.locator('video').count()) === 0, `${prefix}screen-remote-cleanup`, 45000);
       stage = `${prefix}screen-capture-cleanup`;
-      await until(async () => (await subscriberShelf.locator('video').count()) === 0 &&
-        (await publisher.evaluate(() => window.__rtcDisplayTracks.every((track) => track.readyState === 'ended'))), `${prefix}screen-capture-cleanup`, 45000);
+      await until(() => publisher.evaluate(() => window.__rtcDisplayTracks.every((track) => track.readyState === 'ended')),
+        `${prefix}screen-capture-cleanup`, 45000);
     });
   };
   let aliceShelf, bobShelf;

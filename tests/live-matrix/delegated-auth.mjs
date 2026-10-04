@@ -250,8 +250,12 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
             refresh_token: rotated.oauth.refreshToken }) });
         invariant([400, 401].includes(rejectedRefresh.status), 'delegated-refresh-provider-rejected');
         metrics.delegatedRefreshRejected = 1;
-        await rejectNextDeviceRead(refreshPage, () => settings.getByRole('button', { name: 'Refresh', exact: true }).click());
-        await refreshPage.getByRole('heading', { name: 'Your Matrix session expired' }).waitFor({ timeout: 45000 });
+        const expired = refreshPage.getByRole('heading', { name: 'Your Matrix session expired' });
+        const alreadyExpired = await expired.waitFor({ timeout: 5000 }).then(() => true, () => false);
+        metrics.delegatedRevocationAutoReauth = Number(alreadyExpired);
+        if (!alreadyExpired) await rejectNextDeviceRead(refreshPage,
+          () => settings.getByRole('button', { name: 'Refresh', exact: true }).click());
+        await expired.waitFor({ timeout: 45000 });
         const recovery = await refreshPage.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
         invariant(recovery?.userId === initial.userId && !recovery.accessToken && !recovery.oauth?.refreshToken,
           'delegated-refresh-token-free-recovery');
