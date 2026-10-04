@@ -107,7 +107,7 @@ jobs:
             type=sha,prefix=sha-
             type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=raw,value={{date 'YYYYMMDDHHmmss' tz='UTC'}}-{{sha}},enable={{is_default_branch}}
-            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ !contains(inputs.version, '-') }}
 
       - name: Publish the exact verified OCI archive
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
