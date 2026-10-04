@@ -17,4 +17,3 @@ PWA release candidate for homelab and physical-device acceptance. This is the fi
 - This candidate is for the hosted PWA. Desktop and mobile installation/promotion still require their separate signed-artifact and physical-device gates.
 - Actual device acceptance, provider-specific SSO and push, broader cross-homeserver/client interoperability, and TURN-required call routing remain open in `TODO.md` and the linked acceptance documents.
 - Operators can restore the previous immutable `v0.2.6` image if this candidate fails on their deployment.
-
