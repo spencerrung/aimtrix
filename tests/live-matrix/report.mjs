@@ -79,6 +79,9 @@ failureCategories.push('mas-config-invalid', 'mas-compose-start', 'mas-synapse-r
 failureCategories.push('mas-runtime-permission', 'mas-runtime-database', 'mas-runtime-policy', 'mas-runtime-homeserver',
   'mas-runtime-assets', 'mas-runtime-bind-in-use', 'mas-runtime-bind-unavailable', 'mas-runtime-bind',
   'mas-runtime-config', 'mas-runtime-unknown', 'mas-start-probe-timeout');
+failureCategories.push('account-switch-create-room', 'account-switch-encrypted-send', 'account-switch-add',
+  'account-switch-no-cross-account-room', 'account-switch-return', 'account-switch-dormant-draft-restored',
+  'account-switch-forget-dormant', 'account-switch-dormant-removed', 'account-switch-active-preserved');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, delegatedAuth, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

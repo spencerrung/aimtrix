@@ -2887,7 +2887,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const marker = `Synthetic account marker ${randomBytes(6).toString('hex')}`;
         const draft = `Synthetic dormant draft ${randomBytes(6).toString('hex')}`;
         await alice.getByRole('button', { name: 'Join or create room' }).click();
-        const create = alice.getByRole('dialog', { name: 'Join or create room' });
+        const create = alice.getByRole('dialog', { name: 'Add a conversation' });
         await create.getByRole('button', { name: 'Create room', exact: true }).first().click();
         await create.getByLabel('Room name', { exact: true }).fill(privateRoom);
         await create.getByLabel('Encrypt this room').check();
