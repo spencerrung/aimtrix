@@ -1076,7 +1076,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const loseAcknowledgement = async (route) => {
         const response = await route.fetch();
         invariant(response.ok(), 'retry-server-acceptance');
-        await failed.getByText('Accepted by server', { exact: true }).waitFor();
+        await failed.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
         await route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic lost acknowledgement' }) });
         acknowledgementLost = true;
       };
@@ -1084,7 +1084,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await failed.getByRole('button', { name: 'Retry message', exact: true }).click();
       await bob.locator('.timeline-message').filter({ hasText: marker }).waitFor({ timeout: 45000 });
       await until(() => acknowledgementLost, 'acknowledgement-lost');
-      await failed.getByText('Accepted by server', { exact: true }).waitFor();
+      await failed.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
       invariant(await failed.count() === 1 && await bob.locator('.timeline-message').filter({ hasText: marker }).count() === 1, 'retry-single-echo');
       const attempts = wire.slice(wireStart);
       invariant(attempts.length === 2 && attempts[0].path === attempts[1].path && JSON.stringify(attempts[0].content) === JSON.stringify(attempts[1].content), 'retry-original-encrypted-transaction');
@@ -1117,7 +1117,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await failed.getByRole('button', { name: 'Retry message', exact: true }).waitFor();
       await alice.unroute(pattern, reject);
       await failed.getByRole('button', { name: 'Retry message', exact: true }).click();
-      await failed.getByText('Accepted by server', { exact: true }).waitFor();
+      await failed.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
       const bobRoot = bob.locator('.timeline-message').filter({ hasText: 'Retry round trip' }).first();
       await bobRoot.locator('.thread-summary').click();
       const received = bob.getByRole('complementary', { name: 'Thread', exact: true }).locator('.timeline-message').filter({ hasText: marker });
@@ -1461,7 +1461,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         const sent = charlieFresh.waitForRequest((request) => request.method() === 'PUT' && new URL(request.url()).pathname.includes('/send/m.room.encrypted/'));
         await charlieFresh.getByRole('button', { name: 'Send message', exact: true }).click();
         await sent;
-        await charlieFresh.locator('.timeline-message').filter({ hasText: marker }).getByText('Accepted by server', { exact: true }).waitFor();
+        await charlieFresh.locator('.timeline-message').filter({ hasText: marker }).locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
         stage = 'private-search-delete';
         await charlieFresh.getByRole('button', { name: 'Search message history', exact: true }).click();
         await freshPanel.getByRole('button', { name: 'Delete local index' }).click();
@@ -2042,7 +2042,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(marker);
       await alice.getByRole('button', { name: 'Send message', exact: true }).click();
       const root = alice.locator('.timeline-message').filter({ hasText: marker });
-      await root.getByText('Accepted by server', { exact: true }).waitFor();
+      await root.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
       attachmentThreadRootId = await root.getAttribute('data-event-id');
       await root.getByRole('button', { name: 'Reply in thread', exact: true }).click();
       const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
@@ -2147,7 +2147,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(outbound);
       await thread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
       const accepted = thread.locator('.timeline-message').filter({ hasText: 'Synthetic outbound formatting' });
-      await accepted.getByText('Accepted by server', { exact: true }).waitFor();
+      await accepted.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
       const eventId = await accepted.getAttribute('data-event-id');
       const stored = await api(`/_matrix/client/v3/rooms/${encode(formattedRoomId)}/event/${encode(eventId)}`, { token: bobSession.accessToken });
       invariant(stored.type === 'm.room.message' && stored.content.format === 'org.matrix.custom.html' && stored.content.formatted_body.includes('<strong>Synthetic outbound formatting</strong>') && stored.content['m.relates_to']?.event_id === root.event_id && wire.length === start + 1, 'formatted-outbound-roundtrip');
@@ -2157,7 +2157,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await alice.getByRole('textbox', { name: `Message ${name}`, exact: true }).fill('**Synthetic outbound room formatting** with _emphasis_ and `inline code`.');
       await alice.getByRole('button', { name: 'Send message', exact: true }).click();
       const roomOutbound = alice.locator('.timeline-message').filter({ hasText: 'Synthetic outbound room formatting' });
-      await roomOutbound.getByText('Accepted by server', { exact: true }).waitFor();
+      await roomOutbound.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
       formattedPeer = { roomId: formattedRoomId, rootId: root.event_id, replyId: reply.event_id, outboundId: await roomOutbound.getAttribute('data-event-id') };
       for (const page of [alice, bob]) await openRoom(page, roomName);
     });
