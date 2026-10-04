@@ -1749,7 +1749,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     const openTool = async (name) => {
       const more = alice.getByRole('button', { name: 'More message tools' });
-      if (await more.getAttribute('aria-expanded') !== 'true') await more.click();
+      if (await more.isVisible() && await more.getAttribute('aria-expanded') !== 'true') await more.click();
       await alice.getByRole('button', { name, exact: true }).click();
     };
     const safeAction = async (category, action) => {
@@ -2022,7 +2022,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await verifyAttachment(bob, files[0], captions[0]);
         await alice.unroute(pattern, rejectSecond);
         await retry.click();
-        await alice.getByRole('region', { name: 'Attachments', exact: true }).locator('li').filter({ hasText: files[1].name }).getByText('Sent', { exact: true }).waitFor();
+        await alice.getByRole('region', { name: 'Attachments', exact: true }).waitFor({ state: 'hidden' });
         const latest = alice.getByRole('button', { name: 'Jump to latest messages', exact: true });
         if (await latest.isVisible()) {
           await latest.click();
@@ -2052,7 +2052,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(file);
       await thread.getByLabel(`Caption for ${file.name}`, { exact: true }).fill(caption);
       await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
-      await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Sent', { exact: true }).waitFor();
+      await thread.getByRole('region', { name: 'Thread attachments', exact: true }).waitFor({ state: 'hidden' });
       await bob.locator('.timeline-message').filter({ hasText: marker }).locator('.thread-summary').click();
       const peerThread = bob.getByRole('complementary', { name: 'Thread', exact: true });
       await verifyAttachment(peerThread, file, caption);
@@ -2105,7 +2105,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'draft-send-reattached';
         await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).setInputFiles(threadFile);
         await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
-        await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Sent', { exact: true }).waitFor();
+        await thread.getByRole('region', { name: 'Thread attachments', exact: true }).waitFor({ state: 'hidden' });
         stage = 'draft-receive-reattached';
         await openMatrixEvent(bob, roomId, attachmentThreadRootId);
         await verifyAttachment(bob.getByRole('complementary', { name: 'Thread', exact: true }), threadFile, threadCaption);
@@ -2474,7 +2474,8 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'plain-poll-create';
         const question = `Synthetic plain poll ${randomBytes(5).toString('hex')}`;
         const option = 'Synthetic plain choice';
-        await plainAlice.getByRole('button', { name: 'More message tools' }).click();
+        const plainMore = plainAlice.getByRole('button', { name: 'More message tools' });
+        if (await plainMore.isVisible()) await plainMore.click();
         await plainAlice.getByRole('button', { name: 'Create a poll', exact: true }).click();
         const dialog = plainAlice.getByRole('dialog', { name: 'Create a poll' });
         await dialog.getByLabel('Question').fill(question);

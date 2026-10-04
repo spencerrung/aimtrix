@@ -1156,6 +1156,13 @@
 }
 
 @layer responsive {
+  @media (min-width: 768px) {
+    .composer__more { display: none; }
+    .composer__actions { display: flex; }
+    .thread-panel .composer { grid-template-columns: minmax(0,1fr) 44px; }
+    .thread-panel .composer__field { grid-column: 1; }
+    .thread-panel .composer .send-button { grid-column: 2; }
+  }
   @media (max-width: 1199px) {
     .workspace-grid { grid-template-columns: 66px 0 232px 8px minmax(0,1fr) 0 0 0 0 !important; }
     .context-panel { grid-column: 5 / -1 !important; grid-row: 1; }

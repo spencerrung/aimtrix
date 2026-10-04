@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0-rc.5 — 2026-10-04
+
+PWA device-testing candidate replacing `0.3.0-rc.4` after the next hosted feedback pass.
+
+- Show all available room and thread composer tools by default in desktop layouts. Narrow layouts retain the compact plus menu.
+- Remove accepted picture and file attachments from the composer immediately after send confirmation, while retaining failed files and captions for retry.
+
+The prior homelab image `v0.3.0-rc.4` remains available for rollback. Physical-device and provider-specific acceptance remains open.
+
 ## 0.3.0-rc.4 — 2026-10-04
 
 PWA device-testing candidate replacing `0.3.0-rc.3` after the first hosted feedback pass.

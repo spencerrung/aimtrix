@@ -4,12 +4,12 @@ import type { DraftAttachment, DraftContext } from './structuredDrafts';
 export type StagedAttachment = DraftAttachment & {
   context: DraftContext;
   file?: File;
-  phase: 'staged' | 'reattach' | 'queued' | AttachmentPhase | 'failed' | 'sent' | 'cancelled';
+  phase: 'staged' | 'reattach' | 'queued' | AttachmentPhase | 'failed' | 'cancelled';
   progress: number;
   error?: string;
 };
 export const attachmentContextKey = (context: DraftContext) => JSON.stringify([context.roomId, context.threadRootId ?? null]);
-const mutable = (item: StagedAttachment) => ['staged', 'reattach', 'failed', 'cancelled', 'sent'].includes(item.phase);
+const mutable = (item: StagedAttachment) => ['staged', 'reattach', 'failed', 'cancelled'].includes(item.phase);
 
 /** File bytes are held only for the current mounted account, never persisted. */
 export class StagedAttachments {
@@ -30,7 +30,7 @@ export class StagedAttachments {
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   list(context: DraftContext): StagedAttachment[] { return this.items.filter((item) => attachmentContextKey(item.context) === attachmentContextKey(context)); }
   private changed(context: DraftContext): void {
-    const descriptors = this.list(context).filter((item) => !['sent', 'cancelled'].includes(item.phase)).map((item) => ({
+    const descriptors = this.list(context).filter((item) => item.phase !== 'cancelled').map((item) => ({
       id: item.id, name: item.name, type: item.type, size: item.size, lastModified: item.lastModified,
       codeLanguage: item.codeLanguage, caption: item.caption, interrupted: item.interrupted, voice: item.voice,
     }));
@@ -45,12 +45,11 @@ export class StagedAttachments {
   }
   stage(context: DraftContext, files: File[], codeLanguage?: string, voice?: DraftAttachment['voice']): string[] {
     const errors: string[] = [];
-    // Completed rows are feedback, not retained queue capacity or file storage.
-    this.items = this.items.filter((item) => !['sent', 'cancelled'].includes(item.phase));
+    this.items = this.items.filter((item) => item.phase !== 'cancelled');
     for (const file of files) {
       const error = attachmentValidationError(file, this.actions.maxBytes);
       if (error) { errors.push(`${file.name}: ${error}`); continue; }
-      if (this.list(context).filter((item) => !['sent', 'cancelled'].includes(item.phase)).length >= 20 || this.items.length >= 128) {
+      if (this.list(context).filter((item) => item.phase !== 'cancelled').length >= 20 || this.items.length >= 128) {
         errors.push('Finish or remove staged attachments before adding more.'); break;
       }
       this.items.push({ id: crypto.randomUUID(), context, file, name: file.name, type: file.type, size: file.size,
@@ -123,7 +122,10 @@ export class StagedAttachments {
             this.version++; for (const listener of this.listeners) listener();
           }, item.codeLanguage, { id: item.id, signal: abort.signal, caption: item.caption, voice: item.voice,
             onPhase: (phase) => { if (current()) { item.phase = phase; this.changed(item.context); } } });
-          if (current()) { item.phase = 'sent'; item.file = undefined; item.progress = 100; item.interrupted = false; }
+          if (current()) {
+            this.items = this.items.filter((candidate) => candidate !== item);
+            this.changed(item.context);
+          }
         } catch {
           if (current()) {
             item.phase = abort.signal.aborted ? 'cancelled' : 'failed';
