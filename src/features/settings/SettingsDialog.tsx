@@ -29,6 +29,8 @@ import {
   type UserPreferences,
 } from '../../settings/preferences';
 import type { InstallAndUpdate, UpdateCheckResult } from '../../platform/platform';
+import type { StoredAccountSummary } from '../../matrix/sessionStore';
+import { ConfirmDialog } from '../../components/ConfirmDialog';
 
 export interface ProfileUpdate {
   displayName: string;
@@ -37,7 +39,7 @@ export interface ProfileUpdate {
 }
 
 interface SettingsDialogProps {
-  initialSection?: 'profile' | 'appearance' | 'matrix';
+  initialSection?: 'profile' | 'appearance' | 'matrix' | 'accounts';
   user: UserSummary;
   theme: ThemeName;
   preferences: UserPreferences;
@@ -49,6 +51,10 @@ interface SettingsDialogProps {
   matrixActions?: MatrixSettingsActions;
   install?: InstallAndUpdate;
   onSignOut: () => void;
+  accounts?: StoredAccountSummary[];
+  onChooseAccount?: (id: string | null) => Promise<void>;
+  onForgetAccount?: (id: string) => Promise<void>;
+  accountCleanupError?: boolean;
   onClose: () => void;
 }
 
@@ -79,9 +85,14 @@ export function SettingsDialog({
   matrixActions,
   install,
   onSignOut,
+  accounts,
+  onChooseAccount,
+  onForgetAccount,
+  accountCleanupError,
   onClose,
 }: SettingsDialogProps) {
-  const [section, setSection] = useState<'profile' | 'appearance' | 'matrix'>(initialSection);
+  const [section, setSection] = useState<'profile' | 'appearance' | 'matrix' | 'accounts'>(initialSection);
+  const [forgetAccount, setForgetAccount] = useState<StoredAccountSummary>();
   const [displayName, setDisplayName] = useState(user.displayName);
   const [presence, setPresence] = useState<PresenceState>(user.presence);
   const [statusMessage, setStatusMessage] = useState(user.statusMessage);
@@ -167,6 +178,8 @@ export function SettingsDialog({
             >
               <ShieldCheck size={16} /> Matrix & security
             </DialogButton>
+            {onChooseAccount ? <DialogButton type="button" className={section === 'accounts' ? 'is-active' : ''}
+              onClick={() => setSection('accounts')}><UserRound size={16} /> Accounts</DialogButton> : null}
             <DialogButton className="settings-signout" type="button" onClick={onSignOut}>
               <LogOut size={15} /> Sign out
             </DialogButton>
@@ -174,6 +187,16 @@ export function SettingsDialog({
 
           <div className="settings-content">
             {saving ? <p role="status">Saving profile…</p> : null}
+            {section === 'accounts' ? <section aria-label="Matrix accounts">
+              <div className="settings-section-heading"><h2>Matrix accounts</h2><p>Only the selected account connects and receives notifications on this device.</p></div>
+              {accountCleanupError ? <p role="alert">The saved credential was removed, but some local account data could not be deleted. Clear this app’s site data to remove it.</p> : null}
+              <div className="account-list">{accounts?.map((account) => <div className="account-list__row" key={account.id}>
+                <span><strong>{account.userId}</strong><small>{account.homeserver}{account.recovery ? ' · Sign in again' : ''}</small></span>
+                {account.active ? <span>Current</span> : <><button className="aqua-button" type="button" onClick={() => void onChooseAccount?.(account.id)}>Switch</button>
+                  <button className="aqua-button is-danger" type="button" onClick={() => setForgetAccount(account)}>Forget</button></>}
+              </div>)}</div>
+              <button className="aqua-button" type="button" onClick={() => void onChooseAccount?.(null)}>Add another account</button>
+            </section> : null}
             {section === 'profile' ? (
               <form onSubmit={(event) => void saveProfile(event)}>
                 <div className={`settings-profile-preview accent-${preferences.accent}`}>
@@ -360,15 +383,17 @@ export function SettingsDialog({
                   </div>
                 ) : null}
               </div>
-            ) : (
+            ) : section === 'matrix' ? (
               <MatrixSettingsPanel
                 preferences={preferences}
                 onPreferencesChange={onPreferencesChange}
                 actions={matrixActions}
               />
-            )}
+            ) : null}
           </div>
         </div>
+        {forgetAccount && onForgetAccount ? <ConfirmDialog title="Forget this account?" description={`Remove ${forgetAccount.userId} from this device, including its encryption store and private search. This cannot be undone.`}
+          actionLabel="Forget account" onClose={() => setForgetAccount(undefined)} onConfirm={async () => { await onForgetAccount(forgetAccount.id); setForgetAccount(undefined); }} /> : null}
     </Dialog>
   );
 }

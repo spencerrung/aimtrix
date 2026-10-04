@@ -6,9 +6,8 @@ import { LocalNotifications } from '@capacitor/local-notifications';
 import { PushNotifications } from '@capacitor/push-notifications';
 import { KeychainAccess, SecureStorage } from '@aparajita/capacitor-secure-storage';
 import {
-  parseStoredMatrixSession,
+  createAccountCredentialStore,
   SESSION_KEY,
-  type StoredMatrixSession,
 } from '../matrix/sessionStore';
 import { parsePushRoute, routeUrl, type PushRoute } from '../pwa/pushRouting';
 import { nativeSsoCallbackPath, parseSsoPendingState } from './platform';
@@ -34,30 +33,21 @@ function permissionState(value: string): NotificationPermission {
   return 'default';
 }
 
-function createNativeCredentials(): CredentialStore<StoredMatrixSession> {
-  return {
+function createNativeCredentials() {
+  return createAccountCredentialStore({
     async load() {
-      try {
-        await prepareNativeSecureStorage();
-        const serialized = await SecureStorage.getItem(SESSION_KEY);
-        if (!serialized) return undefined;
-        const session = parseStoredMatrixSession(JSON.parse(serialized));
-        if (session) return session;
-        await SecureStorage.removeItem(SESSION_KEY);
-      } catch {
-        await SecureStorage.removeItem(SESSION_KEY).catch(() => undefined);
-      }
-      return undefined;
-    },
-    async save(session) {
       await prepareNativeSecureStorage();
-      await SecureStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      return await SecureStorage.getItem(SESSION_KEY) ?? undefined;
+    },
+    async save(value) {
+      await prepareNativeSecureStorage();
+      await SecureStorage.setItem(SESSION_KEY, value);
     },
     async clear() {
       await prepareNativeSecureStorage();
       await SecureStorage.removeItem(SESSION_KEY);
     },
-  };
+  });
 }
 
 async function prepareNativeSecureStorage(): Promise<void> {
@@ -320,6 +310,7 @@ function createNativeInstall(): InstallAndUpdate {
 }
 
 export function createCapacitorPlatform(): AimtrixPlatform {
+  const credentials = createNativeCredentials();
   const deepLinks = createNativeDeepLinks(() => undefined);
 
   return {
@@ -332,7 +323,8 @@ export function createCapacitorPlatform(): AimtrixPlatform {
       standalone: true,
       secureCredentialStorage: true,
     },
-    credentials: createNativeCredentials(),
+    credentials,
+    accounts: credentials,
     sso: createNativeSsoState(),
     notifications: createNativeNotifications(),
     push: createNativePush(() => { deepLinks.focus(); }),

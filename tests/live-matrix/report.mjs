@@ -19,6 +19,7 @@ export const checkNames = new Set([
   'space-child-parent-and-recommendation-administration',
   'private-dm-backdrop-isolation', 'private-profile-save', 'standard-sso-token-callback', 'standard-sso-recovery-guidance',
   'revoked-active-session-and-encrypted-reauthentication', 'revoked-stored-session-recovery', 'confirmed-recovery-reset-and-key-replacement',
+  'encrypted-account-switch-and-local-isolation',
   'notification-rules-and-own-device-sync', 'home-activity-and-follow-own-device-sync',
   'diagnostic-failure-probe', 'cleanup',
   'cache-reload-first-login', 'cache-reload-seed', 'cache-reload-readiness-profile',
@@ -78,6 +79,11 @@ failureCategories.push('mas-config-invalid', 'mas-compose-start', 'mas-synapse-r
 failureCategories.push('mas-runtime-permission', 'mas-runtime-database', 'mas-runtime-policy', 'mas-runtime-homeserver',
   'mas-runtime-assets', 'mas-runtime-bind-in-use', 'mas-runtime-bind-unavailable', 'mas-runtime-bind',
   'mas-runtime-config', 'mas-runtime-unknown', 'mas-start-probe-timeout');
+failureCategories.push('account-switch-create-room', 'account-switch-encrypted-send', 'account-switch-add',
+  'account-switch-no-cross-account-room', 'account-switch-return-settings', 'account-switch-return-select',
+  'account-switch-return-ready', 'account-switch-return-session', 'account-switch-return-room',
+  'account-switch-return-message', 'account-switch-dormant-draft-restored',
+  'account-switch-forget-dormant', 'account-switch-dormant-removed', 'account-switch-active-preserved');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
 export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, delegatedAuth, passed, failureStage, checks, metrics }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');

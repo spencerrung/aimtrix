@@ -111,6 +111,23 @@ test('notification rules reconcile rejected writes and quiet hours remain reacha
   }
 });
 
+test('account switching controls stay accessible at desktop and phone sizes', async ({ page }, info) => {
+  await page.getByRole('main', { name: 'Home activity' }).getByRole('button', { name: 'Notification settings', exact: true }).click();
+  const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+  await settings.getByRole('button', { name: 'Accounts', exact: true }).click();
+  await expect(settings.getByText('@synthetic:test')).toBeVisible();
+  await expect(settings.getByText('@other:other.test')).toBeVisible();
+  expect((await new AxeBuilder({ page }).include('.settings-window').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([]);
+  await settings.getByRole('button', { name: 'Add another account' }).scrollIntoViewIfNeeded();
+  await page.screenshot({ path: info.outputPath('account-switcher.png') });
+  await settings.getByRole('button', { name: 'Switch' }).click();
+  expect(await page.evaluate(() => window.attentionFixture.accountChoices)).toContain('synthetic-other');
+  await settings.getByRole('button', { name: 'Forget' }).click();
+  await expect(page.getByRole('dialog', { name: 'Forget this account?' })).toBeVisible();
+  await page.getByRole('dialog', { name: 'Forget this account?' }).getByRole('button', { name: 'Cancel' }).click();
+  expect(await page.evaluate(() => window.attentionFixture.removedAccounts)).toEqual([]);
+});
+
 test('delegated sessions show provider-managed account actions at desktop and mobile sizes', async ({ page }, info) => {
   await page.evaluate(() => history.replaceState({}, '', '?delegated=1'));
   await page.getByRole('main', { name: 'Home activity' }).getByRole('button', { name: 'Notification settings', exact: true }).click();

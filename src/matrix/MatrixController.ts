@@ -67,8 +67,10 @@ import {
   type MatrixMessageMention,
 } from './messageFormatting';
 import {
+  accountId,
   databaseNames,
   tokenFreeRecoverySession,
+  type StoredAccountSummary,
   type StoredMatrixSession,
 } from './sessionStore';
 import { getAimtrixPlatform } from '../platform/aimtrixPlatform';
@@ -591,7 +593,8 @@ export class MatrixController {
 
   private focusNotification(roomId?: string, eventId?: string): void {
     if (roomId) {
-      const route: PushRoute = { roomId, ...(eventId ? { eventId } : {}) };
+      const route: PushRoute = { roomId, ...(eventId ? { eventId } : {}),
+        ...(this.activeSession ? { accountId: accountId(this.activeSession) } : {}) };
       this.platform.deepLinks.openRoute(route);
     }
     this.platform.deepLinks.focus();
@@ -888,6 +891,56 @@ export class MatrixController {
 
   public async logout(): Promise<void> {
     await this.endSession(true);
+  }
+
+  public async listAccounts(): Promise<StoredAccountSummary[]> {
+    return this.platform.accounts ? this.credentialOperation(() => this.platform.accounts!.list()) : [];
+  }
+
+  /** Suspend the current identity without revoking its credential or deleting its crypto store. */
+  public async chooseAnotherAccount(id: string | null): Promise<void> {
+    const accounts = this.platform.accounts;
+    if (!accounts) throw new Error('Multiple accounts are unavailable on this platform.');
+    const revision = ++this.lifecycleRevision;
+    const client = this.client;
+    const session = this.activeSession;
+    this.setSnapshot({ status: 'connecting', message: 'Switching Matrix accounts…' });
+    await this.stopCurrentClient();
+    if (revision !== this.lifecycleRevision) return;
+    this.recoverySession = undefined;
+    if (client && session) await this.removePushersForDevice(client, session.deviceId).catch(() => undefined);
+    if (revision !== this.lifecycleRevision) return;
+    await this.pushWork.catch(() => undefined);
+    await this.platform.push.unsubscribe().catch(() => undefined);
+    if (revision !== this.lifecycleRevision) return;
+    try {
+      const selected = await this.credentialOperation(() => accounts.select(id));
+      if (revision !== this.lifecycleRevision) return;
+      if (!selected) this.setSnapshot({ status: 'signed-out' });
+      else if (selected.recovery) {
+        this.recoverySession = selected;
+        this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! });
+      } else {
+        this.setSnapshot({ status: 'connecting', message: 'Opening your encrypted Matrix account…' });
+        await this.connect(selected, revision);
+      }
+    } catch (error) {
+      if (revision === this.lifecycleRevision) this.showConnectionError(error);
+    }
+  }
+
+  public async forgetDormantAccount(id: string): Promise<{ cleaned: boolean }> {
+    const accounts = this.platform.accounts;
+    if (!accounts) throw new Error('Multiple accounts are unavailable on this platform.');
+    const current = this.activeSession ?? this.recoverySession;
+    if (current && accountId(current) === id) throw new Error('Sign out of the active account first.');
+    const removed = await this.credentialOperation(() => accounts.remove(id));
+    if (!removed) return { cleaned: true };
+    const cleanup = await Promise.allSettled([
+      deleteAccountDatabases(removed),
+      deletePrivateSearchDatabase({ userId: removed.userId, homeserver: removed.baseUrl }),
+    ]);
+    return { cleaned: cleanup.every((result) => result.status === 'fulfilled') };
   }
 
   private async endSession(remoteLogout: boolean): Promise<void> {

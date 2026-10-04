@@ -11,8 +11,8 @@ import type { AttentionSettingsSnapshot } from '../../src/features/settings/Atte
 import type { ActivitySnapshot } from '../../src/matrix/activity';
 import '../../src/styles.css';
 
-declare global { interface Window { attentionFixture: { reads: string[]; contexts: string[]; refreshes: number; older: number; threads: number; rejectRoom: boolean; localTests: number } } }
-window.attentionFixture = { reads: [], contexts: [], refreshes: 0, older: 0, threads: 0, rejectRoom: false, localTests: 0 };
+declare global { interface Window { attentionFixture: { reads: string[]; contexts: string[]; refreshes: number; older: number; threads: number; rejectRoom: boolean; localTests: number; accountChoices: Array<string | null>; removedAccounts: string[] } } }
+window.attentionFixture = { reads: [], contexts: [], refreshes: 0, older: 0, threads: 0, rejectRoom: false, localTests: 0, accountChoices: [], removedAccounts: [] };
 const activity: ActivitySnapshot = {
   items: Array.from({ length: 24 }, (_, index) => ({ id: `activity-${index}`, kind: index % 2 ? 'thread' : 'notification', roomId: 'welcome', roomName: 'Welcome Lounge', eventId: `$activity-${index}`, body: `Synthetic activity item ${index}`, timestamp: 1000 + index, read: 'unknown', highlighted: index % 2 === 0, encrypted: false, unavailable: false, ...(index % 2 ? { threadRootId: '$root', participated: true, followed: true } : {}) })),
   loading: false, loadingThreads: false, canLoadOlder: true, canLoadMoreThreads: true,
@@ -46,6 +46,10 @@ export function Fixture() {
   const [workspace, setWorkspace] = useState<WorkspaceSnapshot>(() => ({ ...structuredClone(demoWorkspace), mode: 'matrix', activity: structuredClone(activity), historyByRoom: { welcome: { mode: 'live', revision: 1, canLoadOlder: false, canLoadNewer: false } } }));
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   return <Workspace workspace={workspace} config={defaultRuntimeConfig} theme={theme} preferences={preferences} onPreferencesChange={setPreferences} onThemeChange={setTheme} onSignOut={() => {}}
+    accounts={[{ id: 'synthetic-current', userId: '@synthetic:test', homeserver: 'https://synthetic.test', serverName: 'synthetic.test', active: true, recovery: false },
+      { id: 'synthetic-other', userId: '@other:other.test', homeserver: 'https://other.test', serverName: 'other.test', active: false, recovery: false }]}
+    onChooseAccount={async (id) => { window.attentionFixture.accountChoices.push(id); }}
+    onForgetAccount={async (id) => { window.attentionFixture.removedAccounts.push(id); }}
     matrixSettingsActions={matrixActions}
     draftScope={{ homeserver: 'https://synthetic.test', userId: '@synthetic:test' }}
     onMarkRoomRead={async (roomId) => { window.attentionFixture.reads.push(roomId); }}

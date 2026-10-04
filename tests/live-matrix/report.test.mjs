@@ -18,6 +18,15 @@ test('unknown names and stages cannot carry room data into artifacts', () => {
   assert.throws(() => makeReport({ ...base, failureStage: privateValue }), /report-stage/);
   assert.throws(() => makeReport({ ...base, checks: [{ name: privateValue }] }), /report-check-name/);
 });
+test('account-switch diagnostics retain only a fixed stage', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const result = makeReport({ ...base, failureStage: 'encrypted-account-switch-and-local-isolation',
+    checks: [{ name: 'encrypted-account-switch-and-local-isolation', passed: false,
+      category: 'account-switch-create-room', roomName: privateValue, draft: privateValue }],
+  });
+  assert.equal(result.checks[0].category, 'account-switch-create-room');
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+});
 test('only safe finite metrics and known metadata are retained', () => {
   const result = makeReport({ ...base, revision: 'not a revision', platform: 'a private host', browserVersion: 'a private browser',
     cpuCount: -1, memoryGiB: Infinity, metrics: { sendReceiveMs: NaN, sharedBackdropMs: Infinity, attachmentInputCount: -1 } });

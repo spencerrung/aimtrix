@@ -178,6 +178,7 @@ function createBrowserMedia(): DeviceMedia {
 }
 
 export function createBrowserPlatform(): AimtrixPlatform {
+  const credentials = createBrowserCredentialStore();
   return {
     capabilities: {
       platform: 'browser',
@@ -188,7 +189,8 @@ export function createBrowserPlatform(): AimtrixPlatform {
       standalone: isStandalone(),
       secureCredentialStorage: false,
     },
-    credentials: createBrowserCredentialStore(),
+    credentials,
+    accounts: credentials,
     sso: createBrowserSsoState(),
     notifications: createBrowserNotifications(),
     push: createBrowserPush(),

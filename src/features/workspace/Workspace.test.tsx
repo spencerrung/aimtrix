@@ -1714,7 +1714,7 @@ describe('Workspace demo', () => {
 
   it('restores the last selected room from local storage', () => {
     localStorage.setItem(
-      'aimtrix.location.v2:@you:example.com',
+      'aimtrix.location.v2:["","@you:example.com"]',
       JSON.stringify({ roomId: 'dev-shack', spaceId: 'home' }),
     );
     renderWorkspace();
