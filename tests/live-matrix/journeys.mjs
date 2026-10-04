@@ -12,6 +12,15 @@ export const session = (page) => page.evaluate(() => {
     ? stored.accounts.find((account) => JSON.stringify([account.baseUrl, account.userId]) === stored.active)
     : stored;
 });
+async function targetsAimtrixVerificationDevice(response, userId, candidates) {
+  let messages;
+  try { messages = response.request().postDataJSON()?.messages?.[userId]; }
+  catch { return undefined; }
+  if (!messages || typeof messages !== 'object' || Array.isArray(messages)) return undefined;
+  const deviceIds = new Set((await Promise.all(candidates.map(session))).map((candidate) => candidate?.deviceId).filter(Boolean));
+  if (!deviceIds.size) return undefined;
+  return Object.keys(messages).some((deviceId) => deviceIds.has(deviceId));
+}
 export async function login(page, origin, user, password) {
   await page.goto(origin);
   await page.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill(`@${user}:aimtrix.test`);
@@ -945,7 +954,23 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
         await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
         stage = 'element-cancel-request';
+        // Element starts this request asynchronously, so a completed click does
+        // not prove that Synapse accepted a verification request for delivery.
+        const sent = peer.waitForResponse((response) => response.request().method() === 'PUT' &&
+          decodeURIComponent(new URL(response.url()).pathname).includes('/sendToDevice/m.key.verification.request/'),
+        { timeout: 45000 }).catch(() => undefined);
         await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
+        stage = 'element-cancel-request-send';
+        const response = await sent;
+        invariant(Boolean(response), stage);
+        stage = 'element-cancel-request-accepted';
+        invariant(response.ok(), stage);
+        stage = 'element-cancel-request-target-unavailable';
+        const targetsAimtrix = await targetsAimtrixVerificationDevice(response, accounts.alice.user_id,
+          [alice, aliceSecond, recoveryDevice, verifyPeer]);
+        invariant(typeof targetsAimtrix === 'boolean', stage);
+        stage = 'element-cancel-request-no-aimtrix-target';
+        invariant(targetsAimtrix, stage);
         stage = 'element-cancel-incoming';
         let recipient;
         await until(async () => {
@@ -974,7 +999,21 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await peer.getByPlaceholder('Password', { exact: true }).fill(stack.credentials.password);
         await peer.getByRole('button', { name: 'Sign in', exact: true }).click();
         stage = 'element-withdraw-request';
+        const sent = peer.waitForResponse((response) => response.request().method() === 'PUT' &&
+          decodeURIComponent(new URL(response.url()).pathname).includes('/sendToDevice/m.key.verification.request/'),
+        { timeout: 45000 }).catch(() => undefined);
         await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
+        stage = 'element-withdraw-request-send';
+        const response = await sent;
+        invariant(Boolean(response), stage);
+        stage = 'element-withdraw-request-accepted';
+        invariant(response.ok(), stage);
+        stage = 'element-withdraw-request-target-unavailable';
+        const targetsAimtrix = await targetsAimtrixVerificationDevice(response, accounts.alice.user_id,
+          [alice, aliceSecond, recoveryDevice, verifyPeer]);
+        invariant(typeof targetsAimtrix === 'boolean', stage);
+        stage = 'element-withdraw-request-no-aimtrix-target';
+        invariant(targetsAimtrix, stage);
         stage = 'element-withdraw-incoming';
         let recipient;
         await until(async () => {

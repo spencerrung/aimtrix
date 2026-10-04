@@ -215,7 +215,7 @@ jobs:
       - name: Set release version and updater configuration
         shell: bash
         run: |
-          npm version "${RELEASE_TAG#v}" --no-git-tag-version --ignore-scripts
+          npm version "${RELEASE_TAG#v}" --no-git-tag-version --ignore-scripts --allow-same-version
           node scripts/prepare-tauri-release.mjs
 
       - name: Install dependencies

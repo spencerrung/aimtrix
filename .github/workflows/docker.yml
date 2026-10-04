@@ -77,6 +77,10 @@ jobs:
           for header in Content-Security-Policy Permissions-Policy Referrer-Policy X-Content-Type-Options X-Frame-Options Cross-Origin-Opener-Policy; do
             grep -qi "^${header}:" /tmp/aimtrix-headers
           done
+          grep -Fqi 'geolocation=(self)' /tmp/aimtrix-headers
+          curl --fail --silent --show-error --dump-header /tmp/aimtrix-page-headers --output /dev/null http://127.0.0.1:18080/
+          grep -Fqi 'Permissions-Policy:' /tmp/aimtrix-page-headers
+          grep -Fqi 'geolocation=(self)' /tmp/aimtrix-page-headers
 
       - name: Scan verified amd64 image before publication
         uses: aquasecurity/trivy-action@v0.36.0
