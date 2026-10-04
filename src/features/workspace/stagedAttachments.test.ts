@@ -19,7 +19,7 @@ describe('staged attachment queue', () => {
     queue.stage(room, [voice], undefined, { durationMs: 1200 });
     const item = queue.list(room).at(-1)!;
     queue.sendOne(item.id);
-    await vi.waitFor(() => expect(item.phase).toBe('sent'));
+    await vi.waitFor(() => expect(queue.list(room).some((entry) => entry.id === item.id)).toBe(false));
     expect(queue.list(room)[0].phase).toBe('staged');
     expect(send).toHaveBeenCalledOnce();
     expect(send.mock.calls[0][4].voice).toEqual({ durationMs: 1200 });
@@ -32,16 +32,15 @@ describe('staged attachment queue', () => {
     queue.stage(room, [file('first.txt'), file('second.txt'), file('third.txt')], 'text');
     const [first, second, third] = queue.list(room);
     queue.caption(third.id, 'Third caption'); queue.move(third.id, -1); queue.send(room);
-    await vi.waitFor(() => expect(queue.list(room).map((item) => item.phase)).toEqual(['sent', 'sent', 'failed']));
+    await vi.waitFor(() => expect(queue.list(room).map((item) => item.phase)).toEqual(['failed']));
     expect(send.mock.calls.map((call) => call[1].name)).toEqual(['first.txt', 'third.txt', 'second.txt']);
     expect(send.mock.calls[1][4]).toMatchObject({ caption: 'Third caption', id: third.id });
-    expect(queue.list(room)[2].error).not.toContain('private');
+    expect(queue.list(room)[0].error).not.toContain('private');
     expect(persist.mock.lastCall?.[1]).toEqual([expect.objectContaining({ id: second.id, interrupted: true })]);
     queue.retry(second.id);
-    await vi.waitFor(() => expect(queue.list(room).every((item) => item.phase === 'sent')).toBe(true));
+    await vi.waitFor(() => expect(queue.list(room)).toEqual([]));
     expect(send.mock.calls[3][4].id).toBe(second.id);
     expect(send.mock.calls.filter((call) => call[4].id === first.id)).toHaveLength(1);
-    expect(queue.list(room).every((item) => !item.file)).toBe(true);
     expect(persist.mock.lastCall?.[1]).toEqual([]);
   });
 
@@ -51,7 +50,7 @@ describe('staged attachment queue', () => {
     const { queue } = setup(send); queue.stage(room, [file('first.txt'), file('second.txt')]);
     const id = queue.list(room)[0].id; queue.send(room); queue.remove(id);
     expect(send.mock.calls[0][4].signal?.aborted).toBe(true); gate.resolve();
-    await vi.waitFor(() => expect(queue.list(room).map((item) => item.phase)).toEqual(['sent']));
+    await vi.waitFor(() => expect(queue.list(room)).toEqual([]));
     expect(send).toHaveBeenCalledTimes(2);
   });
 
@@ -77,14 +76,14 @@ describe('staged attachment queue', () => {
     expect(queue.list(room)).toEqual([]);
   });
 
-  it('prunes accepted feedback before enforcing account capacity and bounds pending files per context', async () => {
+  it('removes accepted files before enforcing account capacity and bounds pending files per context', async () => {
     const { queue } = setup();
     for (let i = 0; i < 130; i++) {
       expect(queue.stage(room, [file(`file-${i}.txt`)])).toEqual([]); queue.send(room);
       await Promise.resolve();
-      expect(queue.list(room).every((item) => item.phase === 'sent')).toBe(true);
+      expect(queue.list(room)).toEqual([]);
     }
-    expect(queue.list(room)).toHaveLength(1);
+    expect(queue.list(room)).toHaveLength(0);
     expect(queue.stage(room, Array.from({ length: 21 }, (_, index) => file(`${index}.txt`)))).toHaveLength(1);
     expect(queue.list(room)).toHaveLength(20);
     expect(queue.stage(thread, [new File([], 'empty.txt')])[0]).toContain('Empty files');

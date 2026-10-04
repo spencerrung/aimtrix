@@ -27,7 +27,7 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
   await expect(details).toBeHidden();
   await expect(thread).toBeVisible();
   await expectReachable(composer);
-  await expectReachable(main.getByRole('button', { name: 'More message tools' }));
+  await expectReachable(main.getByRole('button', { name: 'Attach a file' }));
   expect((await main.boundingBox())!.width).toBeGreaterThanOrEqual(420);
   const mainBounds = (await main.boundingBox())!;
   const threadBounds = (await thread.boundingBox())!;
@@ -133,11 +133,10 @@ for (const size of [{ width: 412, height: 360 }, { width: 568, height: 320 }, { 
     await expectReachable(page.getByRole('button', { name: 'Send message', exact: true }));
     await expectReachable(page.getByRole('button', { name: 'Back to previous view' }));
     const more = page.getByRole('button', { name: 'More message tools' });
-    await expectReachable(more);
-    await more.click();
+    if (size.width < 768) { await expectReachable(more); await more.click(); }
+    else await expect(more).toBeHidden();
     await expectReachable(page.getByRole('button', { name: 'Attach a file', exact: true }));
-    await page.keyboard.press('Escape');
-    await expect(more).toBeFocused();
+    if (size.width < 768) { await page.keyboard.press('Escape'); await expect(more).toBeFocused(); }
     await page.screenshot({ path: testInfo.outputPath(`conversation-${size.width}x${size.height}.png`) });
     await page.getByRole('button', { name: /2 replies/ }).click();
     const thread = page.getByRole('complementary', { name: 'Thread', exact: true });
@@ -146,7 +145,7 @@ for (const size of [{ width: 412, height: 360 }, { width: 568, height: 320 }, { 
     await expectReachable(threadComposer);
     await expectReachable(thread.getByRole('button', { name: 'Send thread reply' }));
     await expectReachable(thread.getByRole('button', { name: 'Close thread' }));
-    await expectReachable(thread.getByRole('button', { name: 'More message tools' }));
+    await expectReachable(thread.getByRole('button', { name: size.width < 768 ? 'More message tools' : 'Attach a file' }));
     expect(await threadComposer.evaluate((element) => parseFloat(getComputedStyle(element).fontSize))).toBeGreaterThanOrEqual(16);
     await page.screenshot({ path: testInfo.outputPath(`thread-${size.width}x${size.height}.png`) });
     await thread.getByRole('button', { name: 'Send thread reply' }).click();

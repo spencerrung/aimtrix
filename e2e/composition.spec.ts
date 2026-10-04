@@ -36,7 +36,7 @@ test('room and thread drafts restore after reload with honest file reattachment'
   if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   await page.getByRole('button', { name: /2 replies/ }).click();
   await expect(thread.getByRole('textbox', { name: 'Message thread', exact: true })).toHaveText('Thread idea saved separately');
-  await thread.getByRole('button', { name: 'More message tools', exact: true }).click();
+  if (info.project.name === 'mobile') await thread.getByRole('button', { name: 'More message tools', exact: true }).click();
   await expect(thread.getByRole('button', { name: 'Add emoji', exact: true })).toBeVisible();
   await expect(thread.getByRole('button', { name: 'Insert code block', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('shared-thread-composer.png') });
@@ -56,7 +56,30 @@ test('reviews, reorders and retries one file without resending successful files'
   await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toEqual(['first.txt']);
   await tray.getByRole('button', { name: 'Retry retry.txt', exact: true }).click();
   await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toEqual(['first.txt', 'retry.txt']);
+  await expect(tray).toHaveCount(0);
   await page.screenshot({ path: info.outputPath('attachment-tray.png') });
+});
+
+test('desktop room and thread tools are visible without opening the plus menu', async ({ page }, info) => {
+  if (info.project.name === 'mobile') test.skip();
+  for (const kind of ['room', 'thread'] as const) {
+    if (kind === 'thread') await page.getByRole('button', { name: /2 replies/ }).click();
+    const surface = kind === 'thread' ? page.getByRole('complementary', { name: 'Thread', exact: true }) : page.getByRole('main', { name: 'Conversation with Welcome Lounge' });
+    await expect(surface.getByRole('button', { name: 'More message tools' })).toBeHidden();
+    for (const name of ['Attach a file', 'Add emoji', 'Insert code block']) {
+      await expect(surface.getByRole('button', { name, exact: true })).toBeVisible();
+    }
+    await page.screenshot({ path: info.outputPath(`${kind}-visible-tools.png`) });
+  }
+});
+
+test('captioned image leaves the attachment tray after its send is confirmed', async ({ page }) => {
+  const tray = page.getByRole('region', { name: 'Attachments', exact: true });
+  await page.getByLabel('Choose attachment', { exact: true }).setInputFiles({ name: 'picture.png', mimeType: 'image/png', buffer: Buffer.from('synthetic image') });
+  await tray.getByRole('textbox', { name: 'Caption for picture.png' }).fill('Synthetic caption');
+  await tray.getByRole('button', { name: 'Send attachments', exact: true }).click();
+  await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toContain('picture.png');
+  await expect(tray).toHaveCount(0);
 });
 
 test('staged files and expanded tools leave room and thread composers reachable on short screens', async ({ page }, info) => {

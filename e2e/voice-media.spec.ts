@@ -47,7 +47,7 @@ test.beforeEach(async ({ page }, info) => {
 
 test('records a playable clip with Chromium’s real MediaRecorder', async ({ page }) => {
   expect(await page.evaluate(() => Function.prototype.toString.call(MediaRecorder).includes('[native code]'))).toBe(true);
-  await page.getByRole('button', { name: 'More message tools' }).click();
+  if (await page.getByRole('button', { name: 'More message tools' }).isVisible()) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Record a voice message' }).click();
   await page.getByRole('button', { name: 'Start recording' }).click();
   await expect(page.getByRole('button', { name: 'Stop recording' })).toBeVisible();
@@ -69,7 +69,7 @@ test('records a playable clip with Chromium’s real MediaRecorder', async ({ pa
 });
 
 test('reviews voice before send and browses loaded images', async ({ page }, info) => {
-  await page.getByRole('button', { name: 'More message tools' }).click();
+  if (await page.getByRole('button', { name: 'More message tools' }).isVisible()) await page.getByRole('button', { name: 'More message tools' }).click();
   await page.getByRole('button', { name: 'Record a voice message' }).click();
   await expect(page.getByRole('dialog', { name: 'Record a voice message' })).toBeVisible();
   await page.getByRole('button', { name: 'Start recording' }).click();
@@ -80,7 +80,8 @@ test('reviews voice before send and browses loaded images', async ({ page }, inf
   await page.screenshot({ path: info.outputPath('voice-preview.png') });
   await page.getByRole('button', { name: 'Send voice message' }).click();
   await expect(page.getByRole('dialog', { name: 'Record a voice message' })).toHaveCount(0);
-  await expect(page.getByRole('status', { name: '' }).filter({ hasText: 'Sent' }).first()).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Attachments', exact: true })).toHaveCount(0);
+  await expect(page.locator('.timeline-message').filter({ hasText: 'Voice message' }).last()).toBeVisible();
   await page.getByRole('button', { name: 'View first.svg full size' }).click();
   await page.getByRole('button', { name: 'Next image' }).click();
   await expect(page.getByRole('dialog', { name: 'Viewing second.svg' })).toBeVisible();

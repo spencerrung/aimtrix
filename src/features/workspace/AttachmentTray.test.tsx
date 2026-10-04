@@ -36,7 +36,7 @@ describe('attachment review tray', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument(); expect(screen.getByRole('button', { name: 'Send thread attachments' })).toBeEnabled();
   });
 
-  it('keeps ordered captions and failed-only retry accessible while retaining successful feedback', async () => {
+  it('keeps ordered captions and failed-only retry accessible while clearing successful files', async () => {
     let fail = true;
     const send = vi.fn<ConstructorParameters<typeof StagedAttachments>[0]['send']>(async (_context, input) => { if (input.name === 'second.txt' && fail) { fail = false; throw new Error('private'); } });
     const queue = makeQueue(send); queue.stage(context, [file('first.txt'), file('second.txt')]);
@@ -45,10 +45,11 @@ describe('attachment review tray', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Move second.txt earlier' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send thread attachments' }));
     await screen.findByRole('button', { name: 'Retry second.txt' });
-    expect(screen.getAllByRole('status').map((row) => row.textContent)).toEqual(['Not confirmed', 'Sent']);
+    expect(screen.getAllByRole('status').map((row) => row.textContent)).toEqual(['Not confirmed']);
+    expect(screen.queryByText('first.txt')).not.toBeInTheDocument();
     expect(send.mock.calls[0][4].caption).toBe('Caption two');
     fireEvent.click(screen.getByRole('button', { name: 'Retry second.txt' }));
-    await waitFor(() => expect(screen.getAllByRole('status').map((row) => row.textContent)).toEqual(['Sent', 'Sent']));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'Thread attachments' })).not.toBeInTheDocument());
     expect(send.mock.calls.filter((call) => call[1].name === 'first.txt')).toHaveLength(1);
   });
 });
