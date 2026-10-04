@@ -27,6 +27,18 @@ test('account-switch diagnostics retain only a fixed stage', () => {
   assert.equal(result.checks[0].category, 'account-switch-create-room');
   assert.equal(JSON.stringify(result).includes(privateValue), false);
 });
+test('cross-homeserver and in-flight send diagnostics retain no account or message data', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const category of ['secondary-synapse-readiness', 'account-switch-send-in-flight', 'account-switch-pending-cleanup']) {
+    assert.ok(failureCategories.includes(category));
+    const result = makeReport({ ...base, failureStage: 'encrypted-account-switch-and-local-isolation',
+      checks: [{ name: 'encrypted-account-switch-and-local-isolation', passed: false,
+        category, homeserver: privateValue, userId: privateValue, message: privateValue, token: privateValue }],
+    });
+    assert.equal(result.checks[0].category, category);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
 test('only safe finite metrics and known metadata are retained', () => {
   const result = makeReport({ ...base, revision: 'not a revision', platform: 'a private host', browserVersion: 'a private browser',
     cpuCount: -1, memoryGiB: Infinity, metrics: { sendReceiveMs: NaN, sharedBackdropMs: Infinity, attachmentInputCount: -1 } });
@@ -244,4 +256,15 @@ test('delegated sign-in evidence cannot expose provider credentials or callback 
   assert.deepEqual(result.metrics, { delegatedLoginCompleted: 1, delegatedLogoutCompleted: 1 });
   assert.match(result.images.mas, /^ghcr\.io\/element-hq\/matrix-authentication-service:1\.26\.0@sha256:[a-f0-9]{64}$/);
   assert.equal(JSON.stringify(result).includes(privateValue), false);
+  for (const category of ['delegated-refresh-provider-rejected', 'delegated-refresh-token-free-recovery']) {
+    const refresh = makeReport({ ...base, delegatedAuth: true, failureStage: 'delegated-auth-refresh-and-rejection',
+      checks: [{ name: 'delegated-auth-refresh-and-rejection', passed: false, category, durationMs: 220,
+        accessToken: privateValue, refreshToken: privateValue, authorization: privateValue }],
+      metrics: { delegatedRefreshRotated: 1, delegatedRefreshRejected: 0, providerResponse: privateValue },
+    });
+    assert.deepEqual(refresh.checks, [{ name: 'delegated-auth-refresh-and-rejection', passed: false,
+      category, durationMs: 220 }]);
+    assert.deepEqual(refresh.metrics, { delegatedRefreshRotated: 1, delegatedRefreshRejected: 0 });
+    assert.equal(JSON.stringify(refresh).includes(privateValue), false);
+  }
 });

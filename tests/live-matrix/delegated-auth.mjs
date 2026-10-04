@@ -27,6 +27,21 @@ async function signInWithProvider(page, stack, username) {
   await page.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: 60000 });
 }
 
+async function rejectNextDeviceRead(page, trigger) {
+  let rejected = 0;
+  const pattern = '**/_matrix/client/*/devices';
+  const reject = async (route) => {
+    if (route.request().method() !== 'GET') return route.continue();
+    rejected += 1;
+    await page.unroute(pattern, reject);
+    await route.fulfill({ status: 401, contentType: 'application/json', headers: { 'access-control-allow-origin': '*' },
+      body: JSON.stringify({ errcode: 'M_UNKNOWN_TOKEN', error: 'Expired access token' }) });
+  };
+  await page.route(pattern, reject);
+  await trigger();
+  await until(() => rejected === 1, 'delegated-refresh-device-request', 30000);
+}
+
 export async function runDelegatedAuthJourney({ browser, stack, check, metrics }) {
   const username = 'delegated';
   const context = await browser.newContext({ serviceWorkers: 'block' });
@@ -184,6 +199,61 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         metrics.delegatedRecoveryRestored = 1;
       } finally {
         await secondContext.close();
+      }
+    });
+    await check('delegated-auth-refresh-and-rejection', async () => {
+      const refreshContext = await browser.newContext({ serviceWorkers: 'block' });
+      try {
+        const refreshPage = await refreshContext.newPage();
+        await signInWithProvider(refreshPage, stack, username);
+        const initial = await refreshPage.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+        invariant(initial?.accessToken && initial?.oauth?.refreshToken && initial?.oauth?.clientId,
+          'delegated-refresh-initial-session');
+        await rejectNextDeviceRead(refreshPage, async () => {
+          await refreshPage.getByRole('button', { name: 'Open settings' }).click();
+          await refreshPage.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true })
+            .getByRole('button', { name: 'Matrix & security', exact: true }).click();
+        });
+        let rotated;
+        await until(async () => {
+          rotated = await refreshPage.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+          return rotated?.accessToken && rotated.accessToken !== initial.accessToken &&
+            rotated.oauth?.refreshToken && rotated.oauth.refreshToken !== initial.oauth.refreshToken;
+        }, 'delegated-refresh-rotation', 45000);
+        const settings = refreshPage.getByRole('dialog', { name: 'Personalize Aimtrix', exact: true });
+        await settings.getByText('Account and homeserver', { exact: true }).waitFor({ timeout: 30000 });
+        const identity = await fetch(`${stack.origins.synapse}/_matrix/client/v3/account/whoami`,
+          { headers: { Authorization: `Bearer ${rotated.accessToken}` } });
+        invariant(identity.ok && (await identity.json()).user_id === initial.userId,
+          'delegated-refresh-new-token-accepted');
+        metrics.delegatedRefreshRotated = 1;
+
+        const metadata = await (await fetch(`${stack.origins.synapse}/_matrix/client/v1/auth_metadata`)).json();
+        invariant(new URL(metadata.revocation_endpoint).origin === stack.origins.mas,
+          'delegated-refresh-revocation-endpoint');
+        invariant(new URL(metadata.token_endpoint).origin === stack.origins.mas,
+          'delegated-refresh-token-endpoint');
+        const revoked = await fetch(metadata.revocation_endpoint, { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ client_id: rotated.oauth.clientId,
+            token: rotated.oauth.refreshToken, token_type_hint: 'refresh_token' }) });
+        invariant(revoked.ok, 'delegated-refresh-revoked');
+        // The rotated access token is still fresh. The SDK logs out on an
+        // unexpected 401 in that window, so prove MAS rejected the revoked
+        // refresh token separately before exercising the browser logout path.
+        const rejectedRefresh = await fetch(metadata.token_endpoint, { method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: new URLSearchParams({ grant_type: 'refresh_token', client_id: rotated.oauth.clientId,
+            refresh_token: rotated.oauth.refreshToken }) });
+        invariant([400, 401].includes(rejectedRefresh.status), 'delegated-refresh-provider-rejected');
+        metrics.delegatedRefreshRejected = 1;
+        await rejectNextDeviceRead(refreshPage, () => settings.getByRole('button', { name: 'Refresh', exact: true }).click());
+        await refreshPage.getByRole('heading', { name: 'Your Matrix session expired' }).waitFor({ timeout: 45000 });
+        const recovery = await refreshPage.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+        invariant(recovery?.userId === initial.userId && !recovery.accessToken && !recovery.oauth?.refreshToken,
+          'delegated-refresh-token-free-recovery');
+      } finally {
+        await refreshContext.close();
       }
     });
     await check('delegated-auth-logout', async () => {
