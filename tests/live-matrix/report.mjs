@@ -115,7 +115,7 @@ export function makeReport({ revision, platform, browserVersion, cpuCount, memor
       'largeAccountRoomCount', 'largeAccountSeededRooms', 'largeAccountSeedMs', 'largeAccountServerJoinedRooms', 'largeAccountHistorySeededEvents', 'largeAccountShellReadyMs', 'largeAccountLastRoomVisibleMs', 'largeAccountDeepRoomReadyMs', 'largeAccountUiRooms', 'largeAccountDeepRoomOpenMs', 'largeAccountRenderedRows', 'largeAccountDomNodes', 'largeAccountSyncResponses', 'largeAccountHeapGrowthMiB', 'largeAccountHistoryPages', 'largeAccountIncrementalEvents', 'largeAccountIncrementalDurationMs', 'largeAccountIncrementalP95Ms', 'largeAccountIncrementalMaxMs', 'largeAccountIncrementalHeapGrowthMiB', 'largeAccountIncrementalHeapAt0MiB', 'largeAccountIncrementalHeapAt100MiB', 'largeAccountIncrementalHeapAt200MiB', 'largeAccountIncrementalHeapAt300MiB', 'largeAccountIncrementalNodesAt0', 'largeAccountIncrementalNodesAt300', 'largeAccountIncrementalListenersAt0', 'largeAccountIncrementalListenersAt300',
       'communityBeforeDirectoryMs',
       'delegatedLoginCompleted', 'delegatedLogoutCompleted', 'delegatedRecoverySupported', 'delegatedRecoveryRestored',
-      'delegatedRefreshRotated', 'delegatedRefreshRejected',
+      'delegatedRefreshRotated', 'delegatedRefreshRejected', 'delegatedRevocationAutoReauth',
       'delegatedRecoveryStateHttpStatus',
     ].filter((key) => finite(metrics[key])).map((key) => [key, Math.round(metrics[key])])),
   };

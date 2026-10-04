@@ -119,7 +119,7 @@ export class GroupCallEngine {
 
   private attachRoom(room: LiveKitRoom): void {
     for (const event of [RoomEvent.ParticipantConnected, RoomEvent.ParticipantDisconnected, RoomEvent.TrackSubscribed,
-      RoomEvent.TrackUnsubscribed, RoomEvent.TrackMuted, RoomEvent.TrackUnmuted, RoomEvent.LocalTrackPublished,
+      RoomEvent.TrackUnsubscribed, RoomEvent.TrackUnpublished, RoomEvent.TrackMuted, RoomEvent.TrackUnmuted, RoomEvent.LocalTrackPublished,
       RoomEvent.LocalTrackUnpublished, RoomEvent.ActiveSpeakersChanged, RoomEvent.ParticipantEncryptionStatusChanged]) {
       room.on(event, this.onRoomChange);
     }
