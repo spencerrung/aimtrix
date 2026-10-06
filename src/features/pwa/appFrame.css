@@ -1,5 +1,5 @@
 /* Notices reserve space above the workspace, including when the keyboard opens. */
-.app-frame { padding-top: env(safe-area-inset-top, 0px); display: flex; flex-direction: column; height: var(--aimtrix-viewport-height, 100dvh); min-height: 0; position: relative; top: var(--aimtrix-viewport-offset-top, 0px); }
+.app-frame { padding-top: env(safe-area-inset-top, 0px); display: flex; flex-direction: column; height: var(--aimtrix-viewport-height, 100dvh); min-height: 0; position: fixed; width: 100%; isolation: isolate; background: var(--surface-inset); top: var(--aimtrix-viewport-offset-top, 0px); }
 .app-content { flex: 1; min-height: 0; overflow: hidden; }
 .app-notices { flex: none; max-height: min(35%, max(54px, calc(var(--aimtrix-visual-height, 100dvh) - 360px))); overflow: auto; overscroll-behavior: contain; }
 .app-notice { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px max(12px, env(safe-area-inset-right)) 5px max(12px, env(safe-area-inset-left)); color: var(--text); border-bottom: 1px solid var(--border-strong); background: var(--surface-raised); }

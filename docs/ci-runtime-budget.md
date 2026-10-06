@@ -22,7 +22,7 @@ The [revised RC6 Linux release run](https://github.com/spencerrung/aimtrix/actio
 
 ## Full local endurance acceptance
 
-Use a clean checkout of the release candidate on a machine with Node 22+, Docker/Compose, available loopback ports and sufficient memory for disposable Synapse/Postgres plus Chromium. Do not point the harness at production services. Avoid concurrent profiling runs so CPU contention does not invalidate measurements. The current agent environment has no Docker, Podman or nerdctl, so this relocated command has not been exercised here. Keep the existing RC6 full CI profile evidence as the baseline; do not report a new local pass until a Docker-capable machine completes it.
+Use a clean checkout of the release candidate on a machine with Node 22+, Docker/Compose, available loopback ports and sufficient memory for disposable Synapse/Postgres plus Chromium. Do not point the harness at production services. Avoid concurrent profiling runs so CPU contention does not invalidate measurements. The October 6 phone-feedback pass provisioned a temporary, user-owned rootless Docker 29.8.2 / Compose 5.6.0 daemon for disposable local validation. No system Docker service, production Matrix service or cluster configuration is involved. Keep the existing RC6 full CI profile evidence as the baseline until the new allowlisted local reports show completion.
 
 ```sh
 npm ci

@@ -91,3 +91,24 @@ test('incoming events and content resizing preserve the detached reading anchor'
   await page.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
   await expect(timeline.getByText('A new synthetic arrival', { exact: true })).toBeVisible();
 });
+
+
+test('jump to latest survives a delayed controller snapshot without freezing the live view again', async ({ page }) => {
+  const timeline = page.getByRole('region', { name: 'Messages', exact: true });
+  await expect(timeline.locator('[data-event-id="$history-399"]')).toBeVisible();
+  // Let initial programmatic scrolling settle before reproducing a user scroll.
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+  await page.evaluate(() => window.dispatchEvent(new Event('history-fixture-batch-publication')));
+  await timeline.evaluate((element) => { element.scrollTop = Math.max(0, element.scrollHeight - element.clientHeight - 300); element.dispatchEvent(new Event('scroll')); });
+  const jump = page.getByRole('button', { name: 'Jump to latest messages', exact: true });
+  await jump.click();
+  await expect(page.getByText('Returning to latest messages…')).toBeVisible();
+  // Mobile Safari can dispatch a scroll after the tap while old rows are present.
+  await timeline.evaluate((element) => element.dispatchEvent(new Event('scroll')));
+  await page.evaluate(() => window.dispatchEvent(new Event('history-fixture-release-publication')));
+  await expect(page.getByText('Returning to latest messages…')).toBeHidden();
+  await expect(jump).toBeHidden();
+  await expect.poll(() => timeline.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
+  await page.evaluate(() => window.dispatchEvent(new Event('history-fixture-incoming')));
+  await expect(timeline.getByText('A new synthetic arrival', { exact: true })).toBeVisible();
+});

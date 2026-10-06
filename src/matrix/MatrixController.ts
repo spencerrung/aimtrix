@@ -1,3 +1,4 @@
+import { isMxcEmoji, type ReactionImage } from '../features/media/emojiPacks';
 import { ActivityStore } from './activity';
 import type {
   EventType,
@@ -3617,6 +3618,7 @@ export class MatrixController {
     eventId: string,
     key: string,
     ownReactionEventId?: string,
+    image?: ReactionImage,
   ): Promise<void> {
     const client = this.client;
     const sdk = this.sdk;
@@ -3637,11 +3639,18 @@ export class MatrixController {
       await client.redactEvent(roomId, ownReactionEventId);
     } else {
       if (!room.currentState.maySendEvent(sdk.EventType.Reaction, client.getSafeUserId())) throw new Error('You do not have permission to react in this conversation.');
+      let reactionKey = key;
+      if (image) {
+        reactionKey = isMxcEmoji(image.src) ? image.src : (await this.uploadInlineEmotes([{ ...image, shortcode: key }]))[0]?.mxcUrl;
+        this.actionRoom(client, roomId, room);
+        if (this.client !== client || !isMxcEmoji(reactionKey ?? '') || reactionKey.length > 256 || !isVisibleTimelineEvent(target) || !room.currentState.maySendEvent(sdk.EventType.Reaction, client.getSafeUserId())) throw new Error('This reaction is no longer available.');
+      }
       await client.sendEvent(roomId, sdk.EventType.Reaction, {
+        ...(image ? { 'dev.alucard.aimtrix.reaction.v1': { name: image.name.slice(0, 120) } } : {}),
         'm.relates_to': {
           rel_type: sdk.RelationType.Annotation,
           event_id: eventId,
-          key,
+          key: reactionKey,
         },
       });
     }

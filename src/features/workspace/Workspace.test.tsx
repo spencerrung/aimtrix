@@ -92,6 +92,7 @@ function renderWorkspace(
     onLoadRoomHistory?: (roomId: string, direction: 'backward' | 'forward') => Promise<void>;
     onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
     onReturnToLive?: (roomId: string) => Promise<void>;
+    onReturnThreadToLive?: (roomId: string, rootId: string) => Promise<void>;
     onHistoryDetached?: (roomId: string, detached: boolean) => void;
     onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
     onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
@@ -149,6 +150,7 @@ function renderWorkspace(
       onLoadRoomHistory={overrides.onLoadRoomHistory}
       onOpenEventContext={overrides.onOpenEventContext}
       onReturnToLive={overrides.onReturnToLive}
+      onReturnThreadToLive={overrides.onReturnThreadToLive}
       onHistoryDetached={overrides.onHistoryDetached}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onMarkRoomUnread={overrides.onMarkRoomUnread}
@@ -582,7 +584,7 @@ describe('Workspace demo', () => {
     expect(JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]')).toContain('🎊');
   });
 
-  it('keeps reactions Unicode-only for cross-client portability', async () => {
+  it('includes configured image emoji in reaction search and forwards the selected image', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       headers: { get: () => null },
@@ -597,8 +599,8 @@ describe('Workspace demo', () => {
       target: { value: 'bufo' },
     });
 
-    await waitFor(() => expect(within(picker).queryByRole('button', { name: /bufo/i })).not.toBeInTheDocument());
-    expect(onToggleReaction).not.toHaveBeenCalled();
+    fireEvent.click(await within(picker).findByRole('button', { name: 'React with :bufo-wave:' }));
+    expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', ':bufo-wave:', undefined, { id: 'bufo-wave', name: 'Bufo wave', src: 'http://localhost:3000/emoji/packs/standard/bufo-wave.png' });
   });
 
   it('keeps animated emoji on a static preview until pointer hover', async () => {
@@ -805,7 +807,7 @@ describe('Workspace demo', () => {
   it('uploads pasted images while preserving text paste and thread context', async () => {
     const onUploadAttachment = vi.fn().mockResolvedValue(undefined);
     const matrixWorkspace = { ...demoWorkspace, mode: 'matrix' as const };
-    renderWorkspace({ workspace: matrixWorkspace, onUploadAttachment });
+    renderWorkspace({ workspace: matrixWorkspace, onUploadAttachment, onSendMessage: vi.fn().mockResolvedValue(undefined) });
     const image = new File(['pixels'], '', { type: 'image/png' });
     const imageClipboard = {
       items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
@@ -817,17 +819,20 @@ describe('Workspace demo', () => {
     fireEvent.paste(composer, { clipboardData: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }], files: [], getData: () => 'text' } });
     expect(onUploadAttachment).not.toHaveBeenCalled();
     fireEvent.paste(composer, { clipboardData: imageClipboard });
-    fireEvent.click(await screen.findByRole('button', { name: 'Send attachments' }));
+    await screen.findByAltText('Preview of pasted-image.png');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', expect.objectContaining({ name: 'pasted-image.png' }), expect.any(Function), undefined, undefined, expect.any(Object)));
     fireEvent.paste(composer, { clipboardData: { items: [], files: [image], getData: () => '' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send attachments' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Send attachments' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const threadComposer = screen.getByLabelText('Message thread');
     fireEvent.paste(threadComposer, { clipboardData: imageClipboard });
-    fireEvent.click(await screen.findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send thread reply' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), 'm2', undefined, expect.any(Object)));
   }, 15_000);
 
@@ -872,7 +877,8 @@ describe('Workspace demo', () => {
     const file = new File(['synthetic upload'], 'synthetic-thread.txt', { type: 'text/plain' });
     fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [file] } });
     expect(onUploadAttachment).not.toHaveBeenCalled();
-    fireEvent.click(await within(thread).findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(within(thread).getByRole('button', { name: 'Send thread reply' })).toBeEnabled());
+    fireEvent.click(within(thread).getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', file, expect.any(Function), 'm2', undefined, expect.objectContaining({ id: expect.any(String), signal: expect.any(AbortSignal) })));
     expect(container.querySelector('.conversation')).not.toBeVisible();
     act(() => onUploadAttachment.mock.calls[0][5].onPhase('encrypting'));
@@ -900,7 +906,8 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [new File(['synthetic'], 'synthetic-cancel.txt')] } });
-    fireEvent.click(await within(thread).findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(within(thread).getByRole('button', { name: 'Send thread reply' })).toBeEnabled());
+    fireEvent.click(within(thread).getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledOnce());
     fireEvent.click(within(thread).getByRole('button', { name: 'Cancel synthetic-cancel.txt' }));
     await waitFor(() => expect(onCancelUpload).toHaveBeenCalledOnce());
@@ -1185,6 +1192,50 @@ describe('Workspace demo', () => {
     expect(composer).toHaveTextContent('This should remain a draft');
     expect(timeline.scrollTop).toBe(400);
     expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('queues reviewed attachments after accepted text despite attachment revisions (new text: %s)', async (newText) => {
+    const pending = pendingSend();
+    const onSendMessage = vi.fn(() => pending.promise);
+    const onUploadAttachment = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage, onUploadAttachment });
+    const input = screen.getByLabelText('Choose attachment');
+    const file = (name: string) => new File(['synthetic'], name, { type: 'text/plain' });
+    fireEvent.change(input, { target: { files: [file('reviewed.txt'), file('removed.txt')] } });
+    await screen.findByRole('button', { name: 'Remove reviewed.txt' });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Accepted text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledOnce());
+    fireEvent.change(input, { target: { files: [file('later.txt')] } });
+    await screen.findByRole('button', { name: 'Remove later.txt' });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove removed.txt' }));
+    screen.getByLabelText('Options for reviewed.txt').closest('details')!.open = true;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Caption for reviewed.txt' }), { target: { value: 'Reviewed caption' } });
+    if (newText) setComposerText(composer, 'A newer draft');
+    await act(async () => pending.resolve());
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledExactlyOnceWith('welcome', expect.objectContaining({ name: 'reviewed.txt' }), expect.any(Function), undefined, undefined, expect.objectContaining({ caption: 'Reviewed caption' })));
+    expect(composer.textContent).toBe(newText ? 'A newer draft' : '');
+    expect(screen.getByRole('button', { name: 'Remove later.txt' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove removed.txt' })).not.toBeInTheDocument();
+  }, 15_000);
+
+  it.each(['room', 'thread'] as const)('returns historical %s messages to live when attachment-only Send queues an upload', async (kind) => {
+    const pending = pendingSend();
+    const onUploadAttachment = vi.fn(() => pending.promise);
+    const latest = vi.fn().mockResolvedValue(undefined);
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    workspace.historyByRoom = { welcome: { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true } };
+    workspace.threadsByRoot.m2.history = { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true };
+    renderWorkspace({ workspace, onUploadAttachment, ...(kind === 'thread' ? { onReturnThreadToLive: latest } : { onReturnToLive: latest }) });
+    if (kind === 'thread') fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const sendName = kind === 'thread' ? 'Send thread reply' : 'Send message';
+    fireEvent.change(screen.getByLabelText(kind === 'thread' ? 'Choose thread attachment' : 'Choose attachment'), { target: { files: [new File(['synthetic'], 'history.txt', { type: 'text/plain' })] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: sendName })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: sendName }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledOnce());
+    await waitFor(() => expect(latest).toHaveBeenCalledExactlyOnceWith(...(kind === 'thread' ? ['welcome', 'm2'] : ['welcome'])));
+    await act(async () => pending.resolve());
   });
 
   it.each(['accepted', 'retained', 'preparation'] as const)('preserves a newer main draft after an older send is %s', async (outcome) => {
@@ -1920,6 +1971,66 @@ describe('Workspace history navigation', () => {
     rerenderWorkspace(exhausted);
     expect(screen.getByText('Beginning of available history.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Load older messages' })).not.toBeInTheDocument();
+  });
+
+  it('does not freeze the controller again while a latest snapshot is still being published', async () => {
+    const workspace = historyWorkspace('live');
+    const pending = pendingSend();
+    const onReturnToLive = vi.fn().mockReturnValue(pending.promise);
+    const onHistoryDetached = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive, onHistoryDetached });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    onHistoryDetached.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    // Both an old unread snapshot render and an iOS-delayed scroll event can
+    // arrive after the controller has synchronously selected its live timeline.
+    timeline.scrollTop = 250;
+    fireEvent.scroll(timeline);
+    await act(async () => pending.resolve());
+    expect(onHistoryDetached).not.toHaveBeenCalledWith('welcome', true);
+    expect(screen.getByText('Returning to latest messages…')).toBeInTheDocument();
+    const live = structuredClone(workspace);
+    live.historyByRoom!.welcome.revision++;
+    rerenderWorkspace(live);
+    expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Jump to latest messages' })).not.toBeInTheDocument();
+    expect(timeline.scrollTop).toBe(1000);
+  });
+
+  it('offers retry when a latest snapshot never arrives and ignores late request failures', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = pendingSend();
+      const onReturnToLive = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+      const workspace = historyWorkspace();
+      const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive });
+      fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+      await act(async () => { vi.advanceTimersByTime(15000); });
+      expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('Latest messages have not appeared yet');
+      expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry latest messages' }));
+      await act(async () => pending.reject(new Error('superseded failure')));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      const live = structuredClone(workspace);
+      live.historyByRoom!.welcome = { ...live.historyByRoom!.welcome, mode: 'live', revision: 2 };
+      rerenderWorkspace(live);
+      expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+      expect(onReturnToLive).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('settles latest feedback when the controller publishes an error instead of a live window', () => {
+    const workspace = historyWorkspace();
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive: vi.fn().mockResolvedValue(undefined) });
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    const failed = structuredClone(workspace);
+    failed.historyByRoom!.welcome = { ...failed.historyByRoom!.welcome, revision: 2, error: 'The room is unavailable.', errorDirection: 'latest' };
+    rerenderWorkspace(failed);
+    expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry latest messages' })).toBeEnabled();
   });
 
   it('never marks a historical window read and waits for a new live snapshot before returning to the tail', async () => {

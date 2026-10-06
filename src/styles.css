@@ -7,7 +7,8 @@
   .interaction-fields { min-width: 0; margin: 0; padding: 0; border: 0; }
   *, *::before, *::after { box-sizing: border-box; }
   html, body, #root { width: 100%; min-width: 320px; height: 100%; margin: 0; }
-  body { overflow: hidden; }
+  html, body { overflow: hidden; overscroll-behavior: none; }
+  html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
   button, input, textarea { font: inherit; }
   button { color: inherit; }
   img { display: block; max-width: 100%; }
@@ -358,7 +359,7 @@
   .form-error { border-color: #cc7373; background: #fee5e5; color: #782a2a; }
   :root[data-theme="midnight"] .config-warning { background: #4b3e1f; color: #ffe6a3; }
   :root[data-theme="midnight"] .form-error { background: #4c272b; color: #ffc2c7; }
-  .login-stage__note { margin: 0; color: color-mix(in srgb, var(--text) 62%, transparent); font-size: 0.7rem; text-shadow: 0 1px rgba(255,255,255,0.34); }
+  .login-stage__note { margin: 0; color: var(--text); font-size: 0.7rem; text-shadow: 0 1px rgba(255,255,255,0.34); }
   .connection-error { display: grid; justify-items: center; gap: 12px; padding-bottom: 26px; text-align: center; }
   .connection-error .login-window__titlebar { width: 100%; margin-bottom: 11px; }
   .connection-error h1 { margin: 0; font-size: 1.2rem; }

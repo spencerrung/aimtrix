@@ -1,3 +1,5 @@
+export type ReactionImage = { id: string; name: string; src: string };
+export const isMxcEmoji = (value: string) => /^mxc:\/\/[a-z0-9.:[\]-]+\/[a-z0-9_-]+$/iu.test(value) && value.length <= 2048;
 export interface EmojiPackEntry {
   id: string;
   name: string;

@@ -13,6 +13,7 @@ import { runEncryptedSustainedSyncProfile, runSustainedSyncProfile } from './sus
 import { runLargeAccountProfile } from './large-account-profile.mjs';
 import { runDelegatedAuthJourney } from './delegated-auth.mjs';
 import { checkNames, failureCategories, makeReport } from './report.mjs';
+import { reactionArtwork, reactionManifest } from './reaction-fixture.mjs';
 
 // No Playwright reporter, traces, HAR, videos, storage snapshots, or screenshots.
 // All exceptions are discarded at this boundary; only a fixed check ID is reported.
@@ -62,11 +63,13 @@ for (let run = 1; run <= repeats; run++) {
     await check('disposable-stack', () => stack.start());
     await check('application-server', async () => {
       const runtime = { brandName: 'Aimtrix', defaultHomeserver: { serverName: 'aimtrix.test', baseUrl: stack.origins.synapse }, allowCustomHomeservers: Boolean(stack.origins.secondary),
-        features: { demoMode: false, calls: false, gifs: false, stickers: false }, emojiPacks: { enabled: false }, stickerPacks: [], media: { maxUploadBytes: 1048576 } };
+        features: { demoMode: false, calls: false, gifs: false, stickers: false }, emojiPacks: { enabled: profileCount === 0 && journeyProfile !== 'history' && !probe, standard: false, bufo: false, packs: [{ name: 'Synthetic reactions', manifestUrl: '/live-reactions.json' }] }, stickerPacks: [], media: { maxUploadBytes: 1048576 } };
       await readFile('dist/index.html');
       server = await preview({ logLevel: 'silent', preview: { host: '127.0.0.1', port: Number(new URL(stack.origins.app).port), strictPort: true, open: false },
         plugins: [{ name: 'disposable-matrix-runtime', configurePreviewServer(vite) { vite.middlewares.use((request, response, next) => {
           if (request.url?.split('?')[0] === '/config.json') { response.setHeader('Content-Type', 'application/json'); response.setHeader('Cache-Control', 'no-store'); response.end(JSON.stringify(runtime)); }
+          else if (request.url === '/live-reactions.json') { response.setHeader('Content-Type', 'application/json'); response.end(JSON.stringify(reactionManifest)); }
+          else if (request.url === '/live-reaction.png') { response.setHeader('Content-Type', 'image/png'); response.end(reactionArtwork); }
           else next();
         }); } }],
       });

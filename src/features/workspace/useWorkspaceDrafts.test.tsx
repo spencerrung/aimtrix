@@ -12,6 +12,26 @@ function mount(store = new StructuredDraftStore()) {
 }
 
 describe('workspace structured draft adapter', () => {
+  it('clears accepted text after attachment-only revisions while preserving later files', () => {
+    const hook = mount();
+    act(() => { hook.result.current.update(room, { body: 'Sent text' }); });
+    const captured = hook.result.current.capture(room);
+    const attachments = [{ id: 'later', name: 'later.txt', size: 9, type: 'text/plain' }];
+    act(() => { hook.result.current.updateAttachments(room, attachments); });
+    act(() => { expect(hook.result.current.finish(captured)).toBe(true); });
+    expect(hook.result.current.get(room)).toEqual({ body: '', attachments });
+  });
+
+  it('does not treat an edit away and back as an attachment-only revision', () => {
+    const hook = mount();
+    act(() => { hook.result.current.update(room, { body: 'Sent text' }); });
+    const captured = hook.result.current.capture(room);
+    act(() => { hook.result.current.update(room, { body: 'Newer text' }); hook.result.current.update(room, { body: 'Sent text' }); });
+    act(() => { hook.result.current.updateAttachments(room, [{ id: 'later', name: 'later.txt', size: 9, type: 'text/plain' }]); });
+    act(() => { expect(hook.result.current.finish(captured)).toBe(false); });
+    expect(hook.result.current.get(room).body).toBe('Sent text');
+  });
+
   it('keeps room/thread metadata independent and restores complete original composition after editing', () => {
     const hook = mount();
     const original = { body: 'Original', mentions: [{ userId: '@other:example.test', label: 'Other' }], reply: { id: '$quoted', senderId: '@other:example.test', senderName: 'Other', body: 'Synthetic quote' }, attachments: [{ id: 'staged', name: 'synthetic.txt', size: 5, type: 'text/plain' }] };

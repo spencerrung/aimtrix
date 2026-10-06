@@ -135,7 +135,7 @@ function reactionsEqual(
       reaction.count === other.count &&
       reaction.reacted === other.reacted &&
       reaction.canRemove === other.canRemove &&
-      reaction.ownEventId === other.ownEventId;
+      reaction.ownEventId === other.ownEventId && reaction.name === other.name;
   });
 }
 
@@ -449,7 +449,7 @@ function messagesForEvents(
   const replacements = new Map<string, MatrixEvent>();
   const reactions = new Map<
     string,
-    Map<string, { senders: Set<string>; ownEventId?: string }>
+    Map<string, { senders: Set<string>; ownEventId?: string; name?: string }>
   >();
   // Set of event IDs that are thread roots (referenced by at least one m.thread relation).
   const threadRootIds = new Set<string>();
@@ -490,13 +490,15 @@ function messagesForEvents(
       event.getType() === matrixEventType.reaction &&
       relation?.rel_type === 'm.annotation' &&
       relation.event_id &&
-      relation.key &&
+      typeof relation.key === 'string' && relation.key.length > 0 && relation.key.length <= 2048 &&
       senderId &&
       eventId &&
       !event.isRedacted()
     ) {
       const byKey = reactions.get(relation.event_id) ?? new Map();
       const reaction = byKey.get(relation.key) ?? { senders: new Set<string>() };
+      const label = event.getContent()['dev.alucard.aimtrix.reaction.v1']?.name;
+      if (typeof label === 'string' && label.trim()) reaction.name ??= label.trim().slice(0, 120);
       reaction.senders.add(senderId);
       if (senderId === userId) reaction.ownEventId = eventId;
       byKey.set(relation.key, reaction);
@@ -524,6 +526,7 @@ function messagesForEvents(
         const ownReaction = reaction.ownEventId ? eventById.get(reaction.ownEventId) : undefined;
         return {
         key,
+        ...(reaction.name ? { name: reaction.name } : {}),
         count: reaction.senders.size,
         reacted: reaction.senders.has(userId),
         ownEventId: reaction.ownEventId,

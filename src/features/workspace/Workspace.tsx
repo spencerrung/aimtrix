@@ -1,3 +1,4 @@
+import type { ReactionImage } from '../media/emojiPacks';
 import type { ThreadAttentionActions } from './ThreadAttention';
 import type { ActivityActions, HomePosition } from './HomeActivity';
 import { MemberActions } from './MemberActions';
@@ -21,7 +22,6 @@ import type { HistorySearchFilters, HistorySearchPage } from '../../matrix/histo
 import { changeSavedReference, type SavedReference } from '../../matrix/savedReferences';
 import { type LinkPreview } from './MessageContent';
 import { SharedComposer, type SharedComposerHandle } from './SharedComposer';
-import { AttachmentTray } from './AttachmentTray';
 import { DraftList } from './DraftList';
 import { useWorkspaceDrafts } from './useWorkspaceDrafts';
 import { StagedAttachments } from './stagedAttachments';
@@ -227,6 +227,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
     eventId: string,
     key: string,
     ownReactionEventId?: string,
+    image?: ReactionImage,
   ) => Promise<void>;
   onSendTyping?: (roomId: string, typing: boolean) => Promise<void>;
   onSendSticker?: (
@@ -1285,7 +1286,7 @@ function BuddyPanel({
         />
       </label>
 
-      <label className="buddy-filter"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)}><option value="all">All conversations</option><option value="unread">Unread conversations</option><option value="favorites">Favorite conversations</option></select></label>
+      <label className="buddy-filter"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)}><option value="all">All chats</option><option value="unread">Unread</option><option value="favorites">Favorites</option></select></label>
       <div ref={buddyGroupsRef} className={`buddy-groups${showSpaceTree ? ' buddy-groups--space-tree' : ''}`}>
         {showSpaceTree && scopeSpace ? (
           <>
@@ -1630,7 +1631,7 @@ function Conversation({
   onCompositionChange: (value: StructuredDraft) => void;
   onThreadCompositionChange: (value: StructuredDraft) => void;
   attachmentQueue: StagedAttachments;
-  onStageFiles: (files: File[], threadRootId?: string, codeLanguage?: string) => void | Promise<void>;
+  onStageFiles: (files: File[], threadRootId?: string, codeLanguage?: string) => boolean | void | Promise<boolean | void>;
   sending: boolean;
   threadSending: boolean;
   notice?: string;
@@ -1656,7 +1657,7 @@ function Conversation({
   onTogglePin: (message: MessageSummary) => void | Promise<void>;
   onCancelContext: () => void;
   onCancelThreadEdit: () => void;
-  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void | Promise<void>;
+  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string, image?: ReactionImage) => void | Promise<void>;
   emojiPacks: EmojiPackDefinition[];
   emojiAssetBaseUrl?: string;
   onSendSticker: (sticker: { id: string; name: string; src: string }, threadRootId?: string) => Promise<unknown>;
@@ -1962,6 +1963,19 @@ function Conversation({
       previousTimelineMessages.current = messages;
       return;
     }
+    // The controller can publish a live selection before React receives it.
+    // Old unread/anchor renders must not freeze that new selection again while
+    // this explicit jump is waiting for its matching snapshot.
+    if (returning && returning.roomId === room?.id && returning.token === historyRequestToken.current) {
+      if (history?.error && history.revision > returning.afterRevision && !history.loading) {
+        pendingLatest.current = undefined;
+        activeHistoryRequest.current = undefined;
+        setHistoryAction(undefined);
+      }
+      restoreTimelineViewport();
+      previousTimelineMessages.current = messages;
+      return;
+    }
     if (historicalWindow && viewportMode.current === 'bottom') {
       viewportMode.current = 'detached';
       setTimelineDetached(true);
@@ -2022,7 +2036,7 @@ function Conversation({
   }, [captureNavigationReading]);
   useLayoutEffect(() => {
     const element = timeline.current;
-    if (!element || !conversationVisible || navigationPending || history?.loading) return;
+    if (!element || !conversationVisible || navigationPending || history?.loading || pendingLatest.current) return;
     if (restoredNavigationEntry.current !== navigationEntry) {
       const saved = navigationReading;
       if (saved?.atLatest) {
@@ -2246,13 +2260,28 @@ function Conversation({
     });
   }, [history, onCloseContext, onDetachedChange, onNavigationLive, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll, searchOpen]);
 
+  useEffect(() => {
+    if (historyAction !== 'latest') return;
+    const request = pendingLatest.current;
+    if (!request || request.roomId !== room?.id) return;
+    const timer = window.setTimeout(() => {
+      if (pendingLatest.current !== request || request.token !== historyRequestToken.current) return;
+      historyRequestToken.current += 1;
+      pendingLatest.current = undefined;
+      activeHistoryRequest.current = undefined;
+      setHistoryAction(undefined);
+      setLocalHistoryError({ direction: 'latest', message: 'Latest messages have not appeared yet. Your reading position has been kept. Try again.' });
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [historyAction, room?.id]);
+
   useEffect(() => { if (viewportMode.current === 'bottom') reportLatestRead(); }, [history?.revision, latestMessageId, reportLatestRead, timelineDetached]);
 
   const handleMediaLoad = useCallback(() => { restoreTimelineViewport(); }, [restoreTimelineViewport]);
 
   const handleTimelineScroll = useCallback(() => {
     const element = timeline.current;
-    if (!element || !conversationVisible || programmaticTimelineScroll.current) return;
+    if (!element || !conversationVisible || programmaticTimelineScroll.current || pendingLatest.current) return;
     const movement = element.scrollTop - lastKnownScrollTop.current;
     const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
     lastKnownScrollTop.current = element.scrollTop;
@@ -2550,9 +2579,9 @@ function Conversation({
             {onLatestThread && activeThread.history?.mode !== 'live' ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><button type="button" disabled={threadHistoryBusy} onClick={latestThread}>Jump to latest replies</button></div> : null}
             {threadReadError?.roomId === room.id && threadReadError.rootId === activeThread.rootId ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" disabled={threadHistoryBusy || Boolean(activeThread.history && activeThread.history.mode !== 'live')} title={activeThread.history && activeThread.history.mode !== 'live' ? 'Jump to latest replies to retry this observed read status' : undefined} onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
           {notice ? <p className="history-feedback" role="status">{notice}</p> : null}
-          {!threadComposition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id, threadRootId: activeThread.rootId }} /> : null}
           <SharedComposer ref={threadComposer} key={`${room.id}:${activeThread.rootId}`} contextKey={JSON.stringify([room.id, activeThread.rootId])}
             disabled={Boolean(room.replacementRoomId)}
+            attachments={threadComposition.edit ? undefined : { queue: attachmentQueue, context: { roomId: room.id, threadRootId: activeThread.rootId } }}
             value={threadComposition} onChange={onThreadCompositionChange} onSubmit={onThreadSubmit}
             thread active={contextPanel === 'thread' && !threadCollapsed} sending={threadSending}
             members={members} roomName={room.name} emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl}
@@ -2581,9 +2610,9 @@ function Conversation({
         {notice ? <>{notice}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
       </div>
       <div className="conversation-composition">
-      {!composition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id }} /> : null}
       <SharedComposer ref={mainComposer} key={room.id} contextKey={JSON.stringify([room.id, null])}
         disabled={Boolean(room.replacementRoomId)}
+        attachments={composition.edit ? undefined : { queue: attachmentQueue, context: { roomId: room.id } }}
         value={composition} onChange={onCompositionChange} onSubmit={onSubmit}
         active={conversationVisible} sending={sending} members={members} roomName={room.name}
         emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl} stickerPacks={stickerPacks}
@@ -3892,7 +3921,7 @@ export function Workspace({
     cancel: (id) => attachmentActions.get('current')!.onCancelUpload?.(id),
     persist: (context, attachments) => {
       const state = attachmentActions.get('current')!.draftsState;
-      if (state.isActive()) state.update(context, { ...state.get(context), attachments });
+      if (state.isActive()) state.updateAttachments(context, attachments);
     },
   }));
   const restoredAttachmentIds = useRef(new Set<string>());
@@ -3911,10 +3940,11 @@ export function Workspace({
   const anySending = Object.values(mediaSends).some(Boolean) || sendingContexts.size > 0 || filesSending;
   useEffect(() => { onDraftStateChange?.({ hasDrafts: hasSavedDrafts, volatile: draftsVolatile, hasAttachments: hasStagedFiles, sending: anySending }); }, [onDraftStateChange, hasSavedDrafts, draftsVolatile, hasStagedFiles, anySending]);
   const stageFiles = (files: File[], threadRootId?: string, codeLanguage?: string) => {
-    if (!effectiveRoomId || !draftsState.isActive()) return;
-    if (roomIsUpgraded(workspace, effectiveRoomId)) { setNotice(upgradedSendNotice); return; }
+    if (!effectiveRoomId || !draftsState.isActive()) return false;
+    if (roomIsUpgraded(workspace, effectiveRoomId)) { setNotice(upgradedSendNotice); return false; }
     const errors = attachmentQueue.stage({ roomId: effectiveRoomId, ...(threadRootId ? { threadRootId } : {}) }, files, codeLanguage);
     if (errors.length) setNotice(errors.join(' '));
+    return errors.length === 0;
   };
   const sendRecordedVoice = async (target: { roomId: string; threadRootId?: string }, file: File, durationMs: number, waveform?: number[]) => {
     if (!draftsState.isActive()) throw new Error('This account is no longer active.');
@@ -4107,10 +4137,11 @@ export function Workspace({
 
   const handleDeleteMessage = useCallback((message: MessageSummary) => { setDeleteTarget(message); }, []);
 
-  const handleReact = useCallback(async (message: MessageSummary, key: string, ownReactionEventId?: string) => {
+  const handleReact = useCallback(async (message: MessageSummary, key: string, ownReactionEventId?: string, image?: ReactionImage) => {
     if (workspace.mode === 'matrix') {
       if (!onToggleReaction) throw new Error('Reactions are unavailable.');
-      await onToggleReaction(message.roomId, message.id, key, ownReactionEventId);
+      if (image) await onToggleReaction(message.roomId, message.id, key, ownReactionEventId, image);
+      else await onToggleReaction(message.roomId, message.id, key, ownReactionEventId);
     } else setDemoMessageOverrides((current) => {
       const reactions = [...(current[message.id]?.reactions ?? message.reactions ?? [])];
       const previous = reactions.find((item) => item.key === key);
@@ -4172,7 +4203,7 @@ export function Workspace({
       }
       const cleared = finish();
       if (cleared && !context.threadRootId && preferences.sendTypingNotifications) void onSendTyping?.(context.roomId, false);
-      return cleared ? edit ? 'edited' : 'sent' : false;
+      return edit ? 'edited' : 'sent';
     } catch (error) {
       const retained = error instanceof MessageSendError && error.localEchoRetained;
       const cleared = retained && finish();

@@ -1,6 +1,7 @@
 /* global localStorage, indexedDB, fetch, AbortController, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
 import { expect } from '@playwright/test';
 import { expectedJourneyChecks, assertJourneyCoverage } from './journey-profiles.mjs';
+import { reactionArtwork } from './reaction-fixture.mjs';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -76,6 +77,12 @@ async function openMatrixEvent(page, roomId, eventId) {
   await dialog.getByRole('button', { name: 'Open link', exact: true }).click();
   await dialog.waitFor({ state: 'hidden' });
 }
+async function openAttachmentOptions(surface, name) {
+  const summary = surface.getByLabel(`Options for ${name}`, { exact: true });
+  await summary.waitFor();
+  if (!await summary.evaluate((element) => element.closest('details').open)) await summary.click();
+}
+
 async function verifyAttachment(scope, file, caption) {
   const link = scope.locator('.message-file').filter({ hasText: file.name });
   await link.waitFor({ timeout: 45000 });
@@ -1751,7 +1758,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       metrics.attachmentInputCount = await alice.getByLabel('Choose attachment', { exact: true }).count();
       const bytes = Buffer.from(`Disposable attachment ${randomBytes(24).toString('hex')}`);
       await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles({ name: 'synthetic.bin', mimeType: 'application/octet-stream', buffer: bytes });
-      await alice.getByRole('button', { name: 'Send attachments', exact: true }).click();
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
       await until(() => uploads.length > 0, 'upload-response');
       const source = uploads.at(-1).content_uri;
       invariant(source?.startsWith('mxc://aimtrix.test/'), 'mxc-upload');
@@ -1766,6 +1773,51 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       const received = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
       invariant(Buffer.from(received).equals(bytes), 'attachment-decryption');
       invariant(wire.every((event) => event.path.includes('/m.room.encrypted/')), 'encrypted-media-event');
+    });
+    await check('standard-custom-mxc-reaction', async () => {
+      // Add a recent encrypted target so both core and full journeys exercise
+      // the same live tail, independently of historical pagination.
+      const caption = `Synthetic reaction target ${randomBytes(8).toString('hex')}`;
+      await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(caption);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      const row = alice.locator('.timeline-message').filter({ hasText: caption });
+      await until(async () => (await row.getAttribute('data-event-id'))?.startsWith('$'), 'custom-reaction-target');
+      const targetId = await row.getAttribute('data-event-id');
+      const target = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(targetId)}`, { token: bobSession.accessToken });
+      invariant(target.type === 'm.room.encrypted' && !JSON.stringify(target.content).includes(caption), 'custom-reaction-encrypted-target');
+      await (await messageActions(alice, row)).getByRole('menuitem', { name: 'Add reaction', exact: true }).click();
+      const picker = alice.getByRole('dialog', { name: 'Choose a reaction', exact: true });
+      await picker.getByRole('textbox', { name: 'Search reaction emoji', exact: true }).fill('synthetic cheer');
+      const choice = picker.getByRole('button', { name: 'React with :synthetic-wave:', exact: true });
+      await expect.poll(() => choice.locator('img').evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
+      const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.reaction/'));
+      await choice.click();
+      const response = await sent;
+      invariant(response.ok(), 'custom-reaction-send');
+      const { event_id: reactionId } = await response.json();
+      const event = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(reactionId)}`, { token: bobSession.accessToken });
+      const relation = event.content?.['m.relates_to'];
+      invariant(event.type === 'm.reaction' && event.sender === accounts.alice.user_id && relation?.rel_type === 'm.annotation' && relation.event_id === targetId, 'custom-reaction-standard-annotation');
+      invariant(event.content['dev.alucard.aimtrix.reaction.v1']?.name === 'Synthetic wave', 'custom-reaction-persisted-label');
+      invariant(relation.key?.startsWith('mxc://aimtrix.test/'), 'custom-reaction-uploaded-mxc');
+      const mediaPath = `/_matrix/client/v1/media/download/${relation.key.slice(6)}`;
+      const anonymous = await fetch(`${stack.origins.synapse}${mediaPath}`, { signal: AbortSignal.timeout(10000) });
+      invariant(anonymous.status === 401, 'custom-reaction-authenticated-download');
+      const downloaded = await api(mediaPath, { token: bobSession.accessToken, binary: true });
+      invariant(Buffer.from(downloaded).equals(reactionArtwork), 'custom-reaction-upload-bytes');
+      const thumbnail = await api(`/_matrix/client/v1/media/thumbnail/${relation.key.slice(6)}?width=48&height=48&method=crop`, { token: bobSession.accessToken, binary: true });
+      const peerChip = bob.locator('.timeline-message').filter({ hasText: caption }).getByRole('button', { name: 'Synthetic wave, 1 reactions', exact: true });
+      const verifyPeer = async () => {
+        await peerChip.waitFor({ timeout: 45000 });
+        const image = peerChip.locator('img');
+        await expect.poll(() => image.evaluate((element) => element.complete && element.naturalWidth > 0 && element.src.startsWith('blob:'))).toBe(true);
+        const bytes = await image.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.src)).arrayBuffer())));
+        invariant(Buffer.from(bytes).equals(Buffer.from(thumbnail)), 'custom-reaction-peer-image');
+      };
+      await verifyPeer();
+      await bob.reload();
+      await openRoom(bob, roomName);
+      await verifyPeer();
     });
     const openTool = async (name) => {
       const more = alice.getByRole('button', { name: 'More message tools' });
@@ -2027,7 +2079,10 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       const captions = ['Synthetic first attachment caption', 'Synthetic second attachment caption'];
       const start = wire.length;
       await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles(files);
-      for (let index = 0; index < files.length; index++) await alice.getByLabel(`Caption for ${files[index].name}`, { exact: true }).fill(captions[index]);
+      for (let index = 0; index < files.length; index++) {
+        await openAttachmentOptions(alice, files[index].name);
+        await alice.getByLabel(`Caption for ${files[index].name}`, { exact: true }).fill(captions[index]);
+      }
       invariant(wire.length === start, 'attachment-staging-no-send');
       const pattern = '**/rooms/*/send/m.room.encrypted/*';
       let requests = 0;
@@ -2036,7 +2091,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         : route.continue();
       await alice.route(pattern, rejectSecond);
       try {
-        await alice.getByRole('button', { name: 'Send attachments', exact: true }).click();
+        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
         const retry = alice.getByRole('button', { name: `Retry ${files[1].name}`, exact: true });
         await retry.waitFor();
         await verifyAttachment(bob, files[0], captions[0]);
@@ -2070,8 +2125,9 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       const caption = 'Synthetic threaded attachment caption';
       const start = wire.length;
       await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(file);
+      await openAttachmentOptions(thread, file.name);
       await thread.getByLabel(`Caption for ${file.name}`, { exact: true }).fill(caption);
-      await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
+      await thread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
       await thread.getByRole('region', { name: 'Thread attachments', exact: true }).waitFor({ state: 'hidden' });
       await bob.locator('.timeline-message').filter({ hasText: marker }).locator('.thread-summary').click();
       const peerThread = bob.getByRole('complementary', { name: 'Thread', exact: true });
@@ -2092,6 +2148,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         const start = wire.length;
         await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(roomDraft);
         await alice.getByLabel('Choose attachment', { exact: true }).setInputFiles(roomFile);
+        await openAttachmentOptions(alice, roomFile.name);
         await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).fill(roomCaption);
         stage = 'draft-stage-thread';
         await openMatrixEvent(alice, roomId, attachmentThreadRootId);
@@ -2101,6 +2158,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         stage = 'draft-thread-file';
         await thread.getByLabel('Choose thread attachment', { exact: true }).setInputFiles(threadFile);
         stage = 'draft-thread-caption';
+        await openAttachmentOptions(thread, threadFile.name);
         await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).fill(threadCaption);
         stage = 'draft-thread-persistence';
         // Observe only synthetic draft strings in memory; do not persist a storage snapshot.
@@ -2114,17 +2172,19 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         const roomComposer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
         await until(async () => await roomComposer.innerText() === roomDraft, 'room-draft-restored');
         await alice.getByLabel(`Reattach ${roomFile.name}`, { exact: true }).waitFor();
-        invariant(await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).inputValue() === roomCaption && await alice.getByRole('button', { name: 'Send attachments', exact: true }).isDisabled(), 'draft-reattach-required');
+        invariant(await alice.getByLabel(`Caption for ${roomFile.name}`, { exact: true }).inputValue() === roomCaption && await alice.getByRole('region', { name: 'Attachments', exact: true }).getByText('Reattach file', { exact: true }).isVisible() && await alice.getByRole('button', { name: `Send only ${roomFile.name}`, exact: true }).count() === 0, 'draft-reattach-required');
         stage = 'draft-reload-thread';
         await openMatrixEvent(alice, roomId, attachmentThreadRootId);
         await until(async () => await thread.getByRole('textbox', { name: 'Message thread', exact: true }).innerText() === threadDraft, 'thread-draft-restored');
         stage = 'draft-reattach-thread';
         await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).waitFor();
-        invariant(await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).inputValue() === threadCaption && await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).isDisabled(), 'draft-reattach-required');
+        invariant(await thread.getByLabel(`Caption for ${threadFile.name}`, { exact: true }).inputValue() === threadCaption && await thread.getByRole('region', { name: 'Thread attachments', exact: true }).getByText('Reattach file', { exact: true }).isVisible() && await thread.getByRole('button', { name: `Send only ${threadFile.name}`, exact: true }).count() === 0, 'draft-reattach-required');
         invariant(wire.length === start, 'draft-reload-no-send');
         stage = 'draft-send-reattached';
         await thread.getByLabel(`Reattach ${threadFile.name}`, { exact: true }).setInputFiles(threadFile);
-        await thread.getByRole('button', { name: 'Send thread attachments', exact: true }).click();
+        // Send only the reviewed file: the independent text draft must survive.
+        await openAttachmentOptions(thread, threadFile.name);
+        await thread.getByRole('button', { name: `Send only ${threadFile.name}`, exact: true }).click();
         await thread.getByRole('region', { name: 'Thread attachments', exact: true }).waitFor({ state: 'hidden' });
         stage = 'draft-receive-reattached';
         await openMatrixEvent(bob, roomId, attachmentThreadRootId);

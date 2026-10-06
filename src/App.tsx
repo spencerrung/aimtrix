@@ -427,8 +427,8 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
         onEditMessage={(roomId, eventId, body, mentions, inlineEmojis) => controller.editMessage(roomId, eventId, body, mentions, inlineEmojis)}
         onRedactMessage={(roomId, eventId) => controller.redactMessage(roomId, eventId)}
         onTogglePinnedMessage={(roomId, eventId, pinned) => controller.togglePinnedMessage(roomId, eventId, pinned)}
-        onToggleReaction={(roomId, eventId, key, ownReactionEventId) =>
-          controller.toggleReaction(roomId, eventId, key, ownReactionEventId)
+        onToggleReaction={(roomId, eventId, key, ownReactionEventId, image) =>
+          controller.toggleReaction(roomId, eventId, key, ownReactionEventId, image)
         }
         onSendTyping={(roomId, typing) => controller.sendTyping(roomId, typing)}
         onSendSticker={(roomId, sticker, rootId) => controller.sendSticker(roomId, sticker, rootId)}

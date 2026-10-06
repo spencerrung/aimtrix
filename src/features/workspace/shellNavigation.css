@@ -49,3 +49,40 @@
     .app-stage.mobile-chat-open:not(.activity-open) .workspace-grid { padding-bottom: env(safe-area-inset-bottom, 0px); }
   }
 }
+
+/* Phone density: spend height on conversations, keep every primary target 44px. */
+@layer responsive {
+  @media (max-width: 767px) {
+    .app-stage .app-titlebar { min-height: 44px; background: linear-gradient(var(--chrome-start), var(--chrome-end)); }
+    .workspace-navigation button, .workspace-navigation .workspace-navigation__chats { min-height: 44px; gap: 1px; padding-block: 2px; font-size: .65rem; }
+    .workspace-navigation button svg { width: 19px; height: 19px; }
+    .app-stage .space-rail { min-height: 52px; padding-block: 4px; gap: 5px; }
+    .space-button > span, .space-button > img { width: 34px; height: 34px; border-radius: 10px; }
+    .app-stage .buddy-panel { grid-template-columns: minmax(0,1fr) 120px; grid-template-rows: auto auto minmax(0,1fr) auto; }
+    .buddy-panel__heading { grid-area: 1 / 1 / auto / -1; min-height: 44px; padding: 0 8px; }
+    .buddy-panel__heading .eyebrow { display: none; }
+    .buddy-panel__heading h2 { font-size: .93rem; }
+    .buddy-search { grid-area: 2 / 1; height: 44px; margin: 0 4px 6px 8px; border-radius: 9px; }
+    .buddy-filter { grid-area: 2 / 2; margin: 0 8px 6px 0; }
+    .buddy-filter select { padding-inline: 7px; border-radius: 9px; }
+    .buddy-groups { grid-area: 3 / 1 / auto / -1; }
+    .self-card { grid-area: 4 / 1 / auto / -1; min-height: 44px; }
+    .self-card__profile { min-height: 44px; padding-block: 3px; }
+    .self-card__profile > .avatar { width: 28px; height: 28px; }
+    .self-card small { margin-top: 0; }
+    .buddy-row { min-height: 50px; gap: 8px; padding: 5px 9px; }
+    :root[data-density="compact"] .buddy-row { min-height: 45px; padding-block: 4px; }
+    :root[data-density="roomy"] .buddy-row { min-height: 66px; padding-block: 10px; }
+    .buddy-row > .avatar { width: 30px; height: 30px; border-radius: 8px; }
+    .conversation .conversation-header { min-height: 52px; background: var(--surface-inset); isolation: isolate; }
+    .conversation-header > .avatar { width: 30px; height: 30px; }
+    .timeline { padding-inline: 6px; }
+    .timeline-message { grid-template-columns: 26px minmax(0,1fr); gap: 5px; padding-inline: 0; }
+    .timeline-message--own { grid-template-columns: minmax(0,1fr) 26px; }
+    .timeline-message > .avatar { width: 26px; height: 26px; border-radius: 7px; }
+    .timeline-message .timeline-message__content { max-width: 100%; padding: 4px 8px 6px; }
+    .conversation--backdrop .timeline-message { padding-inline: 0; }
+    .message-media { max-height: min(260px, 38dvh); }
+    .conversation--backdrop::before { top: 52px; }
+  }
+}

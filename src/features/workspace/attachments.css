@@ -1,3 +1,21 @@
-.attachment-tray{flex-shrink:0;max-height:min(32dvh,240px);overflow:auto;padding:8px 12px;border-top:1px solid var(--border);background:var(--surface-raised);color:var(--text);font-size:12px}.attachment-tray header,.attachment-tray__details,.attachment-tray__actions{display:flex;align-items:center;flex-wrap:wrap;gap:8px}.attachment-tray ol{list-style:none;margin:8px 0;padding:0}.attachment-tray li{padding:8px 0;border-bottom:1px solid var(--border)}.attachment-tray strong{overflow-wrap:anywhere;min-width:0}.attachment-tray small{opacity:.8}.attachment-tray label{display:block}.attachment-tray input:not([type=file]){display:block;width:100%;box-sizing:border-box;min-height:32px;padding:4px 6px;border:1px solid var(--border);border-radius:4px;background:var(--surface-inset);color:var(--text);font:inherit}.attachment-tray button,.attachment-tray .aqua-button{min-height:36px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface-soft);color:var(--text);font:inherit}.attachment-tray button:disabled{opacity:.5}.attachment-tray__preview{display:block;max-width:180px;max-height:110px;object-fit:contain}.attachment-tray__actions{margin-top:6px}@media(max-width:767px),(pointer:coarse){.attachment-tray{max-height:min(25dvh,180px)}.attachment-tray button,.attachment-tray .aqua-button{min-height:44px}}
-
-.attachment-tray .aqua-button:focus-within{outline:2px solid var(--blue-deep);outline-offset:2px}
+/* Staged files share the message field; the strip scrolls independently of Send. */
+.attachment-tray { min-width: 0; max-height: 176px; overflow: auto; color: var(--text); font-size: 12px; overscroll-behavior: contain; }
+.attachment-tray ol { display: flex; align-items: flex-start; gap: 6px; list-style: none; margin: 0; padding: 4px; }
+.attachment-tray li { display: grid; grid-template-columns: 48px minmax(0,1fr) 44px; align-items: center; gap: 4px; flex: 0 0 min(100%,240px); min-width: 0; padding: 4px; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-raised); }
+.attachment-tray__preview,.attachment-tray__file { display: block; width: 48px; height: 48px; object-fit: cover; border-radius: 4px; }
+.attachment-tray__file { padding: 10px; color: var(--text-soft); }
+.attachment-tray__details { display: grid; min-width: 0; gap: 2px; }
+.attachment-tray strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.attachment-tray small { color: var(--text-soft); }
+.attachment-tray__details [role=status] { font-size: 11px; }
+.attachment-tray button,.attachment-tray .aqua-button,.attachment-tray summary { min-height: 44px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 5px; background: var(--surface-soft); color: var(--text); font: inherit; }
+.attachment-tray button:disabled { opacity: .5; }
+.attachment-tray__remove { display: grid; place-items: center; width: 44px; }
+.attachment-tray__options { grid-column: 1 / -1; min-width: 0; }
+.attachment-tray summary { cursor: pointer; align-content: center; }
+.attachment-tray label { display: block; margin-block: 6px; overflow-wrap: anywhere; }
+.attachment-tray input:not([type=file]) { display: block; width: 100%; box-sizing: border-box; min-height: 44px; padding: 6px; border: 1px solid var(--border); border-radius: 4px; background: var(--surface-inset); color: var(--text); font: inherit; }
+.attachment-tray__actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.attachment-tray p,.attachment-tray li > button:not(.attachment-tray__remove),.attachment-tray audio { grid-column: 1 / -1; min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+.attachment-tray :is(button,summary,input):focus-visible,.attachment-tray .aqua-button:focus-within { outline: 2px solid var(--blue-deep); outline-offset: -2px; }
+:root[data-compact-viewport=true] .attachment-tray { max-height: 112px; }

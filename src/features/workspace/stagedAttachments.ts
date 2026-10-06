@@ -29,12 +29,14 @@ export class StagedAttachments {
   getVersion = () => this.version;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
   list(context: DraftContext): StagedAttachment[] { return this.items.filter((item) => attachmentContextKey(item.context) === attachmentContextKey(context)); }
-  private changed(context: DraftContext): void {
-    const descriptors = this.list(context).filter((item) => item.phase !== 'cancelled').map((item) => ({
+  descriptors(context: DraftContext): DraftAttachment[] {
+    return this.list(context).filter((item) => item.phase !== 'cancelled').map((item) => ({
       id: item.id, name: item.name, type: item.type, size: item.size, lastModified: item.lastModified,
       codeLanguage: item.codeLanguage, caption: item.caption, interrupted: item.interrupted, voice: item.voice,
     }));
-    this.actions.persist(context, descriptors);
+  }
+  private changed(context: DraftContext): void {
+    this.actions.persist(context, this.descriptors(context));
     this.version++; for (const listener of this.listeners) listener();
   }
   restore(context: DraftContext, descriptors: DraftAttachment[]): void {
@@ -89,8 +91,8 @@ export class StagedAttachments {
     this.items = this.items.filter((candidate) => candidate !== item);
     this.changed(item.context);
   }
-  send(context: DraftContext): void {
-    for (const item of this.list(context)) if (item.phase === 'staged' && item.file) item.phase = 'queued';
+  send(context: DraftContext, ids?: readonly string[]): void {
+    for (const item of this.list(context)) if (item.phase === 'staged' && item.file && (!ids || ids.includes(item.id))) item.phase = 'queued';
     this.changed(context); void this.pump();
   }
   sendOne(id: string): void {

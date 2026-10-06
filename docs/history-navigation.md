@@ -10,6 +10,8 @@ Each operation has a bounded raw-event and network-request budget (10,000 events
 
 Room, client, membership and navigation generations guard asynchronous completion. Switching rooms, requesting another context, returning to live, leaving a room, or shutting down prevents an older operation from replacing the selected conversation. A sync timeline reset refreshes live mode while preserving historical selections. These windows are in-memory view state; SDK storage/cache policies and account-scale memory profiling remain separate work under #163.
 
+Returning to latest waits for a newer live snapshot before moving the viewport or acknowledging its tail. During that transition, stale unread/reading-position renders and delayed scroll events cannot detach the controller again. If no matching snapshot arrives within 15 seconds, the loading state ends with retry feedback while retaining the reading position; controller errors and room changes also settle or invalidate the request. This timeout does not claim that unavailable messages were loaded.
+
 Automatic unread detachment waits until the SDK has completed its initial sync batch. Explicit history/context requests still take precedence. The readiness latch survives a later disconnect, so genuine historical reading remains frozen while offline.
 
 ## Reading position and navigation

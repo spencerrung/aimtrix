@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
 import { BarChart3, BellRing, Film, MapPin, Mic, Paperclip, Plus, Search, Send, Smile, Sticker, X } from 'lucide-react';
 import { Popover } from '../../components/Popover';
 import { useMediaSource } from '../../matrix/useMediaSource';
@@ -8,7 +8,9 @@ import { emojiReactionKey, loadEmojiPacks, type EmojiPackDefinition, type EmojiP
 import { GifPicker, type GifChoice } from '../media/GifPicker';
 import { loadStickerPack } from '../media/stickerPacks';
 import { InlineComposer, type InlineComposerHandle, type InlineComposerSelection } from './InlineComposer';
-import type { DraftInlineEmoji, DraftMention, StructuredDraft } from './structuredDrafts';
+import { AttachmentTray } from './AttachmentTray';
+import type { StagedAttachments } from './stagedAttachments';
+import type { DraftContext, DraftInlineEmoji, DraftMention, StructuredDraft } from './structuredDrafts';
 
 export type ComposerResult = 'sent' | 'edited' | 'retained' | false;
 export interface ComposerSticker { id: string; name: string; src: string }
@@ -19,7 +21,8 @@ export interface SharedComposerProps {
   value: StructuredDraft;
   onChange(value: StructuredDraft): void;
   onSubmit(body: string, mentions: DraftMention[], inlineEmojis: DraftInlineEmoji[]): Promise<ComposerResult>;
-  stageFiles?(files: File[], codeLanguage?: string): void | Promise<void>;
+  attachments?: { queue: StagedAttachments; context: DraftContext };
+  stageFiles?(files: File[], codeLanguage?: string): boolean | void | Promise<boolean | void>;
   sendSticker?(sticker: ComposerSticker): void | Promise<void>;
   sendGif?(gif: GifChoice): void | Promise<void>;
   onNudge?(): void | Promise<void>;
@@ -42,6 +45,8 @@ export interface SharedComposerProps {
   disabled?: boolean;
 }
 
+const noSubscribe = () => () => {};
+const noVersion = () => 0;
 const FALLBACK = ['😀', '😂', '🥹', '😍', '😎', '🤔', '😭', '😡', '👍', '👀', '✨', '💙', '🎉', '🔥', '🫧', '☕', '💾', '🌈'];
 const LANGUAGES = { text: 'Text', typescript: 'TS', javascript: 'JS', python: 'Py', rust: 'Rust', bash: 'Bash', json: 'JSON', yaml: 'YAML' };
 const EXTENSIONS: Record<string, string> = { bash: 'sh', javascript: 'js', json: 'json', python: 'py', rust: 'rs', text: 'txt', typescript: 'ts', yaml: 'yaml' };
@@ -61,6 +66,8 @@ function Asset({ entry }: { entry: Pick<EmojiPackEntry, 'emoji' | 'src' | 'previ
 /** Shared room/thread tools; the owner performs revision-safe send cleanup. */
 export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerProps>(function SharedComposer(props, forwardedRef) {
   const { value, onChange, members, emojiPacks, emojiAssetBaseUrl, stickerPacks, defaultStickerPack, gifEndpoint, thread, roomName, active = true, disabled = false, sending = false } = props;
+  useSyncExternalStore(props.attachments?.queue.subscribe ?? noSubscribe, props.attachments?.queue.getVersion ?? noVersion, noVersion);
+  const hasAttachments = props.attachments?.queue.list(props.attachments.context).some((item) => item.phase === 'staged') ?? false;
   const composer = useRef<InlineComposerHandle>(null);
   const form = useRef<HTMLFormElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -180,14 +187,24 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
   const runTool = (operation: () => void | Promise<void>) => { const generation = contextGeneration.current; setError(''); void Promise.resolve().then(() => { if (mounted.current && contextGeneration.current === generation) return operation(); }).catch(() => { if (mounted.current && contextGeneration.current === generation) setError('That action could not finish. Try again.'); }); };
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    if (disabled || sending || busyRef.current || !value.body.trim()) return;
+    if (disabled || sending || busyRef.current || (!value.body.trim() && !hasAttachments)) return;
+    const attachments = props.attachments;
+    const attachmentIds = attachments?.queue.list(attachments.context).filter((item) => item.phase === 'staged').map((item) => item.id);
+    if (!value.body.trim()) {
+      attachments?.queue.send(attachments.context, attachmentIds);
+      if (attachmentIds?.length && mounted.current && current.current.contextKey === identity && current.current.active !== false) props.onSubmitted?.('sent');
+      return;
+    }
     const submitted = current.current.value;
     const mentions = [...(submitted.mentions ?? []), ...(submitted.edit?.mentions ?? [])].filter((mention, index, items) => visibleMention(submitted.body, mention.label) && items.findIndex((item) => item.userId === mention.userId && item.label === mention.label) === index);
     const body = submitted.codeMode ? `\`\`\`${submitted.codeLanguage ?? 'text'}\n${submitted.body}\n\`\`\`` : submitted.body;
     busyRef.current = true; setBusy(true); setError('');
     const generation = ++sendGeneration.current;
     void props.onSubmit(body, mentions, submitted.inlineEmojis ?? []).then((result) => {
-      if (result && mounted.current && current.current.contextKey === identity && sendGeneration.current === generation) props.onSubmitted?.(result);
+      if (result && mounted.current && current.current.contextKey === identity && sendGeneration.current === generation) {
+        if (result === 'sent') attachments?.queue.send(attachments.context, attachmentIds);
+        props.onSubmitted?.(result);
+      }
     }).catch(() => { if (mounted.current && current.current.contextKey === identity && sendGeneration.current === generation) setError('The message could not be sent. Your draft is still here.'); }).finally(() => {
       if (!mounted.current || sendGeneration.current !== generation) return;
       busyRef.current = false;
@@ -195,9 +212,21 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
       if (current.current.contextKey === identity && current.current.value === submitted && (document.activeElement === document.body || form.current?.contains(document.activeElement))) focus();
     });
   };
-  const stage = (files: File[], codeLanguage?: string) => {
+  const stage = (files: File[], codeLanguage?: string, convertCode = false) => {
     const prepared = files.map((file) => !file.name && file.type.startsWith('image/') ? new File([file], `pasted-image.${file.type === 'image/jpeg' ? 'jpg' : file.type === 'image/webp' ? 'webp' : file.type === 'image/gif' ? 'gif' : 'png'}`, { type: file.type }) : file);
-    if (prepared.length && props.stageFiles) runTool(() => props.stageFiles!(prepared, codeLanguage));
+    if (prepared.length && props.stageFiles) {
+      const submitted = current.current.value, generation = contextGeneration.current;
+      setMore(false);
+      runTool(async () => {
+        const accepted = await props.stageFiles!(prepared, codeLanguage);
+        const latest = current.current.value;
+        if (convertCode && accepted === true && mounted.current && contextGeneration.current === generation
+          && latest.body === submitted.body && latest.codeMode === submitted.codeMode && latest.codeLanguage === submitted.codeLanguage) {
+          change({ ...latest, body: '', codeMode: false, inlineEmojis: [], mentions: [],
+            attachments: props.attachments ? props.attachments.queue.descriptors(props.attachments.context) : latest.attachments });
+        }
+      });
+    }
   };
   const visibleEmoji = [...FALLBACK.map((emoji) => ({ id: emoji, name: emoji, emoji })), ...catalog.filter((entry) => !entry.emoji || !FALLBACK.includes(entry.emoji))]
     .filter((entry) => !query.trim() || `${entry.name} ${entry.emoji ?? ''} ${'aliases' in entry ? entry.aliases?.join(' ') : ''}`.toLowerCase().includes(query.toLowerCase()))
@@ -214,12 +243,12 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
     {active && mentionResults.length ? <div className="mention-complete" role="listbox" aria-label="Mention a room member">{mentionResults.map((member, index) => <button type="button" role="option" aria-selected={index === suggestionIndex % mentionResults.length} className={index === suggestionIndex % mentionResults.length ? 'is-active' : ''} key={member.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(member)}><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}</div> : null}
     <form ref={form} className="composer" aria-label={thread ? 'Thread message composer' : 'Message composer'} onSubmit={submit} onKeyDown={(event) => { if (event.key === 'Escape' && more) { event.preventDefault(); event.stopPropagation(); closeMore(); } }}>
       <input ref={fileInput} className="sr-only" type="file" multiple aria-label={thread ? 'Choose thread attachment' : 'Choose attachment'} onChange={(event) => { stage(Array.from(event.target.files ?? [])); event.target.value = ''; }} />
-      <label className="composer__field"><span className="sr-only">{thread ? 'Message thread' : `Message ${roomName}`}</span>{value.codeMode || value.body.startsWith('```') ? <span className="composer-code-preview" aria-label="Code block mode">{value.codeLanguage ?? 'text'} code</span> : null}<InlineComposer ref={composer} ariaLabel={thread ? 'Message thread' : `Message ${roomName}`} placeholder={thread ? 'Message thread' : `Message ${roomName}`} disabled={disabled}
+      <div className="composer__field">{props.attachments ? <AttachmentTray queue={props.attachments.queue} context={props.attachments.context} integrated /> : null}<span className="sr-only">{thread ? 'Message thread' : `Message ${roomName}`}</span>{value.codeMode || value.body.startsWith('```') ? <span className="composer-code-preview" aria-label="Code block mode">{value.codeLanguage ?? 'text'} code</span> : null}<InlineComposer ref={composer} ariaLabel={thread ? 'Message thread' : `Message ${roomName}`} placeholder={thread ? 'Message thread' : `Message ${roomName}`} disabled={disabled}
         value={{ text: value.body, tokens: (value.inlineEmojis ?? []).map(({ name, ...token }) => ({ ...token, alt: name, title: name })) }}
         onChange={(next) => { const prior = current.current.value; change({ ...prior, body: next.text === '```' ? '' : next.text, mentions: prior.mentions?.filter((mention) => visibleMention(next.text, mention.label)), inlineEmojis: next.tokens.map(({ alt, title, ...token }) => ({ ...token, name: alt ?? title ?? token.id })), ...(next.text === '```' ? { codeMode: true, codeLanguage: 'text' } : {}) }); }}
         onSelectionChange={(selection) => setCaret(selection?.end ?? current.current.value.body.length)} onKeyDown={onKeyDown} onSubmit={() => form.current?.requestSubmit()}
-        onImagePaste={props.stageFiles ? ({ files }) => { if (files.length) stage(files); else { const stageFiles = props.stageFiles; const generation = contextGeneration.current; runTool(async () => { const file = await readNativeClipboardImage(); if (file && mounted.current && contextGeneration.current === generation) await stageFiles?.([file]); }); } } : undefined}
-        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} /></label>
+        onImagePaste={props.stageFiles ? ({ files }) => { if (files.length) stage(files); else { const stageFiles = props.stageFiles; const generation = contextGeneration.current; runTool(async () => { const file = await readNativeClipboardImage(); if (file && mounted.current && contextGeneration.current === generation) { setMore(false); await stageFiles?.([file]); } }); } } : undefined}
+        onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} /></div>
       <button type="button" className="icon-button composer__more" aria-label="More message tools" aria-expanded={more} onClick={() => setMore((open) => !open)}><Plus size={18} /></button>
       <div aria-label="Message tools" className={`composer__actions${more ? ' is-open' : ''}`}>
         {props.stageFiles ? <button type="button" className="icon-button composer__attachment-more" aria-label="Attach a file" onClick={() => fileInput.current?.click()} disabled={disabled}><Paperclip size={18} /></button> : null}
@@ -235,9 +264,9 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
         {props.onRecordVoice ? button('Record a voice message', props.onRecordVoice, <Mic size={18} />) : null}
         <select className="composer__code-language" aria-label="Code language" value={value.codeLanguage ?? 'text'} disabled={disabled} onChange={(event) => change({ ...value, codeLanguage: event.target.value })}>{Object.entries(LANGUAGES).map(([language, label]) => <option key={language} value={language}>{label}</option>)}</select>
         {button(value.codeMode ? 'Exit code mode' : 'Insert code block', () => { if (value.codeMode) { change({ ...value, codeMode: false }); focus(); return; } const selection = composer.current?.getSelection(); const body = selection && selection.end > selection.start ? value.body.slice(selection.start, selection.end) : value.body; change({ ...value, body, codeMode: true, inlineEmojis: [], mentions: [] }); focus(); }, <span aria-hidden="true">&lt;/&gt;</span>)}
-        {(value.codeMode || value.body.startsWith('```')) && props.stageFiles ? button('Send code as file', () => { if (value.body.trim()) stage([new File([value.body], `snippet.${EXTENSIONS[value.codeLanguage ?? 'text'] ?? 'txt'}`, { type: 'text/plain' })], value.codeLanguage ?? 'text'); }, <span aria-hidden="true">▤</span>) : null}
+        {(value.codeMode || value.body.startsWith('```')) && props.stageFiles ? button('Send code as file', () => { if (value.body.trim()) stage([new File([value.body], `snippet.${EXTENSIONS[value.codeLanguage ?? 'text'] ?? 'txt'}`, { type: 'text/plain' })], value.codeLanguage ?? 'text', true); }, <span aria-hidden="true">▤</span>) : null}
       </div>
-      <button className="send-button" type="submit" aria-label={thread ? 'Send thread reply' : 'Send message'} disabled={disabled || !value.body.trim() || sending || busy}><Send size={17} /></button>
+      <button className="send-button" type="submit" aria-label={thread ? 'Send thread reply' : 'Send message'} disabled={disabled || (!value.body.trim() && !hasAttachments) || sending || busy}><Send size={17} /></button>
     </form>
   </>;
 });

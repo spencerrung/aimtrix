@@ -36,3 +36,11 @@ test('coverage rejects missing, duplicated, reordered and unexpected checks', ()
   assert.throws(() => expectedJourneyChecks('unknown'));
   assert.throws(() => expectedJourneyChecks('history', true));
 });
+
+test('custom reaction protocol coverage runs in existing core jobs without history overhead', () => {
+  for (const element of [false, true]) {
+    assert.ok(expectedJourneyChecks('core', element).includes('standard-custom-mxc-reaction'));
+    assert.ok(expectedJourneyChecks('full', element).includes('standard-custom-mxc-reaction'));
+  }
+  assert.ok(!expectedJourneyChecks('history').includes('standard-custom-mxc-reaction'));
+});

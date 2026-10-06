@@ -1,3 +1,4 @@
+import { MediaResolverContext } from '../../matrix/mediaContext';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessageSummary } from '../../matrix/viewModels';
@@ -60,4 +61,52 @@ describe('shared timeline message', () => {
     fireEvent.click(screen.getByRole('button', { name: '👍, 1 reactions' }));
     expect(react).toHaveBeenCalledWith(own, '👍', '$own-reaction');
   });
+});
+
+it('renders received MXC reaction labels through authenticated media and removes by the original key', async () => {
+  const resolve = vi.fn().mockResolvedValue('blob:synthetic');
+  const react = vi.fn();
+  const reacted = { ...message, reactions: [{ key: 'mxc://test/synthetic', name: 'Synthetic wave', count: 1, reacted: true, ownEventId: '$own', canRemove: true }] };
+  render(<MediaResolverContext.Provider value={resolve}><TimelineMessage {...props} message={reacted} onReact={react} /></MediaResolverContext.Provider>);
+  const chip = screen.getByRole('button', { name: 'Synthetic wave, 1 reactions' });
+  await waitFor(() => expect(within(chip).getByRole('img', { name: 'Synthetic wave' })).toHaveAttribute('src', 'blob:synthetic'));
+  expect(resolve).toHaveBeenCalledWith('mxc://test/synthetic', 48, undefined, undefined);
+  fireEvent.click(chip);
+  expect(react).toHaveBeenCalledWith(reacted, 'mxc://test/synthetic', '$own');
+});
+it('never treats an arbitrary remote reaction key as an image URL', () => {
+  const resolve = vi.fn();
+  render(<MediaResolverContext.Provider value={resolve}><TimelineMessage {...props} message={{ ...message, reactions: [{ key: 'https://tracking.invalid/image.png', count: 1, reacted: false }] }} /></MediaResolverContext.Provider>);
+  expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  expect(resolve).not.toHaveBeenCalled();
+});
+
+it.each([{ dataSaver: true, autoplayMedia: true }, { dataSaver: false, autoplayMedia: false }])('does not fetch custom reaction media when preferences gate it: %j', (preferences) => {
+  const resolve = vi.fn();
+  render(<MediaResolverContext.Provider value={resolve}><TimelineMessage {...props} {...preferences} message={{ ...message, reactions: [{ key: 'mxc://test/synthetic', name: 'Synthetic wave', count: 1, reacted: false }] }} /></MediaResolverContext.Provider>);
+  expect(screen.getByRole('button', { name: 'Synthetic wave, 1 reactions' })).toHaveTextContent('Synthetic wave');
+  expect(resolve).not.toHaveBeenCalled();
+});
+
+it.each([{ dataSaver: true, autoplayMedia: true }, { dataSaver: false, autoplayMedia: false }])('gates catalog-backed reaction chips and picker previews consistently: %j', async (preferences) => {
+  const resolve = vi.fn().mockResolvedValue('blob:synthetic');
+  const catalog = [{ id: 'synthetic-wave', name: 'Synthetic wave', src: 'mxc://test/synthetic', previewSrc: 'mxc://test/preview' }];
+  const react = vi.fn();
+  render(<MediaResolverContext.Provider value={resolve}><TimelineMessage {...props} {...preferences} emojiCatalog={catalog} recentEmojis={[':synthetic-wave:']} onReact={react} message={{ ...message, reactions: [{ key: ':synthetic-wave:', count: 1, reacted: false }] }} /></MediaResolverContext.Provider>);
+  expect(screen.getByRole('button', { name: ':synthetic-wave:, 1 reactions' })).toHaveTextContent('Synthetic wave');
+  fireEvent.click(screen.getByRole('button', { name: 'Add reaction' }));
+  const picker = screen.getByRole('dialog', { name: 'Choose a reaction' });
+  expect(within(picker).getByRole('button', { name: 'React with :synthetic-wave:' })).toHaveTextContent('Synthetic wave');
+  fireEvent.change(within(picker).getByRole('textbox', { name: 'Search reaction emoji' }), { target: { value: 'synthetic' } });
+  expect(screen.queryByRole('img')).not.toBeInTheDocument();
+  expect(resolve).not.toHaveBeenCalled();
+  fireEvent.click(within(picker).getByRole('button', { name: 'React with :synthetic-wave:' }));
+  await waitFor(() => expect(react).toHaveBeenCalledWith(expect.objectContaining({ id: message.id }), ':synthetic-wave:', undefined, { id: 'synthetic-wave', name: 'Synthetic wave', src: 'mxc://test/synthetic' }));
+});
+
+it('retains a received custom image name when joining another sender’s reaction', () => {
+  const react = vi.fn();
+  render(<TimelineMessage {...props} onReact={react} message={{ ...message, reactions: [{ key: 'mxc://test/synthetic', name: 'Synthetic wave', count: 1, reacted: false }] }} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Synthetic wave, 1 reactions' }));
+  expect(react).toHaveBeenCalledWith(expect.objectContaining({ id: message.id }), 'mxc://test/synthetic', undefined, { id: 'mxc://test/synthetic', name: 'Synthetic wave', src: 'mxc://test/synthetic' });
 });

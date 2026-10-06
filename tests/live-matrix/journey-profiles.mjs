@@ -28,6 +28,7 @@ export const journeyChecks = [
   "matrix-links-and-navigation-history",
   "encrypted-thread-history-and-links",
   "authenticated-encrypted-media",
+  "standard-custom-mxc-reaction",
   "encrypted-poll-create",
   "element-ui-encrypted-poll",
   "element-ui-poll-vote",

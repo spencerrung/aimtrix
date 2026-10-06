@@ -44,3 +44,5 @@
     .reaction-picker__grid button { min-height:44px }
   }
 }
+
+.reaction-image-label { display: inline-block; max-width: min(100%, 12rem); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: middle; font-size: 12px; }

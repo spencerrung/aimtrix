@@ -154,6 +154,7 @@ export interface MessageSummary {
   };
   reactions?: Array<{
     key: string;
+    name?: string;
     count: number;
     reacted: boolean;
     ownEventId?: string;
