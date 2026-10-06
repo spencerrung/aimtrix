@@ -12,6 +12,13 @@
     :root[data-compact-viewport="true"] .app-stage .aimtrix-window.has-connection-notice { grid-template-rows: 44px auto minmax(0,1fr); }
     :root[data-compact-viewport="true"] .app-stage .app-titlebar { gap: 6px; }
     :root[data-compact-viewport="true"] .workspace-navigation button { min-height: 44px; padding-block: 0; }
+    /* Short tablets have enough width for tools beside the field, preserving reading space. */
+    :root[data-compact-viewport="true"] .app-stage .composer { display: flex; flex-wrap: nowrap; }
+    :root[data-compact-viewport="true"] .app-stage .composer__field { flex: 1; order: -1; }
+    :root[data-compact-viewport="true"] .app-stage .composer__actions { width: auto; max-width: 45%; flex: none; flex-wrap: nowrap; overflow-x: auto; order: 0; }
+    :root[data-compact-viewport="true"] .app-stage .composer__actions > * { flex-shrink: 0; }
+    :root[data-compact-viewport="true"] .app-stage .composer__actions :focus-visible { outline-offset: -3px; }
+    :root[data-compact-viewport="true"] .app-stage .composer .send-button { flex: none; order: 1; }
   }
   @media (max-width: 1199px) {
     :root[data-compact-viewport="true"] .app-stage .conversation-header { min-height: 48px; }

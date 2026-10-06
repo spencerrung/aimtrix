@@ -36,3 +36,8 @@ Search clearly covers loaded messages only. Results occupy the contextual surfac
 - Chromium coverage exercises desktop resizing, mobile/tablet Back and Forward with pixel reading anchors, resize without history changes, loaded search result navigation, and reduced-height main/thread controls. Shell screenshots are emitted with the Playwright results; Axe covers the contextual route alongside existing theme/accessibility scenarios.
 - These browser checks emulate viewport and touch conditions. Physical iOS/Android software keyboards, native Back, WebView safe areas, screen readers, and Firefox/WebKit are separate acceptance evidence under [#162](https://github.com/spencerrung/aimtrix/issues/162) and [#175](https://github.com/spencerrung/aimtrix/issues/175).
 - The shell adds no Matrix event type or plaintext fallback. Existing encrypted sending, attachments, history and session recovery retain their protocol paths. Old/unloaded thread roots, pagination and thread-read reconciliation remain separate work; a loaded demo thread is not proof of those boundaries.
+
+
+### Short tablet notice combinations
+
+When the visual viewport is short, app notices use a bounded scroll area so simultaneous installation/update messages cannot consume all reading space. At compact tablet widths, message tools sit beside the editor and remain horizontally scrollable when necessary; Send stays outside that scrolling tool group. Regression tests combine notices with volatile-draft feedback and verify actual thread entry, sending, retained drafts, and notice dismissal at 320–1024px.

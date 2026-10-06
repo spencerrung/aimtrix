@@ -211,3 +211,92 @@ test('minimum phone preserves named header actions and contextual Back navigatio
   await page.goBack();
   await expectReachable(page.getByLabel('Message Welcome Lounge'));
 });
+
+for (const width of [320, 390, 768, 1024]) {
+  for (const visualOnly of [false, true]) {
+    test(`stacked notices preserve thread entry and Send at ${width}px with ${visualOnly ? 'visual-only' : 'layout'} keyboard`, async ({ page }, testInfo) => {
+      test.setTimeout(60_000);
+      await page.setViewportSize({ width, height: visualOnly ? 844 : 360 });
+      await openRoom(page);
+      await page.getByLabel('Message Welcome Lounge').fill('Retained room draft');
+      // Demo drafts are deliberately volatile; include their warning in this height budget.
+      await expect(page.getByText('Drafts stay in this tab. Reloading or closing it can lose changes.', { exact: true })).toBeVisible();
+      await page.evaluate((visualOnly) => {
+        const install = new Event('beforeinstallprompt', { cancelable: true });
+        Object.assign(install, { prompt: () => Promise.resolve(), userChoice: Promise.resolve({ outcome: 'dismissed' }) });
+        window.dispatchEvent(install);
+        window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: { postMessage: () => undefined } }));
+        if (visualOnly) {
+          Object.defineProperties(window.visualViewport!, {
+            height: { configurable: true, value: 360 }, offsetTop: { configurable: true, value: 40 }, scale: { configurable: true, value: 1 },
+          });
+          window.visualViewport!.dispatchEvent(new Event('resize'));
+        }
+      }, visualOnly);
+      await expect(page.locator('html')).toHaveAttribute('data-compact-viewport', 'true');
+      await expect(page.getByRole('complementary', { name: 'Install Aimtrix' })).toBeAttached();
+      await expect(page.getByRole('status').filter({ hasText: 'Aimtrix update ready' })).toBeAttached();
+      const timeline = page.getByRole('region', { name: 'Messages', exact: true });
+      await expect.poll(() => timeline.evaluate((element) => element.clientHeight)).toBeGreaterThanOrEqual(44);
+      await page.screenshot({ path: testInfo.outputPath('stacked-notices-room.png') });
+      await page.getByRole('button', { name: /2 replies/ }).click();
+      const thread = page.getByRole('complementary', { name: 'Thread', exact: true });
+      const composer = thread.getByLabel('Message thread');
+      await composer.fill('Short viewport reply');
+      const send = thread.getByRole('button', { name: 'Send thread reply' });
+      for (const control of [composer, send]) {
+        await expect.poll(() => control.evaluate((element) => {
+          const bounds = element.getBoundingClientRect();
+          const viewport = window.visualViewport!;
+          return bounds.top >= viewport.offsetTop && bounds.bottom <= viewport.offsetTop + viewport.height
+            && element.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+        })).toBe(true);
+      }
+      if (width >= 768) {
+        const toolbar = thread.locator('.composer__actions');
+        const buttons = toolbar.locator('button:visible:not(:disabled)');
+        for (const [origin, key, target] of [
+          [composer, 'Tab', buttons.first()],
+          [send, 'Shift+Tab', buttons.last()],
+        ] as const) {
+          await origin.focus();
+          await page.keyboard.press(key);
+          await expect(target).toBeFocused();
+          await expect.poll(() => target.evaluate((element) => {
+            const group = element.closest<HTMLElement>('.composer__actions')!;
+            const clip = group.getBoundingClientRect();
+            const bounds = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            const stroke = parseFloat(style.outlineWidth);
+            const extent = stroke + parseFloat(style.outlineOffset);
+            const left = clip.left + group.clientLeft, top = clip.top + group.clientTop;
+            const viewport = window.visualViewport!;
+            return element.matches(':focus-visible') && style.outlineStyle !== 'none' && stroke > 0
+              && bounds.left - extent >= left - 0.5 && bounds.right + extent <= left + group.clientWidth + 0.5
+              && bounds.top - extent >= top - 0.5 && bounds.bottom + extent <= top + group.clientHeight + 0.5
+              && bounds.top >= viewport.offsetTop && bounds.bottom <= viewport.offsetTop + viewport.height
+              && element.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+          })).toBe(true);
+        }
+        await composer.focus();
+        await expect(composer).toHaveText('Short viewport reply');
+      }
+      await page.screenshot({ path: testInfo.outputPath('stacked-notices-thread.png') });
+      if (testInfo.project.use.hasTouch) await send.tap();
+      else await send.click();
+      await expect(composer).toHaveText('');
+      await thread.getByRole('button', { name: 'Close thread' }).click();
+      await expect(page.getByLabel('Message Welcome Lounge')).toHaveText('Retained room draft');
+      for (const notice of [
+        page.getByRole('status').filter({ hasText: 'Aimtrix update ready' }),
+        page.getByRole('complementary', { name: 'Install Aimtrix' }),
+      ]) {
+        const later = notice.getByRole('button', { name: 'Later' });
+        await later.focus();
+        await expect(later).toBeFocused();
+        await later.click();
+        await expect(notice).toBeHidden();
+      }
+    });
+  }
+}
