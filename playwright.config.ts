@@ -2,11 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 const browserSet = process.env.PLAYWRIGHT_BROWSER_SET;
 const projects = browserSet === 'firefox'
-  ? [{ name: 'firefox-desktop', use: { ...devices['Desktop Firefox'] }, testMatch: /(?:browser-compat|first-use|shell|composition|mobile-layout|usability|responsive-layout|message-navigation|popover-viewport|dialog-viewport)\.spec\.ts/ }]
+  ? [{ name: 'firefox-desktop', use: { ...devices['Desktop Firefox'] }, testMatch: /(?:browser-compat|first-use|signin-targets|shell|composition|mobile-layout|usability|responsive-layout|message-navigation|popover-viewport|dialog-viewport)\.spec\.ts/ }]
   : browserSet === 'webkit'
     ? [
-      { name: 'webkit-desktop', use: { ...devices['Desktop Safari'] }, testMatch: /(?:browser-compat|first-use|shell|composition|mobile-layout|usability|responsive-layout|message-navigation|popover-viewport|dialog-viewport)\.spec\.ts/ },
-      { name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: /(?:browser-compat|first-use|shell|composition|mobile-layout|usability|responsive-layout|message-navigation|popover-viewport|dialog-viewport)\.spec\.ts/ },
+      { name: 'webkit-desktop', use: { ...devices['Desktop Safari'] }, testMatch: /(?:browser-compat|first-use|signin-targets|shell|composition|mobile-layout|usability|responsive-layout|message-navigation|popover-viewport|dialog-viewport)\.spec\.ts/ },
+      { name: 'webkit-mobile', use: { ...devices['iPhone 13'] }, testMatch: /(?:browser-compat|first-use|signin-targets|shell|composition|mobile-layout|usability|responsive-layout|message-navigation|popover-viewport|dialog-viewport)\.spec\.ts/ },
     ]
     : [
       { name: 'desktop', use: { ...devices['Desktop Chrome'] } },

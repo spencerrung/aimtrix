@@ -5,6 +5,7 @@ import type { LoginCredentials, MatrixControllerSnapshot } from '../../matrix/Ma
 import type { LoginMethods } from '../../matrix/discovery';
 import { ForgetSessionButton } from './SessionRecovery';
 import { BrandMark } from '../../components/BrandMark';
+import './loginTargets.css';
 import type { StoredAccountSummary } from '../../matrix/sessionStore';
 
 interface LoginWindowProps {
