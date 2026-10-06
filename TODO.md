@@ -135,6 +135,8 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 
 ### Browser, accessibility, and QA
 
+- [ ] Resolve the [October 5 usability audit](docs/usability-audit-2026-10-05.md): mobile message-action clutter, install-prompt obstruction, viewport/overlay handling, navigation hierarchy, touch targets, and desktop keyboard efficiency. Add actionable-control and visual regression checks alongside the existing browser/device gates; implemented feature breadth does not close this usability pass.
+
 - [x] Shared native modal/picker focus, nested dismissal, guarded confirmations, failed-action retention and cancellable initiated verification; see [interaction behavior and evidence boundaries](docs/accessible-interactions.md). Broader screen-reader/browser acceptance remains #162.
 
 - [x] Conservative installable PWA shell and explicit update/reload prompt.

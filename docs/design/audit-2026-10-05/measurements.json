@@ -1,0 +1,323 @@
+{
+  "sourceRevision": "145371b",
+  "date": "2026-10-05",
+  "browser": "Chromium 149.0.7827.55",
+  "fixture": "Aimtrix repository demo; synthetic content only",
+  "limitations": "Browser emulation and synthetic visualViewport override; no physical keyboard or Safari result",
+  "messageGeometry": [
+    {
+      "width": 320,
+      "metrics": {
+        "rows": 5,
+        "rowTotal": 983.234375,
+        "actionsTotal": 274,
+        "actionHeights": [
+          46,
+          90,
+          46,
+          46,
+          46
+        ],
+        "header": 89,
+        "titlebar": 46
+      }
+    },
+    {
+      "width": 390,
+      "metrics": {
+        "rows": 5,
+        "rowTotal": 858.421875,
+        "actionsTotal": 230,
+        "actionHeights": [
+          46,
+          46,
+          46,
+          46,
+          46
+        ],
+        "header": 64,
+        "titlebar": 46
+      }
+    },
+    {
+      "width": 412,
+      "metrics": {
+        "rows": 5,
+        "rowTotal": 858.421875,
+        "actionsTotal": 230,
+        "actionHeights": [
+          46,
+          46,
+          46,
+          46,
+          46
+        ],
+        "header": 64,
+        "titlebar": 46
+      }
+    }
+  ],
+  "viewportComparison": [
+    {
+      "mode": "layout",
+      "metrics": {
+        "layout": 340,
+        "visual": 340,
+        "compactQuery": true,
+        "rects": {
+          ".app-stage": {
+            "display": "block",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 340,
+              "top": 0,
+              "right": 390,
+              "bottom": 340,
+              "left": 0
+            }
+          },
+          ".app-titlebar": {
+            "display": "flex",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 24,
+              "top": 0,
+              "right": 390,
+              "bottom": 24,
+              "left": 0
+            }
+          },
+          ".conversation-header": {
+            "display": "flex",
+            "rect": {
+              "x": 0,
+              "y": 24,
+              "width": 390,
+              "height": 48,
+              "top": 24,
+              "right": 390,
+              "bottom": 72,
+              "left": 0
+            }
+          },
+          ".space-rail": {
+            "display": "none",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 0,
+              "height": 0,
+              "top": 0,
+              "right": 0,
+              "bottom": 0,
+              "left": 0
+            }
+          },
+          ".timeline": {
+            "display": "block",
+            "rect": {
+              "x": 0,
+              "y": 72,
+              "width": 390,
+              "height": 184,
+              "top": 72,
+              "right": 390,
+              "bottom": 256,
+              "left": 0
+            }
+          },
+          ".composer": {
+            "display": "grid",
+            "rect": {
+              "x": 6,
+              "y": 276,
+              "width": 378,
+              "height": 56,
+              "top": 276,
+              "right": 384,
+              "bottom": 332,
+              "left": 6
+            }
+          }
+        }
+      }
+    },
+    {
+      "mode": "visual",
+      "metrics": {
+        "layout": 844,
+        "visual": 340,
+        "compactQuery": false,
+        "rects": {
+          ".app-stage": {
+            "display": "block",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 340,
+              "top": 0,
+              "right": 390,
+              "bottom": 340,
+              "left": 0
+            }
+          },
+          ".app-titlebar": {
+            "display": "flex",
+            "rect": {
+              "x": 0,
+              "y": 0,
+              "width": 390,
+              "height": 46,
+              "top": 0,
+              "right": 390,
+              "bottom": 46,
+              "left": 0
+            }
+          },
+          ".conversation-header": {
+            "display": "flex",
+            "rect": {
+              "x": 0,
+              "y": 46,
+              "width": 390,
+              "height": 64,
+              "top": 46,
+              "right": 390,
+              "bottom": 110,
+              "left": 0
+            }
+          },
+          ".space-rail": {
+            "display": "flex",
+            "rect": {
+              "x": 0,
+              "y": 280,
+              "width": 390,
+              "height": 60,
+              "top": 280,
+              "right": 390,
+              "bottom": 340,
+              "left": 0
+            }
+          },
+          ".timeline": {
+            "display": "block",
+            "rect": {
+              "x": 0,
+              "y": 110,
+              "width": 390,
+              "height": 82,
+              "top": 110,
+              "right": 390,
+              "bottom": 192,
+              "left": 0
+            }
+          },
+          ".composer": {
+            "display": "grid",
+            "rect": {
+              "x": 6,
+              "y": 216,
+              "width": 378,
+              "height": 56,
+              "top": 216,
+              "right": 384,
+              "bottom": 272,
+              "left": 6
+            }
+          }
+        }
+      }
+    }
+  ],
+  "installPromptHitTesting": [
+    {
+      "state": "initial",
+      "geometry": {
+        "viewport": [
+          390,
+          664
+        ],
+        "send": {
+          "x": 334,
+          "y": 546,
+          "width": 44,
+          "height": 44,
+          "top": 546,
+          "right": 378,
+          "bottom": 590,
+          "left": 334
+        },
+        "centerHit": "<aside class=\"install-prompt\" aria-label=\"Install Aimtrix\" style=\"position: fixed; z-index: 100; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px) + 74px); display: flex; width: min(54",
+        "sendReceivesHit": false,
+        "prompt": {
+          "x": 18,
+          "y": 470,
+          "width": 354,
+          "height": 102,
+          "top": 470,
+          "right": 372,
+          "bottom": 572,
+          "left": 18
+        }
+      }
+    },
+    {
+      "state": "expanded",
+      "geometry": {
+        "viewport": [
+          390,
+          664
+        ],
+        "send": {
+          "x": 334,
+          "y": 546,
+          "width": 44,
+          "height": 44,
+          "top": 546,
+          "right": 378,
+          "bottom": 590,
+          "left": 334
+        },
+        "centerHit": "<aside class=\"install-prompt\" aria-label=\"Install Aimtrix\" style=\"position: fixed; z-index: 100; right: 18px; bottom: calc(18px + env(safe-area-inset-bottom, 0px) + 74px); display: flex; width: min(54",
+        "sendReceivesHit": false,
+        "prompt": {
+          "x": 18,
+          "y": 404,
+          "width": 354,
+          "height": 168,
+          "top": 404,
+          "right": 372,
+          "bottom": 572,
+          "left": 18
+        }
+      }
+    },
+    {
+      "state": "dismissed",
+      "geometry": {
+        "viewport": [
+          390,
+          664
+        ],
+        "send": {
+          "x": 334,
+          "y": 546,
+          "width": 44,
+          "height": 44,
+          "top": 546,
+          "right": 378,
+          "bottom": 590,
+          "left": 334
+        },
+        "centerHit": "<path d=\"m21.854 2.147-10.94 10.939\"></path>",
+        "sendReceivesHit": true
+      }
+    }
+  ]
+}
