@@ -12,6 +12,27 @@ export const session = (page) => page.evaluate(() => {
     ? stored.accounts.find((account) => JSON.stringify([account.baseUrl, account.userId]) === stored.active)
     : stored;
 });
+async function incomingVerificationRecipient(candidates, stage, buttonName) {
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    for (const candidate of candidates.filter(Boolean)) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      // Incoming verification is published on an animation frame. A hidden
+      // browser tab may receive the protocol event without painting its UI.
+      await candidate.bringToFront();
+      const incoming = candidate.getByRole('complementary', { name: 'Incoming device verification' });
+      const control = buttonName ? incoming.getByRole('button', { name: buttonName, exact: true }) : incoming;
+      try {
+        await control.waitFor({ state: 'visible', timeout: Math.min(1000, remaining) });
+        return candidate;
+      } catch (error) {
+        if (error.name !== 'TimeoutError') throw error;
+      }
+    }
+  }
+  throw new Error(stage);
+}
 async function targetsAimtrixVerificationDevice(response, userId, candidates) {
   let messages;
   try { messages = response.request().postDataJSON()?.messages?.[userId]; }
@@ -865,16 +886,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
         stage = 'element-sas-incoming';
         await alice.bringToFront();
-        let recipient;
-        await until(async () => {
-          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
-            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
-              recipient = candidate;
-              return true;
-            }
-          }
-          return false;
-        }, stage, 45000);
+        const recipient = await incomingVerificationRecipient([alice, aliceSecond, recoveryDevice, verifyPeer], stage);
         await recipient.bringToFront();
         const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
         stage = 'element-sas-incoming-method';
@@ -921,15 +933,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'element-qr-request';
         await peer.locator('.mx_AuthPage').getByRole('button', { name: 'Use another device' }).click({ timeout: 60000 });
         stage = 'element-qr-incoming';
-        await until(async () => {
-          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
-            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).getByRole('button', { name: 'Scan QR code' }).isVisible()) {
-              recipient = candidate;
-              return true;
-            }
-          }
-          return false;
-        }, stage, 45000);
+        recipient = await incomingVerificationRecipient([alice, aliceSecond, recoveryDevice, verifyPeer], stage, 'Scan QR code');
         await recipient.bringToFront();
         await installSyntheticQrCamera(recipient);
         const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
@@ -987,15 +991,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'element-cancel-request-no-aimtrix-target';
         invariant(targetsAimtrix, stage);
         stage = 'element-cancel-incoming';
-        let recipient;
-        await until(async () => {
-          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
-            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
-              recipient = candidate; return true;
-            }
-          }
-          return false;
-        }, stage, 45000);
+        const recipient = await incomingVerificationRecipient([alice, aliceSecond, recoveryDevice, verifyPeer], stage);
         const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
         stage = 'element-cancel-aimtrix-decline';
         await incoming.getByRole('button', { name: 'Decline', exact: true }).click();
@@ -1030,15 +1026,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         stage = 'element-withdraw-request-no-aimtrix-target';
         invariant(targetsAimtrix, stage);
         stage = 'element-withdraw-incoming';
-        let recipient;
-        await until(async () => {
-          for (const candidate of [alice, aliceSecond, recoveryDevice, verifyPeer].filter(Boolean)) {
-            if (await candidate.getByRole('complementary', { name: 'Incoming device verification' }).isVisible()) {
-              recipient = candidate; return true;
-            }
-          }
-          return false;
-        }, stage, 45000);
+        const recipient = await incomingVerificationRecipient([alice, aliceSecond, recoveryDevice, verifyPeer], stage);
         const incoming = recipient.getByRole('complementary', { name: 'Incoming device verification' });
         stage = 'element-withdraw-control';
         await peer.locator('.mx_InfoDialog').getByRole('button', { name: 'Close dialog', exact: true }).click({ timeout: 45000 });
