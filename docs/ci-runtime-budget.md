@@ -47,3 +47,5 @@ If an Actions job approaches eight minutes, examine step timings and split indep
 ## First revised run
 
 Run `37406251487` measured Chromium shards at 221/214 seconds, Firefox at 93/99 seconds and WebKit at 340/295 seconds. Static checks exposed a missing Chromium installation for the scheduling proof; the workflow now installs it explicitly. Live run `37406251552` passed delegated authentication (156 seconds), RTC (133 seconds), cache reload (74 seconds) and synthetic scale (70 seconds), but core/Element hit the eight-minute command deadline during or shortly after the encrypted-history fixture. Those timeouts are failed evidence and require further optimization before merge.
+
+The revised history fixture sends 260 real encrypted messages, still exceeding the 250-row bound and retaining old-event context and navigation anchors at indices 20, 40 and 240. Composer readiness checks the actual textarea value. The previous 350-message workload remains documented in older release evidence; this change reduces redundant fixture volume, not the bounded-history assertions.
