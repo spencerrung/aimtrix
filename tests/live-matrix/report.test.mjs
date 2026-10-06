@@ -287,3 +287,8 @@ test('natural OAuth expiry evidence retains only numeric results and fixed failu
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
+
+test('journey profile diagnostics retain only fixed supported identities', () => {
+  for (const journeyProfile of ['full', 'core', 'history']) assert.equal(makeReport({ ...base, journeyProfile }).journeyProfile, journeyProfile);
+  assert.equal(makeReport({ ...base, journeyProfile: 'private-room-canary' }).journeyProfile, undefined);
+});

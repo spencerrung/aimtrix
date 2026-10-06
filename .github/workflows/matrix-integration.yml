@@ -19,10 +19,11 @@ jobs:
       fail-fast: false
       matrix:
         replica: [1, 2]
+        journey: [core, history]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      AIMTRIX_LIVE_OWNER: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.replica }}
+      AIMTRIX_LIVE_OWNER: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.journey }}-${{ matrix.replica }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -33,6 +34,8 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Verify complete journey partitions
+        run: node --test tests/live-matrix/journey-profiles.test.mjs
       - name: Test diagnostic privacy
         run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix:privacy
       - name: Install Chromium
@@ -40,9 +43,9 @@ jobs:
       - name: Build the static client
         run: npm run build
       - name: Independent clean Matrix run
-        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --journey-${{ matrix.journey }}
       - name: Deliberately fail and verify private diagnostics
-        if: matrix.replica == 1
+        if: matrix.replica == 1 && matrix.journey == 'core'
         run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --probe-failure
       - name: Remove any remaining job-owned test services
         if: always()
@@ -51,9 +54,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: matrix-summary-${{ matrix.replica }}-${{ github.run_id }}
+          name: matrix-summary-${{ matrix.journey }}-${{ matrix.replica }}-${{ github.run_id }}
           path: |
             matrix-test-results/run-1.json
+            matrix-test-results/history-1.json
             matrix-test-results/failure-probe-1.json
           if-no-files-found: ignore
           retention-days: 14
@@ -77,7 +81,7 @@ jobs:
       - name: Build the static client
         run: npm run build
       - name: Exercise encrypted Element Web peer
-        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --element-ui
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --element-ui --journey-core
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs
@@ -111,7 +115,7 @@ jobs:
       - name: Verify bounded SFU interruption cleanup
         run: node --test tests/live-matrix/rtc-interruption.test.mjs
       - name: Exercise two encrypted MatrixRTC peers over disposable LiveKit
-        run: node tests/live-matrix/group-rtc.mjs
+        run: timeout --signal=TERM --kill-after=20s 8m node tests/live-matrix/group-rtc.mjs
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs

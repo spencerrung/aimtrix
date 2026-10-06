@@ -1,5 +1,6 @@
 /* global localStorage, indexedDB, fetch, AbortController, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
 import { expect } from '@playwright/test';
+import { expectedJourneyChecks, assertJourneyCoverage } from './journey-profiles.mjs';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -159,7 +160,15 @@ async function installSyntheticQrCamera(page) {
   });
 }
 
-export async function runJourneys({ browser, stack, check, forceFailure, metrics }) {
+export async function runJourneys({ browser, stack, check: recordCheck, forceFailure, metrics, journeyProfile = 'full' }) {
+  const selected = expectedJourneyChecks(journeyProfile, Boolean(stack.origins.element));
+  const completed = [];
+  const check = async (name, action) => {
+    if (!selected.includes(name)) return;
+    await recordCheck(name, action);
+    completed.push(name);
+  };
+  const verifyCoverage = () => recordCheck('journey-coverage', async () => assertJourneyCoverage(completed, journeyProfile, Boolean(stack.origins.element)));
   const api = matrixApi(stack);
   const accounts = {};
   await check('isolated-accounts', async () => {
@@ -1348,7 +1357,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         // for pointer stability on a button beside a continually moving timeline.
         await composer.press('Enter');
         sentIds.push((await (await sent).json()).event_id);
-        await expect(composer).toHaveValue('', { timeout: 20000 });
+        await expect.poll(() => composer.innerText(), { timeout: 20000 }).toBe('');
       }
       invariant(wire.slice(historyWireStart).every((event) => event.content['m.relates_to']?.rel_type !== 'm.thread'), 'history-main-conversation-events');
       invariant(new Set(sentIds).size === historyCount && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
@@ -1657,7 +1666,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await composer.press('Enter');
         const response = await accepted;
         invariant(response.ok(), 'old-thread-reply-accepted');
-        await expect(composer).toHaveValue('', { timeout: 20000 });
+        await expect.poll(() => composer.innerText(), { timeout: 20000 }).toBe('');
         return (await response.json()).event_id;
       };
       const start = wire.length;
@@ -1735,6 +1744,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       } finally { aliceSecond.off('request', recordReceipt); aliceSecond.off('response', recordAcceptedReceipt); }
       await senderThread.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
+    if (journeyProfile === 'history') { await verifyCoverage(); return; }
     await check('authenticated-encrypted-media', async () => {
       const latest = bob.getByRole('button', { name: 'Jump to latest messages', exact: true });
       if (await latest.count()) await latest.click();
@@ -3072,6 +3082,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }
       } catch { throw new Error(stage); }
     });
+    await verifyCoverage();
   } finally {
     for (const context of contexts) await context.close();
   }

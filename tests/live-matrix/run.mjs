@@ -17,7 +17,9 @@ import { checkNames, failureCategories, makeReport } from './report.mjs';
 // No Playwright reporter, traces, HAR, videos, storage snapshots, or screenshots.
 // All exceptions are discarded at this boundary; only a fixed check ID is reported.
 const args = process.argv.slice(2);
-invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui', '--profile-cache-reload', '--profile-sustained-sync', '--profile-encrypted-sustained-sync', '--profile-large-account', '--delegated-auth'].includes(arg)), 'unsupported-option');
+invariant(args.every((arg) => ['--repeat=2', '--probe-failure', '--element-ui', '--profile-cache-reload', '--profile-sustained-sync', '--profile-encrypted-sustained-sync', '--profile-large-account', '--delegated-auth', '--journey-core', '--journey-history'].includes(arg)), 'unsupported-option');
+const journeyProfile = args.includes('--journey-history') ? 'history' : args.includes('--journey-core') ? 'core' : 'full';
+invariant(!(args.includes('--journey-history') && args.includes('--journey-core')), 'incompatible-option');
 const probe = args.includes('--probe-failure');
 const elementUi = args.includes('--element-ui');
 const profileCacheReload = args.includes('--profile-cache-reload');
@@ -27,6 +29,7 @@ const profileLargeAccount = args.includes('--profile-large-account');
 const delegatedAuth = args.includes('--delegated-auth');
 const profileCount = [profileCacheReload, profileSustainedSync, profileEncryptedSustainedSync, profileLargeAccount, delegatedAuth].filter(Boolean).length;
 invariant(profileCount <= 1 && (profileCount === 0 || (!probe && !elementUi && !args.includes('--repeat=2'))), 'incompatible-option');
+invariant(journeyProfile === 'full' || (profileCount === 0 && !probe && !(journeyProfile === 'history' && elementUi)), 'incompatible-option');
 const repeats = args.includes('--repeat=2') ? 2 : 1;
 const output = resolve('matrix-test-results');
 await mkdir(output, { recursive: true });
@@ -75,7 +78,7 @@ for (let run = 1; run <= repeats; run++) {
     else if (profileSustainedSync) await runSustainedSyncProfile({ browser, stack, check, metrics });
     else if (profileEncryptedSustainedSync) await runEncryptedSustainedSyncProfile({ browser, stack, check, metrics });
     else if (profileLargeAccount) await runLargeAccountProfile({ browser, stack, check, metrics });
-    else await runJourneys({ browser, stack, check, forceFailure: probe, metrics });
+    else await runJourneys({ browser, stack, check, forceFailure: probe, metrics, journeyProfile });
     invariant(!probe, 'probe-must-fail');
   } catch {
     failed = true;
@@ -93,13 +96,13 @@ for (let run = 1; run <= repeats; run++) {
   }
   const expectedFailure = probe && stage === 'diagnostic-failure-probe' && checks.at(-1)?.passed;
   const report = makeReport({ revision, platform: `${process.platform}/${process.arch}`, browserVersion: browser?.version(),
-    cpuCount: cpus().length, memoryGiB: Math.round(totalmem() / 2 ** 30), run, probe, elementUi, delegatedAuth,
+    cpuCount: cpus().length, memoryGiB: Math.round(totalmem() / 2 ** 30), run, probe, elementUi, delegatedAuth, journeyProfile: profileCount === 0 ? journeyProfile : undefined,
     passed: !interrupted && (expectedFailure || !failed), failureStage: failed ? stage : null, checks, metrics });
   const serialized = JSON.stringify(report, null, 2);
   // Belt-and-braces check in addition to the allowlisted report fields.
   invariant(!stack || Object.values(stack.credentials).every((value) => !serialized.includes(value)), 'diagnostic-secret-leak');
   invariant(!serialized.includes('private-room-canary'), 'diagnostic-content-leak');
-  const destination = resolve(output, `${delegatedAuth ? 'delegated-auth' : profileCacheReload ? 'cache-reload' : profileSustainedSync ? 'sustained-sync' : profileEncryptedSustainedSync ? 'encrypted-sustained-sync' : profileLargeAccount ? 'large-account' : probe ? 'failure-probe' : 'run'}-${run}.json`);
+  const destination = resolve(output, `${delegatedAuth ? 'delegated-auth' : profileCacheReload ? 'cache-reload' : profileSustainedSync ? 'sustained-sync' : profileEncryptedSustainedSync ? 'encrypted-sustained-sync' : profileLargeAccount ? 'large-account' : probe ? 'failure-probe' : journeyProfile === 'history' ? 'history' : 'run'}-${run}.json`);
   await writeFile(destination, `${serialized}\n`, { mode: 0o600 });
   invariant(await readFile(destination, 'utf8') === `${serialized}\n`, 'report-write');
   console.log(`Matrix live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks; cleanup ${checks.at(-1)?.passed ? 'complete' : 'failed'})`);
