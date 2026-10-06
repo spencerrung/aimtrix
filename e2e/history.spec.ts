@@ -105,6 +105,7 @@ test('jump to latest survives a delayed controller snapshot without freezing the
   await expect(page.getByText('Returning to latest messages…')).toBeVisible();
   // Mobile Safari can dispatch a scroll after the tap while old rows are present.
   await timeline.evaluate((element) => element.dispatchEvent(new Event('scroll')));
+  await page.evaluate(() => window.dispatchEvent(new Event('history-fixture-release-publication')));
   await expect(page.getByText('Returning to latest messages…')).toBeHidden();
   await expect(jump).toBeHidden();
   await expect.poll(() => timeline.evaluate((element) => element.scrollHeight - element.clientHeight - element.scrollTop)).toBeLessThanOrEqual(2);
