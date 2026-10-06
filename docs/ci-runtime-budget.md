@@ -18,7 +18,7 @@ Live Matrix run `37400522407` measured two core journeys at 1,509 seconds total,
 
 Signed Linux release run `37236051078` took 595 seconds in its build job, plus a four-second selector and 18-second asset audit. Its log records 273 seconds of optimized Rust compilation, about 68 seconds of AppImage packaging, two seconds for deb and 158 seconds for RPM. The Linux matrix now packages AppImage/deb and RPM in parallel, retaining compiler settings and all signed formats. Only the AppImage/deb job publishes the Linux updater metadata; RPM publishes its installer and signature. The final asset audit waits for every platform/package job.
 
-This split removes serial packaging from the critical path; the prior timing suggests roughly nine minutes including selector/audit, but that is an estimate until the revised signed release runs. Cold caches, macOS signing/notarization and Windows signing require their own timings. No cold or signed platform is certified under budget by a warm desktop debug result. A cancelled or timed-out build remains failed release evidence.
+The [revised RC6 Linux release run](https://github.com/spencerrung/aimtrix/actions/runs/37406279642) passed in 559 seconds from selector start through the final asset audit: AppImage/deb took 469 seconds, RPM 526 seconds and the audit 22 seconds. The preceding combined RC6 Linux job took 631 seconds before its audit. The split therefore brings the measured full Linux execution path below ten minutes. Cold caches, macOS signing/notarization and Windows signing require their own timings. No cold or signed platform is certified under budget by a warm desktop debug result. A cancelled or timed-out build remains failed release evidence.
 
 ## Full local endurance acceptance
 
@@ -48,7 +48,6 @@ If an Actions job approaches eight minutes, examine step timings and split indep
 
 Run `37406251487` measured Chromium shards at 221/214 seconds, Firefox at 93/99 seconds and WebKit at 340/295 seconds. Static checks exposed a missing Chromium installation for the scheduling proof; the workflow now installs it explicitly. Live run `37406251552` passed delegated authentication (156 seconds), RTC (133 seconds), cache reload (74 seconds) and synthetic scale (70 seconds), but core/Element hit the eight-minute command deadline during or shortly after the encrypted-history fixture. Those timeouts are failed evidence and require further optimization before merge.
 
-The revised history fixture sends 260 real encrypted messages, still exceeding the 250-row bound and retaining old-event context and navigation anchors at indices 20, 40 and 240. Composer readiness checks the actual contenteditable text. The previous 350-message workload remains documented in older release evidence; this change reduces redundant fixture volume, not the bounded-history assertions.
 ## Live journey partitions
 
 Hosted core and history profiles each run on two independent clean stacks. Core keeps every non-history assertion; the separate history profile runs its six setup/retry prerequisites plus encrypted history/context, private encrypted search, withheld-key guidance, Matrix-link navigation and thread-history checks. Element runs the core profile including all independent Element checks. The default local `npm run test:matrix` still executes the complete journey; no flag silently changes that default.
