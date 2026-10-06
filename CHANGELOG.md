@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0-rc.6 — 2026-10-06
+
+Hosted PWA candidate for the desktop, mobile and installed-app usability pass.
+
+- Add labeled mobile navigation, compact touch message actions, conversation overflow actions, and efficient desktop keyboard navigation.
+- Keep the composer and dialogs reachable when the visual viewport shrinks; reserve space for install/update notices and fit short tablet layouts.
+- Improve profile and shortcut dialog scrolling, anchored menus, focus return, and draft protection through PWA updates.
+- Expand Chromium, Firefox and WebKit interaction coverage, production service-worker lifecycle checks, and reviewed desktop/mobile visual baselines.
+
+The previous homelab image `v0.3.0-rc.5` at `sha256:563fcc3e2811f06b70a2311c00c75425214303a1ebd493383fd3cb9020274bfc` remains the rollback target. Physical-device, installed-PWA, spoken screen-reader, native runtime and provider-specific acceptance remain open. Desktop release artifacts remain drafts.
+
 ## 0.3.0-rc.5 — 2026-10-04
 
 PWA device-testing candidate replacing `0.3.0-rc.4` after the next hosted feedback pass.
