@@ -261,6 +261,12 @@ for (const width of [320, 390, 768, 1024]) {
         ] as const) {
           await origin.focus();
           await page.keyboard.press(key);
+          // Firefox gives an overflowing scroll container its own Tab stop.
+          // Permit that exact intermediate target once, without skipping controls.
+          if (await toolbar.evaluate((element) => document.activeElement === element)) {
+            await expect(toolbar).toBeFocused();
+            await page.keyboard.press(key);
+          }
           await expect(target).toBeFocused();
           await expect.poll(() => target.evaluate((element) => {
             const group = element.closest<HTMLElement>('.composer__actions')!;
