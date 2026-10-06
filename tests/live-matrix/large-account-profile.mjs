@@ -57,6 +57,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
   });
 
   const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: 'block', reducedMotion: 'reduce' });
+  let closing = false;
   try {
     const permitted = new Set(Object.values(stack.origins));
     await context.route('**/*', (route) => permitted.has(new URL(route.request().url()).origin) ? route.continue() : route.abort());
@@ -75,6 +76,12 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
     let syncResponses = 0;
     let loginStarted;
     let firstSyncObserved = false;
+    page.on('requestfailed', (request) => {
+      // Ignore intentional teardown and record no URL, payload or failure text.
+      if (closing || loginStarted === undefined || request.method() !== 'GET' || !new URL(request.url()).pathname.endsWith('/sync')) return;
+      metrics.largeAccountSyncFailedRequests += 1;
+      metrics.largeAccountLastSyncFailureMs = Date.now() - loginStarted;
+    });
     page.on('response', (response) => {
       if (!new URL(response.url()).pathname.endsWith('/sync') || !response.ok()) return;
       syncResponses += 1;
@@ -93,6 +100,7 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       await page.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
       const started = Date.now();
       loginStarted = started;
+      metrics.largeAccountSyncFailedRequests = 0;
       await page.getByRole('button', { name: 'Sign On', exact: true }).click();
       await page.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: readinessLimitMs });
       metrics.largeAccountShellReadyMs = Date.now() - started;
@@ -198,5 +206,5 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
         invariant(metrics.largeAccountIncrementalDurationMs >= 600000, 'large-account-sustained-duration');
       });
     }
-  } finally { await context.close(); }
+  } finally { closing = true; await context.close(); }
 }

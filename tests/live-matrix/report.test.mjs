@@ -312,3 +312,17 @@ test('large-account sync diagnostics retain numeric milestones and fixed budget 
     assert.deepEqual(result.metrics, {});
   }
 });
+
+
+test('failed sync request diagnostics expose only numeric counts and elapsed times', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const metrics = { largeAccountSyncFailedRequests: 2, largeAccountLastSyncFailureMs: 80014 };
+  const result = makeReport({ ...base, metrics: { ...metrics, requestUrl: privateValue, accessToken: privateValue,
+    requestBody: privateValue, failureText: privateValue, request: { url: privateValue } } });
+  assert.deepEqual(result.metrics, metrics);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+  assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: 0 } }).metrics, { largeAccountSyncFailedRequests: 0 });
+  for (const invalid of [privateValue, NaN, Infinity, -Infinity, { failureText: privateValue }]) {
+    assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: invalid, largeAccountLastSyncFailureMs: invalid } }).metrics, {});
+  }
+});
