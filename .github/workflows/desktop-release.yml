@@ -48,6 +48,7 @@ env:
 jobs:
   select:
     name: Select release target
+    timeout-minutes: 10
     runs-on: ubuntu-22.04
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
@@ -61,10 +62,10 @@ jobs:
           set -euo pipefail
           case "$target" in
             all)
-              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-24.04","bundles":"appimage,deb,rpm","target":"linux"},{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"},{"name":"Windows x86_64","os":"windows-2022","bundles":"nsis,msi","target":"windows"}]}'
+              matrix='{"include":[{"name":"Linux x86_64 AppImage and deb","os":"ubuntu-24.04","bundles":"appimage,deb","target":"linux"},{"name":"Linux x86_64 RPM","os":"ubuntu-24.04","bundles":"rpm","target":"linux"},{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"},{"name":"Windows x86_64","os":"windows-2022","bundles":"nsis,msi","target":"windows"}]}'
               ;;
             linux)
-              matrix='{"include":[{"name":"Linux x86_64","os":"ubuntu-24.04","bundles":"appimage,deb,rpm","target":"linux"}]}'
+              matrix='{"include":[{"name":"Linux x86_64 AppImage and deb","os":"ubuntu-24.04","bundles":"appimage,deb","target":"linux"},{"name":"Linux x86_64 RPM","os":"ubuntu-24.04","bundles":"rpm","target":"linux"}]}'
               ;;
             macos)
               matrix='{"include":[{"name":"macOS Apple Silicon","os":"macos-15-arm64","bundles":"dmg,app","target":"macos"},{"name":"macOS Intel","os":"macos-15","bundles":"dmg,app","target":"macos"}]}'
@@ -82,6 +83,7 @@ jobs:
   build:
     needs: select
     name: ${{ matrix.name }}
+    timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -238,6 +240,9 @@ jobs:
           releaseBody: See docs/desktop-release.md for installation, update, and rollback verification.
           releaseDraft: true
           prerelease: ${{ inputs.prerelease || contains(env.RELEASE_TAG, '-') }}
+          # RPM publishes its signed installer only. AppImage owns the Linux
+          # updater entry so parallel Linux jobs cannot overwrite that entry.
+          uploadUpdaterJson: ${{ matrix.bundles != 'rpm' }}
           tauriScript: ./node_modules/.bin/tauri
           args: --bundles ${{ matrix.bundles }} --config src-tauri/tauri.release.generated.json
 
@@ -245,6 +250,7 @@ jobs:
     name: Audit release assets
     needs: build
     if: ${{ needs.build.result == 'success' }}
+    timeout-minutes: 10
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout release tag
@@ -263,6 +269,7 @@ jobs:
         run: |
           mkdir -p release-artifacts
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-artifacts
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tag_name:.tagName,assets:[.assets[]|{name,url:.apiUrl,browser_download_url:.url}]}' > "$RUNNER_TEMP/release-index.json"
 
       - name: Checkout release validation tools
         uses: actions/checkout@v7
@@ -271,6 +278,8 @@ jobs:
           path: release-tools
 
       - name: Validate updater metadata
+        env:
+          RELEASE_INDEX_FILE: ${{ runner.temp }}/release-index.json
         run: node release-tools/scripts/validate-release-metadata.mjs "$(find release-artifacts -name latest.json -print -quit)"
 
       - name: Validate Linux media runtime

@@ -7,6 +7,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import process from 'node:process';
+import { setTimeout, clearTimeout } from 'node:timers';
 import { command, freePort, invariant, until } from './stack.mjs';
 
 const livekitImage = 'livekit/livekit-server:v1.13.4@sha256:189f7c81b704a36642bc5c7e2d3e1ae83744627c11978a23a251bf19fbec64e0';
@@ -20,6 +21,23 @@ async function portOpen(port) {
     socket.once('error', () => resolve(false));
     socket.setTimeout(1000, () => { socket.destroy(); resolve(false); });
   });
+}
+
+// Pause the real SFU, not browser APIs: both media and signalling stop.
+// Always attempt unpause, including timeout/assertion failures. Docker removal
+// in stop() remains the final cleanup boundary if unpause itself fails.
+export async function withPausedSfu(containerId, action, runCommand = command, timeout = 60000) {
+  let timer;
+  try {
+    await runCommand('docker', ['pause', containerId], { timeout: 10000 });
+    await Promise.race([
+      Promise.resolve().then(action),
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('sfu-interruption-deadline')), timeout); }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+    await runCommand('docker', ['unpause', containerId], { timeout: 10000 });
+  }
 }
 
 export async function startRtcStack(stack, roomId) {
@@ -92,6 +110,6 @@ export async function startRtcStack(stack, roomId) {
       } catch { respond(response, 403, { errcode: 'M_FORBIDDEN' }); }
     });
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
-    return { origin, authOrigin: `http://127.0.0.1:${server.address().port}`, metrics, stop };
+    return { origin, authOrigin: `http://127.0.0.1:${server.address().port}`, metrics, stop, interrupt: (action) => withPausedSfu(containerId, action) };
   } catch (error) { await stop(); throw error; }
 }

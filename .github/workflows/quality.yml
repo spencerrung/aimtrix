@@ -8,9 +8,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -22,7 +27,8 @@ jobs:
           # is fixed in glib 0.20, which is not compatible with that chain yet.
           allow-ghsas: GHSA-wrw7-89jp-8q8g
 
-  check:
+  static-check:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -40,37 +46,62 @@ jobs:
       - name: Lint, test, and build
         run: npm run check
 
+      - name: Test release asset validation
+        run: node --test scripts/validate-release-metadata.test.mjs
+
       - name: Validate release contract
         run: npm run release:validate
 
-      - name: Install Chromium
+      - name: Push privacy proofs
+        run: npm run proof:push && npm run proof:push-sw
+
+      - name: Install Chromium for the scheduling proof
         run: npx playwright install --with-deps chromium
 
-      - name: Browser and accessibility tests
-        run: PLAYWRIGHT_PREVIEW=1 npm run test:e2e
+      - name: Scheduling feasibility proof
+        run: npm run proof:scheduling
 
+  browser-chromium:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build static client
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser and accessibility tests
+        run: PLAYWRIGHT_PREVIEW=1 npm run test:e2e -- --shard=${{ matrix.shard }}/2
       - name: Preserve browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-evidence-${{ github.run_id }}
+          name: browser-chromium-${{ matrix.shard }}-${{ github.run_id }}
           path: |
             playwright-report/
             test-results/
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Push privacy proofs
-        run: npm run proof:push && npm run proof:push-sw
-
-      - name: Scheduling feasibility proof
-        run: npm run proof:scheduling
-
   browser-compat:
     strategy:
       fail-fast: false
       matrix:
         browser: [firefox, webkit]
+        shard: [1, 2]
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -87,12 +118,12 @@ jobs:
       - name: Install browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
       - name: Browser compatibility and accessibility
-        run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e
+        run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e -- --shard=${{ matrix.shard }}/2
       - name: Preserve browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-compat-${{ matrix.browser }}-${{ github.run_id }}
+          name: browser-compat-${{ matrix.browser }}-${{ matrix.shard }}-${{ github.run_id }}
           path: |
             playwright-report/
             test-results/
@@ -100,6 +131,7 @@ jobs:
           retention-days: 14
 
   mobile-shell:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -124,3 +156,29 @@ jobs:
           test -f ios/App/App/PrivacyInfo.xcprivacy
           grep -q 'applicationId "dev.alucard.aimtrix"' android/app/build.gradle
           grep -q 'custom_url_scheme.*aimtrix' android/app/src/main/res/values/strings.xml
+
+  # Keep one stable branch-protection status covering every required gate.
+  check:
+    if: always()
+    needs: [static-check, browser-chromium, browser-compat, mobile-shell, dependency-review]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Quality gates
+        env:
+          STATIC_RESULT: ${{ needs.static-check.result }}
+          CHROMIUM_RESULT: ${{ needs.browser-chromium.result }}
+          COMPAT_RESULT: ${{ needs.browser-compat.result }}
+          MOBILE_RESULT: ${{ needs.mobile-shell.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependency-review.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$STATIC_RESULT" = success
+          test "$CHROMIUM_RESULT" = success
+          test "$COMPAT_RESULT" = success
+          test "$MOBILE_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$DEPENDENCY_RESULT" = success
+          else
+            test "$DEPENDENCY_RESULT" = skipped
+          fi

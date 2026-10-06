@@ -10,6 +10,7 @@ on:
       - 'package-lock.json'
       - 'src-tauri/**'
       - 'vite.config.ts'
+      - 'build/**'
   push:
     branches: [main]
     paths:
@@ -20,6 +21,7 @@ on:
       - 'package-lock.json'
       - 'src-tauri/**'
       - 'vite.config.ts'
+      - 'build/**'
 
 permissions:
   contents: read
@@ -31,6 +33,7 @@ concurrency:
 jobs:
   build:
     name: ${{ matrix.name }}
+    timeout-minutes: 10
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

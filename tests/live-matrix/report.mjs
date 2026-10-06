@@ -29,9 +29,10 @@ export const checkNames = new Set([
   'large-account-history-navigation', 'large-account-sustained-delivery',
   'delegated-auth-account', 'delegated-auth-discovery', 'delegated-auth-login', 'delegated-auth-account-settings',
   'delegated-auth-recovery-setup', 'delegated-auth-recovery-restore', 'delegated-auth-logout',
-  'delegated-auth-refresh-and-rejection',
+  'delegated-auth-refresh-and-rejection', 'delegated-auth-natural-expiry',
 ]);
 export const failureCategories = ['strict mode violation', 'Timeout', 'not a file input', 'matrix-http-status', 'media-requires-authentication', 'attachment-ciphertext', 'mxc-upload', 'single-thread-reply', 'thread-retry-same-ciphertext-transaction', 'standard-thread-relation', 'single-accepted-attachment', 'attachment-filename-caption', 'attachment-retry-transaction', 'attachment-decryption', 'standard-thread-attachment', 'draft-reattach-required', 'draft-reload-no-send', 'independent-draft-contexts', 'formatted-api-peer-subset', 'formatted-outbound-roundtrip', 'element-login', 'element-timeline', 'element-formatted-send', 'element-login-ui', 'element-room-timeline', 'element-outbound-emphasis', 'element-root-format', 'element-root-quote', 'element-root-list', 'element-return-room', 'element-return-composer', 'element-return-receive', 'element-return-main-event', 'element-return-detached', 'element-return-id-mismatch', 'element-return-strong', 'element-return-emphasis', 'element-return-code', 'element-formatted-subset', 'draft-stage-room', 'draft-stage-thread', 'draft-thread-composer', 'draft-thread-file', 'draft-thread-caption', 'draft-thread-persistence', 'draft-reload-room', 'draft-reload-thread', 'draft-reattach-thread', 'draft-send-reattached', 'draft-receive-reattached', 'draft-cleanup-contexts', 'home-open-thread', 'home-mute-thread', 'home-thread-mute-saved', 'home-follow-thread', 'home-hide-before-follow', 'home-follow-click', 'home-follow-saved', 'home-open-home', 'home-send-activity', 'home-show-mention', 'home-show-thread', 'home-second-follow', 'home-hide-shared', 'home-open-exact', 'home-exact-render', 'home-exact-still-home', 'home-exact-wrong-room', 'home-exact-event-missing', 'home-exact-event-hidden', 'home-return', 'home-cleanup-rooms', 'notification-open-controls', 'notification-mode-all', 'notification-mode-mentions', 'notification-mode-nothing', 'notification-mode-default', 'notification-account-dnd', 'notification-second-device', 'notification-keyword-add-remove', 'notification-health', 'notification-thread-rule-readback', 'notification-room-rule-readback', 'notification-account-rule-readback', 'notification-own-device-sync', 'notification-keyword-readback', 'home-follow-account-data', 'home-no-passive-receipts', 'home-return-filter', 'other'];
+checkNames.add('journey-coverage');
 failureCategories.push('poll-open-control', 'poll-dialog-input', 'poll-submit', 'poll-render', 'poll-vote-control', 'poll-vote-confirm', 'poll-create-decrypted', 'poll-vote-reconciled', 'poll-pagination-root', 'poll-pagination-pages', 'poll-pagination-results', 'poll-end-reconciled', 'location-open-control', 'location-dialog-input', 'location-submit', 'location-render', 'location-decrypted', 'voice-no-premature-upload', 'voice-encrypted-upload', 'voice-decrypted-download');
 failureCategories.push('element-encrypted-login', 'element-encrypted-room', 'element-encrypted-composer', 'element-encrypted-fill', 'element-encrypted-send', 'element-encrypted-receive', 'element-encrypted-message', 'element-poll-render', 'element-location-render', 'element-voice-render');
 failureCategories.push('element-poll-vote-radio', 'element-poll-vote-enabled', 'element-poll-vote-control', 'element-poll-vote-encrypted', 'element-poll-vote-received', 'element-poll-replacement', 'element-poll-ended');
@@ -90,11 +91,15 @@ failureCategories.push('account-switch-create-room', 'account-switch-encrypted-s
   'account-switch-forget-dormant', 'account-switch-dormant-removed', 'account-switch-active-preserved',
   'account-switch-pending-create-room', 'account-switch-send-in-flight', 'account-switch-pending-cleanup',
   'secondary-synapse-readiness');
+failureCategories.push('delegated-natural-expiry-code', 'delegated-natural-expiry-old-token',
+  'delegated-natural-expiry-rotation', 'delegated-natural-expiry-identity', 'delegated-natural-expiry-send',
+  'delegated-natural-expiry-event', 'delegated-natural-expiry-ciphertext');
 const finite = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, delegatedAuth, passed, failureStage, checks, metrics }) {
+export function makeReport({ revision, platform, browserVersion, cpuCount, memoryGiB, run, probe, elementUi, delegatedAuth, passed, failureStage, checks, metrics, journeyProfile }) {
   invariant(checks.every((check) => checkNames.has(check.name)), 'report-check-name');
   invariant(failureStage === null || checkNames.has(failureStage), 'report-stage');
   return {
+    ...(journeyProfile && ['full', 'core', 'history'].includes(journeyProfile) ? { journeyProfile } : {}),
     schemaVersion: 1, revision: /^[a-f0-9]{40}$/.test(revision) ? revision : 'unknown', images: delegatedAuth === true
       ? { synapse: images.synapse, mas: images.mas, postgres: images.postgres }
       : elementUi === true ? { synapse: images.synapse, dex: images.dex, element: images.element } : { synapse: images.synapse, dex: images.dex },
@@ -116,7 +121,8 @@ export function makeReport({ revision, platform, browserVersion, cpuCount, memor
       'communityBeforeDirectoryMs',
       'delegatedLoginCompleted', 'delegatedLogoutCompleted', 'delegatedRecoverySupported', 'delegatedRecoveryRestored',
       'delegatedRefreshRotated', 'delegatedRefreshRejected', 'delegatedRevocationAutoReauth',
-      'delegatedRecoveryStateHttpStatus',
+      'delegatedRecoveryStateHttpStatus', 'delegatedNaturalExpiryObservedMs', 'delegatedNaturalExpiryRotated',
+      'delegatedNaturalExpiryEncryptedRoundtrip',
     ].filter((key) => finite(metrics[key])).map((key) => [key, Math.round(metrics[key])])),
   };
 }

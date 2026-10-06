@@ -12,6 +12,10 @@ Aimtrix follows semantic versioning after `1.0.0`. Until then, minor versions ma
 
 For a hosted-PWA prerelease, use an `-rc.N` version and pin the published image by its immutable multi-architecture digest during device acceptance. A version tag also starts the desktop draft workflow; that draft is not a desktop promotion. Keep the previously deployed tag and digest in the operator's rollback record until the candidate is accepted.
 
+Manual image publication requires an explicit existing `vMAJOR.MINOR.PATCH` or prerelease tag, the matching `package.json` version, and a `main` workflow commit equal to that tag's commit. Annotated and lightweight tags are supported. Build metadata (`+...`) is rejected because Docker image tags cannot represent it. Blank inputs never publish `latest`; only a validated stable version enables that alias.
+
+The workflow checks the public Docker Hub registry before building and again immediately before uploading. An existing version, registry authentication/rate-limit failure, or network uncertainty stops publication. Its own manual runs are serialized; registry-side access controls are still needed to prevent another publisher from racing the final check. A partially completed publication whose version tag exists must be inspected and recovered by digest, rather than rerun to overwrite that version. Keep the prior deployed digest available throughout recovery.
+
 Aimtrix does not run migrations or server-side state. Operators should retain their previous immutable image tag for rollback.
 
 The cross-platform operating process, privacy/store disclosure contract, live interoperability gate, physical-device gate, evidence template, support process, and rollback ownership live in [release operations](release-operations.md). Run `npm run release:validate` before cutting a release; CI runs the same contract check and preserves browser evidence artifacts.

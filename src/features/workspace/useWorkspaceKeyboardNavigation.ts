@@ -20,9 +20,9 @@ export function useWorkspaceKeyboardNavigation(root: RefObject<HTMLElement | nul
       if (value == null) { if (node.hasAttribute('tabindex')) node.removeAttribute('tabindex'); } else if (node.getAttribute('tabindex') !== value) node.setAttribute('tabindex', value);
     };
     const rows = (list: HTMLElement) => [...list.querySelectorAll<HTMLElement>(MESSAGE)].filter(visible);
-    const update = () => {
-      for (const node of original.keys()) if (!host.contains(node)) { restore(node); original.delete(node); }
-      for (const list of host.querySelectorAll<HTMLElement>(LIST)) {
+    const update = (lists: Iterable<HTMLElement>) => {
+      for (const list of lists) {
+        if (!host.contains(list)) continue;
         const messages = rows(list);
         const focused = document.activeElement instanceof HTMLElement ? document.activeElement.closest<HTMLElement>(MESSAGE) : null;
         const selected = focused && messages.includes(focused) ? focused : messages.includes(selection.get(list)!) ? selection.get(list)! : messages[0];
@@ -40,7 +40,36 @@ export function useWorkspaceKeyboardNavigation(root: RefObject<HTMLElement | nul
         }
       }
     };
-    const focusRow = (node: HTMLElement) => { node.focus({ preventScroll: true }); node.scrollIntoView?.({ block: 'nearest' }); update(); };
+    let focusedMessage: HTMLElement | null = null;
+    let enteringControls = false;
+    const syncFocus = (target: EventTarget | null) => {
+      const element = target instanceof HTMLElement && host.contains(target) ? target : null;
+      const message = element?.closest<HTMLElement>(MESSAGE) ?? null;
+      const list = message?.closest<HTMLElement>(LIST);
+      const next = list ? message : null;
+      const entering = Boolean(next && element !== next);
+      if (next === focusedMessage && entering === enteringControls) return;
+      for (const row of new Set([focusedMessage, next])) {
+        if (!row || !host.contains(row)) continue;
+        for (const control of row.querySelectorAll<HTMLElement>(CONTROL)) {
+          remember(control);
+          if (row === next && entering) restore(control);
+          else if (control.getAttribute('tabindex') !== '-1') control.tabIndex = -1;
+        }
+      }
+      if (next && list) {
+        const previous = selection.get(list);
+        if (previous && previous !== next && host.contains(previous)) previous.tabIndex = -1;
+        remember(next);
+        next.tabIndex = 0;
+        selection.set(list, next);
+      }
+      focusedMessage = next;
+      enteringControls = entering;
+    };
+    const onFocusIn = (event: FocusEvent) => syncFocus(event.target);
+    const onFocusOut = (event: FocusEvent) => syncFocus(event.relatedTarget);
+    const focusRow = (node: HTMLElement) => { node.focus({ preventScroll: true }); node.scrollIntoView?.({ block: 'nearest' }); };
     const usableControls = (node: HTMLElement) => [...node.querySelectorAll<HTMLElement>(CONTROL)].filter((control) => visible(control) && !control.matches(':disabled') && original.get(control) !== '-1');
     const focusSection = (section: HTMLElement) => {
       if (section.matches(LIST)) {
@@ -82,16 +111,52 @@ export function useWorkspaceKeyboardNavigation(root: RefObject<HTMLElement | nul
         if (next >= 0) { event.preventDefault(); focusRow(messages[next]); }
         else if (event.key === 'Enter') {
           const control = usableControls(message)[0];
-          if (control) { event.preventDefault(); control.focus(); update(); }
+          if (control) { event.preventDefault(); control.focus(); }
         }
       }
     };
-    const observer = new MutationObserver(update);
+    const includes = (node: HTMLElement, selector: string) => node.matches(selector) || Boolean(node.querySelector(selector));
+    const observer = new MutationObserver((records) => {
+      const dirty = new Set<HTMLElement>();
+      let removed = false;
+      for (const record of records) {
+        if (!(record.target instanceof HTMLElement)) continue;
+        const target = record.target;
+        const list = target.closest<HTMLElement>(LIST);
+        if (record.type === 'attributes') {
+          // A hidden/inert ancestor can change every row's eligibility.
+          if (list) dirty.add(list);
+          for (const child of target.querySelectorAll<HTMLElement>(LIST)) dirty.add(child);
+          continue;
+        }
+        // Detached tracked controls/section fallbacks also need their original attributes restored.
+        removed ||= [...record.removedNodes].some((node) => node instanceof HTMLElement && includes(node, CONTROL));
+        const changed = [...record.addedNodes, ...record.removedNodes].filter((node): node is HTMLElement => node instanceof HTMLElement);
+        // Text edits, typing notices and unrelated panels cannot alter the roving controls.
+        if (list && changed.some((node) => includes(node, MESSAGE)
+          || (target.closest(MESSAGE) && includes(node, CONTROL)))) {
+          dirty.add(list);
+          removed ||= record.removedNodes.length > 0;
+        }
+        for (const node of changed) {
+          if (!includes(node, LIST)) continue;
+          if (node.matches(LIST)) dirty.add(node);
+          for (const child of node.querySelectorAll<HTMLElement>(LIST)) dirty.add(child);
+          removed ||= record.removedNodes.length > 0;
+        }
+      }
+      if (removed) for (const node of original.keys()) {
+        if (!host.contains(node)) { restore(node); original.delete(node); }
+      }
+      update(dirty);
+      if (removed) syncFocus(document.activeElement);
+    });
     observer.observe(host, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'inert'] });
-    host.addEventListener('focusin', update);
-    host.addEventListener('focusout', update);
+    host.addEventListener('focusin', onFocusIn);
+    host.addEventListener('focusout', onFocusOut);
     window.addEventListener('keydown', onKey, true);
-    update();
-    return () => { observer.disconnect(); host.removeEventListener('focusin', update); host.removeEventListener('focusout', update); window.removeEventListener('keydown', onKey, true); for (const node of original.keys()) restore(node); };
+    update(host.querySelectorAll<HTMLElement>(LIST));
+    syncFocus(document.activeElement);
+    return () => { observer.disconnect(); host.removeEventListener('focusin', onFocusIn); host.removeEventListener('focusout', onFocusOut); window.removeEventListener('keydown', onKey, true); for (const node of original.keys()) restore(node); };
   }, [root]);
 }

@@ -5,25 +5,58 @@ on:
     paths:
       - Dockerfile
       - nginx.conf
+      - build/**
+      - vite.config.ts
       - .github/workflows/docker.yml
+      - scripts/validate-image-publication.mjs
+      - tests/release/publication.test.mjs
   push:
     branches: [main]
   workflow_dispatch:
     inputs:
       version:
-        description: Optional version tag to publish (for example v0.2.0)
-        required: false
+        description: Existing release tag matching main and package.json (for example v0.3.0-rc.7)
+        required: true
         type: string
 
 permissions:
   contents: read
 
+# Serialize publication and repeat the registry check immediately before upload.
+concurrency:
+  group: ${{ github.event_name == 'workflow_dispatch' && 'aimtrix-container-publication' || github.run_id }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: spencerrung/aimtrix
+  RELEASE_VERSION: ${{ inputs.version }}
+
 jobs:
   verify:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Test publication guards
+        run: node --test tests/release/publication.test.mjs
+
+      - name: Validate publication source and version
+        if: github.event_name == 'workflow_dispatch'
+        id: publication
+        run: node scripts/validate-image-publication.mjs validate
+
+      - name: Refuse an existing immutable version
+        if: github.event_name == 'workflow_dispatch'
+        run: node scripts/validate-image-publication.mjs check-image
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
@@ -106,12 +139,17 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/aimtrix
+          images: ${{ env.IMAGE_REPOSITORY }}
+          flavor: latest=false
           tags: |
             type=sha,prefix=sha-
-            type=raw,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
+            type=raw,value=${{ steps.publication.outputs.version }}
             type=raw,value={{date 'YYYYMMDDHHmmss' tz='UTC'}}-{{sha}},enable={{is_default_branch}}
-            type=raw,value=latest,enable=${{ !contains(inputs.version, '-') }}
+            type=raw,value=latest,enable=${{ steps.publication.outputs.publish_latest == 'true' }}
+
+      - name: Recheck immutable version immediately before publication
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        run: node scripts/validate-image-publication.mjs check-image
 
       - name: Publish the exact verified OCI archive
         if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'

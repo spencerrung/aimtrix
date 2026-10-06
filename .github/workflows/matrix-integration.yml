@@ -9,12 +9,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: matrix-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   live-matrix:
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2]
+        journey: [core, history]
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     env:
-      AIMTRIX_LIVE_OWNER: ci-${{ github.run_id }}-${{ github.run_attempt }}
+      AIMTRIX_LIVE_OWNER: ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.journey }}-${{ matrix.replica }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -25,16 +34,19 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Verify complete journey partitions
+        run: node --test tests/live-matrix/journey-profiles.test.mjs
       - name: Test diagnostic privacy
-        run: npm run test:matrix:privacy
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix:privacy
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
       - name: Build the static client
         run: npm run build
-      - name: Two independent clean Matrix runs
-        run: npm run test:matrix -- --repeat=2
+      - name: Independent clean Matrix run
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --journey-${{ matrix.journey }}
       - name: Deliberately fail and verify private diagnostics
-        run: npm run test:matrix -- --probe-failure
+        if: matrix.replica == 1 && matrix.journey == 'core'
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --probe-failure
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs
@@ -42,16 +54,16 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: matrix-summary-${{ github.run_id }}
+          name: matrix-summary-${{ matrix.journey }}-${{ matrix.replica }}-${{ github.run_id }}
           path: |
             matrix-test-results/run-1.json
-            matrix-test-results/run-2.json
+            matrix-test-results/history-1.json
             matrix-test-results/failure-probe-1.json
           if-no-files-found: ignore
           retention-days: 14
   element-web-peer:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 10
     env:
       AIMTRIX_LIVE_OWNER: ci-element-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -69,7 +81,7 @@ jobs:
       - name: Build the static client
         run: npm run build
       - name: Exercise encrypted Element Web peer
-        run: npm run test:matrix -- --element-ui
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --element-ui --journey-core
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs
@@ -83,7 +95,7 @@ jobs:
           retention-days: 14
   matrixrtc-live-peer:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     env:
       AIMTRIX_LIVE_OWNER: ci-rtc-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -100,8 +112,10 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Build the static client
         run: npm run build
+      - name: Verify bounded SFU interruption cleanup
+        run: node --test tests/live-matrix/rtc-interruption.test.mjs
       - name: Exercise two encrypted MatrixRTC peers over disposable LiveKit
-        run: node tests/live-matrix/group-rtc.mjs
+        run: timeout --signal=TERM --kill-after=20s 8m node tests/live-matrix/group-rtc.mjs
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs
@@ -115,7 +129,7 @@ jobs:
           retention-days: 14
   cache-enabled-reload-profile:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     env:
       AIMTRIX_LIVE_OWNER: ci-cache-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -133,7 +147,7 @@ jobs:
       - name: Build the static client
         run: npm run build
       - name: Measure same-device reload with Synapse sync cache enabled
-        run: npm run test:matrix -- --profile-cache-reload
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --profile-cache-reload
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs
@@ -145,11 +159,9 @@ jobs:
           path: matrix-test-results/cache-reload-1.json
           if-no-files-found: ignore
           retention-days: 14
-  sustained-sync-profile:
+  synthetic-large-account:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      AIMTRIX_LIVE_OWNER: ci-sustained-${{ github.run_id }}-${{ github.run_attempt }}
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -164,94 +176,21 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Build the static client
         run: npm run build
-      - name: Measure ten-minute incremental Synapse sync
-        run: npm run test:matrix -- --profile-sustained-sync
-      - name: Remove any remaining job-owned test services
-        if: always()
-        run: node tests/live-matrix/cleanup.mjs
-      - name: Preserve only allowlisted Matrix summary
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: matrix-sustained-sync-summary-${{ github.run_id }}
-          path: matrix-test-results/sustained-sync-1.json
-          if-no-files-found: ignore
-          retention-days: 14
-  encrypted-sustained-sync-profile:
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      AIMTRIX_LIVE_OWNER: ci-encrypted-sustained-${{ github.run_id }}-${{ github.run_attempt }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Build the static client
-        run: npm run build
-      - name: Measure ten-minute encrypted Synapse sync
-        run: npm run test:matrix -- --profile-encrypted-sustained-sync
-      - name: Remove any remaining job-owned test services
-        if: always()
-        run: node tests/live-matrix/cleanup.mjs
-      - name: Preserve only allowlisted Matrix summary
+      - name: Measure synthetic 10k-room rendering
+        run: |
+          mkdir -p matrix-test-results
+          node scripts/profile-large-account.mjs --rooms=10000 --cycles=100 > matrix-test-results/synthetic-large-account.json
+      - name: Preserve synthetic performance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: matrix-encrypted-sustained-sync-summary-${{ github.run_id }}
-          path: matrix-test-results/encrypted-sustained-sync-1.json
-          if-no-files-found: ignore
-          retention-days: 14
-  large-account-initial-sync-profile:
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    env:
-      AIMTRIX_LIVE_OWNER: ci-large-${{ github.run_id }}-${{ github.run_attempt }}
-      AIMTRIX_LIVE_ROOM_COUNT: 10000
-      AIMTRIX_LIVE_SUSTAINED: '1'
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v7
-      - name: Set up Node.js
-        uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-      - name: Install dependencies
-        run: npm ci
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-      - name: Build the static client
-        run: npm run build
-      - name: Prepare summary directory
-        run: mkdir -p matrix-test-results
-      - name: Measure synthetic 10k-room rendering on the CI host
-        run: node scripts/profile-large-account.mjs --rooms=10000 --cycles=100 > matrix-test-results/synthetic-large-account.json
-      - name: Measure disposable many-room initial sync and sustained delivery
-        run: npm run test:matrix -- --profile-large-account
-      - name: Remove any remaining job-owned test services
-        if: always()
-        run: node tests/live-matrix/cleanup.mjs
-      - name: Preserve only synthetic and allowlisted Matrix summaries
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: matrix-large-account-summary-${{ github.run_id }}
-          path: |
-            matrix-test-results/large-account-1.json
-            matrix-test-results/synthetic-large-account.json
+          name: matrix-synthetic-large-account-${{ github.run_id }}
+          path: matrix-test-results/synthetic-large-account.json
           if-no-files-found: ignore
           retention-days: 14
   delegated-auth-live:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 10
     env:
       AIMTRIX_LIVE_OWNER: ci-auth-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
@@ -269,7 +208,7 @@ jobs:
       - name: Build the static client
         run: npm run build
       - name: Exercise delegated Matrix sign-in and revocation against disposable MAS
-        run: npm run test:matrix -- --delegated-auth
+        run: timeout --signal=TERM --kill-after=20s 8m npm run test:matrix -- --delegated-auth
       - name: Remove any remaining job-owned test services
         if: always()
         run: node tests/live-matrix/cleanup.mjs

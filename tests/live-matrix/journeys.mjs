@@ -1,4 +1,6 @@
 /* global localStorage, indexedDB, fetch, AbortController, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
+import { expect } from '@playwright/test';
+import { expectedJourneyChecks, assertJourneyCoverage } from './journey-profiles.mjs';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -158,7 +160,15 @@ async function installSyntheticQrCamera(page) {
   });
 }
 
-export async function runJourneys({ browser, stack, check, forceFailure, metrics }) {
+export async function runJourneys({ browser, stack, check: recordCheck, forceFailure, metrics, journeyProfile = 'full' }) {
+  const selected = expectedJourneyChecks(journeyProfile, Boolean(stack.origins.element));
+  const completed = [];
+  const check = async (name, action) => {
+    if (!selected.includes(name)) return;
+    await recordCheck(name, action);
+    completed.push(name);
+  };
+  const verifyCoverage = () => recordCheck('journey-coverage', async () => assertJourneyCoverage(completed, journeyProfile, Boolean(stack.origins.element)));
   const api = matrixApi(stack);
   const accounts = {};
   await check('isolated-accounts', async () => {
@@ -172,7 +182,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     // Element's authenticated-media download path uses its service worker to
     // rewrite legacy MXC URLs and attach the session token. Keep Aimtrix's
     // isolated contexts worker-free while exercising Element as deployed.
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: element ? 'allow' : 'block' });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', serviceWorkers: element ? 'allow' : 'block' });
     contexts.push(context);
     // A bad default/discovery target must fail locally, never contact a real account service.
     const permitted = new Set(Object.values(stack.origins));
@@ -1328,6 +1338,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }
     });
     await check('encrypted-history-and-context', async () => {
+      await alice.bringToFront();
       await openRoom(alice, roomName);
       // Buddy rows prefer a room topic to message previews. Clear this test
       // topic so the receiving device's live preview is observable in context.
@@ -1336,24 +1347,29 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const historyWireStart = wire.length;
       const composer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
       const sentIds = [];
-      for (let index = 0; index < 350; index++) {
+      // Exceed the 250-row cap and leave anchor 240 outside the latest window.
+      // The dedicated history job retains the original full encrypted workload.
+      const historyCount = 350;
+      for (let index = 0; index < historyCount; index++) {
         await composer.fill(`${prefix} ${String(index).padStart(3, '0')}`);
         const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.room.encrypted/') && response.ok());
-        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+        // Fixture volume exercises the real keyboard send path without waiting
+        // for pointer stability on a button beside a continually moving timeline.
+        await composer.press('Enter');
         sentIds.push((await (await sent).json()).event_id);
-        await composer.filter({ hasText: /^$/ }).waitFor();
+        await expect.poll(() => composer.innerText(), { timeout: 20000 }).toBe('');
       }
       invariant(wire.slice(historyWireStart).every((event) => event.content['m.relates_to']?.rel_type !== 'm.thread'), 'history-main-conversation-events');
-      invariant(new Set(sentIds).size === 350 && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
+      invariant(new Set(sentIds).size === historyCount && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
       navigationHistory = { firstId: sentIds[40], secondId: sentIds[240], firstText: `${prefix} 040`, secondText: `${prefix} 240` };
       // Reload removes the in-memory SDK timeline; existing keys remain on this
       // device and online peers can still share keys, as in the reload journey.
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       const timeline = aliceSecond.getByRole('region', { name: 'Messages', exact: true });
       const entry = (index) => timeline.locator('.timeline-message').filter({ hasText: `${prefix} ${String(index).padStart(3, '0')}` });
-      await until(async () => await entry(349).count() > 0 || await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count() > 0, 'history-initial-view-ready');
+      await until(async () => await entry(historyCount - 1).count() > 0 || await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count() > 0, 'history-initial-view-ready');
       if (await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count()) await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
-      await entry(349).waitFor({ timeout: 45000 });
+      await entry(historyCount - 1).waitFor({ timeout: 45000 });
       invariant(await entry(0).count() === 0, 'old-history-outside-live-window');
       for (let attempt = 0; attempt < 12 && await entry(0).count() === 0; attempt++) {
         const older = aliceSecond.getByRole('button', { name: 'Load older messages', exact: true });
@@ -1365,18 +1381,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }
       await entry(0).waitFor({ state: 'attached' });
       await entry(0).scrollIntoViewIfNeeded();
-      invariant(await entry(349).count() === 0, 'history-window-moved');
+      invariant(await entry(historyCount - 1).count() === 0, 'history-window-moved');
       const previousLast = await timeline.locator('.timeline-message').last().getAttribute('data-event-id');
       await aliceSecond.getByRole('button', { name: 'Load newer messages', exact: true }).and(aliceSecond.locator(':enabled')).evaluate((button) => button.click());
       await until(async () => await timeline.locator('.timeline-message').last().getAttribute('data-event-id') !== previousLast, 'history-forward-navigation');
       await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
-      await entry(349).waitFor();
+      await entry(historyCount - 1).waitFor();
       // A fresh app navigation must use the real /context endpoint and load both
       // sides: SDK getEventTimeline itself requests context with limit=0.
       await aliceSecond.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(sentIds[20])}`);
       await entry(20).waitFor({ timeout: 45000 });
       await entry(19).waitFor(); await entry(21).waitFor();
-      invariant(await entry(349).count() === 0 && await timeline.locator('.timeline-message').count() <= 250, 'bounded-event-context');
+      invariant(await entry(historyCount - 1).count() === 0 && await timeline.locator('.timeline-message').count() <= 250, 'bounded-event-context');
       const top = (await entry(20).boundingBox()).y;
       await composer.fill(`${prefix} incoming`);
       await alice.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -1645,10 +1661,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const sendReply = async () => {
         await alice.bringToFront();
         const accepted = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/'));
-        await senderThread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(`Synthetic old thread reply ${randomBytes(8).toString('hex')}`);
-        await senderThread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
+        const composer = senderThread.getByRole('textbox', { name: 'Message thread', exact: true });
+        await composer.fill(`Synthetic old thread reply ${randomBytes(8).toString('hex')}`);
+        await composer.press('Enter');
         const response = await accepted;
         invariant(response.ok(), 'old-thread-reply-accepted');
+        await expect.poll(() => composer.innerText(), { timeout: 20000 }).toBe('');
         return (await response.json()).event_id;
       };
       const start = wire.length;
@@ -1726,6 +1744,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       } finally { aliceSecond.off('request', recordReceipt); aliceSecond.off('response', recordAcceptedReceipt); }
       await senderThread.getByRole('button', { name: 'Close thread', exact: true }).click();
     });
+    if (journeyProfile === 'history') { await verifyCoverage(); return; }
     await check('authenticated-encrypted-media', async () => {
       const latest = bob.getByRole('button', { name: 'Jump to latest messages', exact: true });
       if (await latest.count()) await latest.click();
@@ -3063,6 +3082,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         }
       } catch { throw new Error(stage); }
     });
+    await verifyCoverage();
   } finally {
     for (const context of contexts) await context.close();
   }

@@ -1,0 +1,6 @@
+@media (max-width: 767px), (pointer: coarse) {
+  .login-window button { min-height: 44px; }
+  .login-form .field-shell { height: 46px; }
+  .login-form .field-shell input { font-size: 16px; }
+  .login-window .demo-entry { align-items: center; }
+}

@@ -268,3 +268,27 @@ test('delegated sign-in evidence cannot expose provider credentials or callback 
     assert.equal(JSON.stringify(refresh).includes(privateValue), false);
   }
 });
+
+test('natural OAuth expiry evidence retains only numeric results and fixed failure categories', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const name = 'delegated-auth-natural-expiry';
+  const metrics = { delegatedNaturalExpiryObservedMs: 60400, delegatedNaturalExpiryRotated: 1,
+    delegatedNaturalExpiryEncryptedRoundtrip: 1 };
+  for (const category of ['delegated-natural-expiry-code', 'delegated-natural-expiry-old-token',
+    'delegated-natural-expiry-rotation', 'delegated-natural-expiry-identity', 'delegated-natural-expiry-send',
+    'delegated-natural-expiry-event', 'delegated-natural-expiry-ciphertext']) {
+    const result = makeReport({ ...base, delegatedAuth: true, failureStage: name,
+      checks: [{ name, passed: false, durationMs: 60500, category,
+        accessToken: privateValue, refreshToken: privateValue, roomId: privateValue, event: privateValue }],
+      metrics: { ...metrics, originalCredential: privateValue, providerResponse: privateValue },
+    });
+    assert.deepEqual(result.checks, [{ name, passed: false, durationMs: 60500, category }]);
+    assert.deepEqual(result.metrics, metrics);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
+
+test('journey profile diagnostics retain only fixed supported identities', () => {
+  for (const journeyProfile of ['full', 'core', 'history']) assert.equal(makeReport({ ...base, journeyProfile }).journeyProfile, journeyProfile);
+  assert.equal(makeReport({ ...base, journeyProfile: 'private-room-canary' }).journeyProfile, undefined);
+});
