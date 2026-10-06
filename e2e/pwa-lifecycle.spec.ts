@@ -30,7 +30,7 @@ test('production worker controls a warmed shell and reloads it offline', async (
   }
 });
 
-test('a changed production build waits for draft confirmation before activation', async ({ page, browserName, isMobile }) => {
+test('a changed production build waits for draft confirmation before activation', async ({ page, context, browserName, isMobile }) => {
   test.skip(isMobile, 'One actual two-build lifecycle gate; mobile notice layout is covered separately.');
   test.setTimeout(120000);
   test.skip(!process.env.PLAYWRIGHT_PREVIEW, 'Real worker lifecycle requires the production build.');
@@ -57,6 +57,7 @@ test('a changed production build waits for draft confirmation before activation'
   const server = createServer((request, response) => {
     void (async () => {
       const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
+      if (pathname === '/cache-seed') { response.writeHead(200, { 'Content-Type': 'text/html' }).end('<title>Cache setup</title>'); return; }
       const file = resolve(root, `.${pathname === '/' ? '/index.html' : pathname}`);
       if (!file.startsWith(`${root}/`)) { response.writeHead(403).end(); return; }
       try {
@@ -74,14 +75,20 @@ test('a changed production build waits for draft confirmation before activation'
   if (!address || typeof address === 'string') throw new Error('Missing lifecycle server address');
   try {
     await page.setViewportSize({ width: 1280, height: 800 });
-    await page.goto(`http://127.0.0.1:${address.port}/?demo=1`);
+    const origin = `http://127.0.0.1:${address.port}`;
+    // Create a conflicting older cache before the app has registered its worker.
+    await page.goto(`${origin}/cache-seed`);
+    await page.evaluate(async () => {
+      const unrelated = await caches.open('unrelated-origin-cache');
+      await unrelated.put('/', new Response('<title>Unrelated cached shell</title>', { headers: { 'Content-Type': 'text/html' } }));
+    });
+    await page.goto(`${origin}/?demo=1`);
     const composer = page.getByRole('textbox', { name: /Message Welcome Lounge/ });
     await expect(composer).toBeVisible();
     await page.evaluate(async () => {
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true }));
     });
-    await page.evaluate(async () => { await caches.open('unrelated-origin-cache'); });
     await composer.fill('Synthetic draft survives deferred update');
     root = second;
     // The running old page must discover an update when brought back to focus.
@@ -105,8 +112,12 @@ test('a changed production build waits for draft confirmation before activation'
     await expect(notice).toBeHidden();
     await expect.poll(() => page.evaluate(async () => (await caches.keys()).filter((key) => key.startsWith('aimtrix-shell-')).length)).toBe(1);
     expect(await page.evaluate(() => caches.has('unrelated-origin-cache'))).toBe(true);
+    await context.setOffline(true);
+    await page.reload();
+    await expect(composer).toBeVisible();
+    await expect(page).toHaveTitle('Aimtrix updated build');
   } finally {
-    try { if (!page.isClosed()) await page.goto('about:blank'); }
+    try { await context.setOffline(false); if (!page.isClosed()) await page.goto('about:blank'); }
     finally {
       await new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); });
       await rm(directory, { recursive: true, force: true });

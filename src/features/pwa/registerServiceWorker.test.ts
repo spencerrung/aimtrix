@@ -44,3 +44,20 @@ it('ignores hidden pages and tolerates offline update errors', async () => {
     expect(registration.update).toHaveBeenCalledOnce();
   } finally { stop(); }
 });
+
+it('observes an installation that began before registration resolved', () => {
+  const worker = Object.assign(new EventTarget(), { state: 'installing' });
+  const registration = Object.assign(new EventTarget(), { update: vi.fn(), waiting: null as unknown, installing: worker });
+  Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: { controller: {} } });
+  const announce = vi.fn();
+  window.addEventListener('aimtrix-update-ready', announce);
+  const stop = watchServiceWorker(registration as unknown as ServiceWorkerRegistration);
+  try {
+    expect(announce).not.toHaveBeenCalled();
+    worker.state = 'installed';
+    registration.waiting = worker;
+    worker.dispatchEvent(new Event('statechange'));
+    expect(announce).toHaveBeenCalledOnce();
+    expect(announce.mock.calls[0][0].detail).toBe(worker);
+  } finally { stop(); window.removeEventListener('aimtrix-update-ready', announce); }
+});

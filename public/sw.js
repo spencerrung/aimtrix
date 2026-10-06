@@ -103,7 +103,7 @@ self.addEventListener('fetch', (event) => {
           void caches.open(CACHE).then((cache) => cache.put('/', copy));
           return response;
         })
-        .catch(() => caches.match('/')),
+        .catch(() => caches.open(CACHE).then((cache) => cache.match('/'))),
     );
     return;
   }
@@ -116,7 +116,7 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/screenshots/')
   ) {
     event.respondWith(
-      caches.match(request).then(
+      caches.open(CACHE).then((cache) => cache.match(request)).then(
         (cached) =>
           cached ||
           fetch(request).then((response) => {

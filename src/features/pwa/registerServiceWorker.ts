@@ -23,6 +23,7 @@ export function watchServiceWorker(registration: ServiceWorkerRegistration): () 
   };
   announce();
   registration.addEventListener('updatefound', onUpdateFound);
+  onUpdateFound(); // register() can resolve after installation has already begun.
   window.addEventListener('focus', update);
   window.addEventListener('online', update);
   document.addEventListener('visibilitychange', update);
