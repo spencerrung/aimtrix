@@ -269,6 +269,7 @@ jobs:
         run: |
           mkdir -p release-artifacts
           gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir release-artifacts
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json tagName,assets --jq '{tag_name:.tagName,assets:[.assets[]|{name,url:.apiUrl,browser_download_url:.url}]}' > "$RUNNER_TEMP/release-index.json"
 
       - name: Checkout release validation tools
         uses: actions/checkout@v7
@@ -277,6 +278,8 @@ jobs:
           path: release-tools
 
       - name: Validate updater metadata
+        env:
+          RELEASE_INDEX_FILE: ${{ runner.temp }}/release-index.json
         run: node release-tools/scripts/validate-release-metadata.mjs "$(find release-artifacts -name latest.json -print -quit)"
 
       - name: Validate Linux media runtime

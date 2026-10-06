@@ -46,6 +46,9 @@ jobs:
       - name: Lint, test, and build
         run: npm run check
 
+      - name: Test release asset validation
+        run: node --test scripts/validate-release-metadata.test.mjs
+
       - name: Validate release contract
         run: npm run release:validate
 
