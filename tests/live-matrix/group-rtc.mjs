@@ -135,6 +135,53 @@ try {
   };
   const remoteVideoPlaying = async (shelf) => shelf.locator('video').evaluateAll((videos) => videos.some((video) =>
     video.srcObject instanceof MediaStream && video.srcObject.getVideoTracks().some((track) => track.readyState === 'live') && video.readyState >= 2 && video.videoWidth > 0));
+  const advancingRemoteVideo = async (subscriber, shelf) => {
+    await subscriber.bringToFront();
+    await until(() => remoteVideoPlaying(shelf), 'remote-video-ready', 45000);
+    // A retained videoWidth or live MediaStream does not prove resumed media.
+    // Observe ten additional presented frames on the same remote video element.
+    // Poll fresh after reconnection so a replaced element starts its own baseline.
+    const video = shelf.locator('video').first();
+    await video.evaluate((element) => new Promise((resolve, reject) => {
+      const presentedFrames = () => {
+        const quality = element.getVideoPlaybackQuality();
+        return quality.totalVideoFrames - quality.droppedVideoFrames;
+      };
+      const initial = presentedFrames();
+      const timer = window.setTimeout(() => { window.clearInterval(poll); reject(new Error('remote-frames-stalled')); }, 15000);
+      const poll = window.setInterval(() => {
+        if (element.isConnected && element.srcObject instanceof MediaStream
+          && element.srcObject.getVideoTracks().some((track) => track.readyState === 'live')
+          && presentedFrames() >= initial + 10) {
+          window.clearTimeout(timer); window.clearInterval(poll); resolve();
+        }
+      }, 100);
+    }));
+  };
+  const exerciseInterruption = async (publisher, subscriber, publisherShelf, subscriberShelf, prefix) => {
+    await run(`${prefix}sfu-interruption-and-automatic-encrypted-recovery`, async () => {
+      stage = `${prefix}recovery-camera-publish`;
+      await publisher.bringToFront();
+      await publisherShelf.getByRole('button', { name: 'Turn group camera on' }).click();
+      await advancingRemoteVideo(subscriber, subscriberShelf);
+      stage = `${prefix}sfu-paused-reconnecting-ui`;
+      await rtc.interrupt(async () => {
+        await Promise.all([publisherShelf, subscriberShelf].map((shelf) =>
+          shelf.getByText('Reconnecting…', { exact: true }).waitFor({ timeout: 55000 })));
+      });
+      stage = `${prefix}sfu-resumed-automatic-recovery`;
+      // No join/prejoin or media-toggle action between interruption and recovery.
+      for (const shelf of [publisherShelf, subscriberShelf]) {
+        await shelf.getByText('2 participants', { exact: true }).waitFor({ timeout: 60000 });
+        await shelf.getByText('Media encrypted', { exact: true }).waitFor();
+      }
+      stage = `${prefix}recovered-encrypted-frames-advance`;
+      await advancingRemoteVideo(subscriber, subscriberShelf);
+      stage = `${prefix}recovery-camera-cleanup`;
+      await publisherShelf.getByRole('button', { name: 'Turn group camera off' }).click();
+      await until(async () => (await subscriberShelf.locator('video').count()) === 0, `${prefix}recovery-camera-unpublished`, 45000);
+    });
+  };
   const exerciseVideoAndScreen = async (publisher, subscriberShelf, publisherShelf, prefix) => {
     await run(`${prefix}encrypted-camera-publish-and-subscribe`, async () => {
       await publisherShelf.getByRole('button', { name: 'Turn group camera on' }).click();
@@ -173,6 +220,7 @@ try {
     await until(async () => (await bobShelf.locator('audio').count()) > 0 && (await aliceShelf.locator('audio').count()) > 0, 'encrypted-remote-audio', 45000);
   });
   await exerciseVideoAndScreen(alice, bobShelf, aliceShelf, '');
+  await exerciseInterruption(alice, bob, aliceShelf, bobShelf, '');
   await run('membership-and-capture-cleanup', async () => {
     await bobShelf.getByRole('button', { name: 'Leave group call' }).click();
     await aliceShelf.getByText('1 participant').waitFor({ timeout: 60000 });
@@ -205,6 +253,7 @@ try {
     await until(async () => (await modernBobShelf.locator('audio').count()) > 0 && (await modernAliceShelf.locator('audio').count()) > 0, 'modern-encrypted-remote-audio', 45000);
   });
   await exerciseVideoAndScreen(modernAlice, modernBobShelf, modernAliceShelf, 'modern-');
+  await exerciseInterruption(modernAlice, modernBob, modernAliceShelf, modernBobShelf, 'modern-');
   await run('modern-membership-and-capture-cleanup', async () => {
     await modernBobShelf.getByRole('button', { name: 'Leave group call' }).click();
     await modernAliceShelf.getByText('1 participant').waitFor({ timeout: 60000 });
@@ -235,7 +284,7 @@ try {
   checks.push({ name: 'cleanup', passed: cleaned });
   if (!cleaned) process.exitCode = 1;
   await mkdir(resolve('matrix-test-results'), { recursive: true });
-  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, stickyWire, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'screen capture uses a synthetic video track in place of a physical display picker', 'TURN-required NAT, connection-loss recovery, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
+  const report = { suite: 'matrixrtc-live', passed: !process.exitCode, failedStage: process.exitCode ? stage : null, checks, authorizer: rtc?.metrics ?? null, membershipWrites, stickyWire, membershipState, boundaries: ['synthetic authorizer validates real Matrix OpenID and signs a disposable LiveKit JWT', 'homeserver transport advertisement is injected because the pinned Synapse image lacks MSC4143 discovery', 'screen capture uses a synthetic video track in place of a physical display picker', 'interruption recovery pauses the disposable SFU; physical network changes, TURN-required NAT, independent peer clients, deployed authorization-service compatibility, and homeserver-mediated MSC4195 authorization are not exercised'] };
   await writeFile(resolve('matrix-test-results/group-rtc.json'), `${JSON.stringify(report, null, 2)}\n`, { mode: 0o600 });
   console.log(`MatrixRTC live: ${report.passed ? 'PASS' : 'FAIL'} (${checks.filter((item) => item.passed).length}/${checks.length} checks)`);
 }

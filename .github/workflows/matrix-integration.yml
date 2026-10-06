@@ -108,6 +108,8 @@ jobs:
         run: npx playwright install --with-deps chromium
       - name: Build the static client
         run: npm run build
+      - name: Verify bounded SFU interruption cleanup
+        run: node --test tests/live-matrix/rtc-interruption.test.mjs
       - name: Exercise two encrypted MatrixRTC peers over disposable LiveKit
         run: node tests/live-matrix/group-rtc.mjs
       - name: Remove any remaining job-owned test services
