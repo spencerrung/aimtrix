@@ -12,7 +12,7 @@ The App frame now owns visual viewport height and offset, reserves a top area fo
 
 Healthy persistent drafts remain discoverable through Activity's Drafts action. A global draft notice appears for write/conflict/access failures or existing volatile drafts, preserving recovery guidance without occupying conversation space for an empty healthy store.
 
-The behavior above supersedes the original layout and input descriptions below where they differ. Current thread composition, durable drafts, and search capabilities have their own records in [room/thread messaging](room-thread-messaging.md), [draft storage](draft-storage.md), and [history retrieval](collections-history-retrieval.md). The original implementation record does not establish current cross-browser or physical-device acceptance. October 5 complete gate totals and screenshot review remain pending the integrated validation record in the [usability audit](usability-audit-2026-10-05.md).
+The behavior above supersedes the original layout and input descriptions below where they differ. Current thread composition, durable drafts, and search capabilities have their own records in [room/thread messaging](room-thread-messaging.md), [draft storage](draft-storage.md), and [history retrieval](collections-history-retrieval.md). The original implementation record does not establish current cross-browser or physical-device acceptance. The October 5 Chromium baselines and keyboard/dialog screenshots have been inspected. Local gate totals and final PR CI are recorded in the [usability audit](usability-audit-2026-10-05.md#integrated-regression-loop).
 
 ## Original shell implementation
 

@@ -48,7 +48,28 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
   expect((await main.boundingBox())!.width).toBeGreaterThanOrEqual(420);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await thread.getByRole('separator', { name: 'Resize thread panel' }).press('Home');
-  for (const theme of ['Aqua', 'Graphite', 'Midnight']) {
+  await thread.getByRole('button', { name: 'Close thread' }).click();
+  await expect(thread).toBeHidden();
+  await expect(details).toBeHidden();
+  await expect(search).toBeHidden();
+  await expect(page.getByRole('button', { name: /2 replies/ })).toBeFocused();
+});
+
+// Keep independent theme/Axe captures out of the state-retention journey. On
+// WebKit CI, completed stable-frame checks cost several seconds per click;
+// combining three settings trips and screenshots consumed the journey budget.
+for (const theme of ['Aqua', 'Graphite', 'Midnight']) {
+  test(`desktop thread remains readable and accessible in ${theme}`, async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name.includes('mobile'), 'Desktop contextual theme acceptance.');
+    test.setTimeout(60_000);
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.goto('/?demo=1');
+    const composer = page.getByLabel('Message Welcome Lounge');
+    await composer.fill('Keep my conversation draft');
+    const opener = page.getByRole('button', { name: /2 replies/ });
+    await opener.click();
+    const thread = page.getByRole('complementary', { name: 'Thread', exact: true });
+    await thread.getByLabel('Message thread').fill('Keep my thread draft');
     await page.getByRole('button', { name: 'You settings', exact: true }).click();
     const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix' });
     await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
@@ -56,15 +77,15 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
     await page.keyboard.press('Escape');
     await expect(thread).toBeVisible();
     await expectReachable(composer);
+    await expect(composer).toHaveText('Keep my conversation draft');
+    await expect(thread.getByLabel('Message thread')).toHaveText('Keep my thread draft');
     expect((await new AxeBuilder({ page }).include('.context-panel').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([]);
     await page.screenshot({ path: testInfo.outputPath(`desktop-one-context-${theme.toLowerCase()}.png`) });
-  }
-  await thread.getByRole('button', { name: 'Close thread' }).click();
-  await expect(thread).toBeHidden();
-  await expect(details).toBeHidden();
-  await expect(search).toBeHidden();
-  await expect(page.getByRole('button', { name: /2 replies/ })).toBeFocused();
-});
+    await thread.getByRole('button', { name: 'Close thread' }).click();
+    await expect(thread).toBeHidden();
+    await expect(opener).toBeFocused();
+  });
+}
 
 test('phone and tablet route Back preserves the room, draft and exact reading anchor', async ({ page }, testInfo) => {
   const size = testInfo.project.name.includes('mobile') ? { width: 412, height: 915 } : { width: 900, height: 800 };
