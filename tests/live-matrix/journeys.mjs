@@ -1,6 +1,7 @@
 /* global localStorage, indexedDB, fetch, AbortController, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
 import { expect } from '@playwright/test';
 import { expectedJourneyChecks, assertJourneyCoverage } from './journey-profiles.mjs';
+import { reactionArtwork } from './reaction-fixture.mjs';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -1766,6 +1767,51 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       const received = await link.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.href)).arrayBuffer())));
       invariant(Buffer.from(received).equals(bytes), 'attachment-decryption');
       invariant(wire.every((event) => event.path.includes('/m.room.encrypted/')), 'encrypted-media-event');
+    });
+    await check('standard-custom-mxc-reaction', async () => {
+      // Add a recent encrypted target so both core and full journeys exercise
+      // the same live tail, independently of historical pagination.
+      const caption = `Synthetic reaction target ${randomBytes(8).toString('hex')}`;
+      await alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true }).fill(caption);
+      await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+      const row = alice.locator('.timeline-message').filter({ hasText: caption });
+      await until(async () => (await row.getAttribute('data-event-id'))?.startsWith('$'), 'custom-reaction-target');
+      const targetId = await row.getAttribute('data-event-id');
+      const target = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(targetId)}`, { token: bobSession.accessToken });
+      invariant(target.type === 'm.room.encrypted' && !JSON.stringify(target.content).includes(caption), 'custom-reaction-encrypted-target');
+      await (await messageActions(alice, row)).getByRole('menuitem', { name: 'Add reaction', exact: true }).click();
+      const picker = alice.getByRole('dialog', { name: 'Choose a reaction', exact: true });
+      await picker.getByRole('textbox', { name: 'Search reaction emoji', exact: true }).fill('synthetic cheer');
+      const choice = picker.getByRole('button', { name: 'React with :synthetic-wave:', exact: true });
+      await expect.poll(() => choice.locator('img').evaluate((image) => image.complete && image.naturalWidth > 0)).toBe(true);
+      const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.reaction/'));
+      await choice.click();
+      const response = await sent;
+      invariant(response.ok(), 'custom-reaction-send');
+      const { event_id: reactionId } = await response.json();
+      const event = await api(`/_matrix/client/v3/rooms/${encode(roomId)}/event/${encode(reactionId)}`, { token: bobSession.accessToken });
+      const relation = event.content?.['m.relates_to'];
+      invariant(event.type === 'm.reaction' && event.sender === accounts.alice.user_id && relation?.rel_type === 'm.annotation' && relation.event_id === targetId, 'custom-reaction-standard-annotation');
+      invariant(event.content['dev.alucard.aimtrix.reaction.v1']?.name === 'Synthetic wave', 'custom-reaction-persisted-label');
+      invariant(relation.key?.startsWith('mxc://aimtrix.test/'), 'custom-reaction-uploaded-mxc');
+      const mediaPath = `/_matrix/client/v1/media/download/${relation.key.slice(6)}`;
+      const anonymous = await fetch(`${stack.origins.synapse}${mediaPath}`, { signal: AbortSignal.timeout(10000) });
+      invariant(anonymous.status === 401, 'custom-reaction-authenticated-download');
+      const downloaded = await api(mediaPath, { token: bobSession.accessToken, binary: true });
+      invariant(Buffer.from(downloaded).equals(reactionArtwork), 'custom-reaction-upload-bytes');
+      const thumbnail = await api(`/_matrix/client/v1/media/thumbnail/${relation.key.slice(6)}?width=48&height=48&method=crop`, { token: bobSession.accessToken, binary: true });
+      const peerChip = bob.locator('.timeline-message').filter({ hasText: caption }).getByRole('button', { name: 'Synthetic wave, 1 reactions', exact: true });
+      const verifyPeer = async () => {
+        await peerChip.waitFor({ timeout: 45000 });
+        const image = peerChip.locator('img');
+        await expect.poll(() => image.evaluate((element) => element.complete && element.naturalWidth > 0 && element.src.startsWith('blob:'))).toBe(true);
+        const bytes = await image.evaluate(async (element) => Array.from(new Uint8Array(await (await fetch(element.src)).arrayBuffer())));
+        invariant(Buffer.from(bytes).equals(Buffer.from(thumbnail)), 'custom-reaction-peer-image');
+      };
+      await verifyPeer();
+      await bob.reload();
+      await openRoom(bob, roomName);
+      await verifyPeer();
     });
     const openTool = async (name) => {
       const more = alice.getByRole('button', { name: 'More message tools' });

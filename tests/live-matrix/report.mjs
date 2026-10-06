@@ -7,6 +7,7 @@ export const checkNames = new Set([
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
   'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
   'encrypted-send-receive-and-latency', 'password-two-device-recovery-setup-and-restore', 'incoming-two-device-sas-verification', 'encrypted-history-and-context', 'private-encrypted-search-key-availability', 'withheld-key-guidance-live', 'authenticated-encrypted-media',
+  'standard-custom-mxc-reaction',
   'encrypted-staged-attachments-and-retry', 'encrypted-thread-attachment',
   'encrypted-poll-create', 'encrypted-poll-vote', 'encrypted-poll-pagination', 'encrypted-poll-end', 'encrypted-location-interop', 'encrypted-voice-interop',
   'element-ui-encrypted-poll', 'element-ui-poll-vote', 'element-ui-poll-vote-replaced', 'element-ui-poll-ended', 'element-ui-unencrypted-poll-roundtrip', 'element-ui-encrypted-location', 'element-ui-location-to-aimtrix', 'element-ui-encrypted-voice', 'element-ui-encrypted-voice-playback',
