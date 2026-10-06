@@ -121,6 +121,20 @@ describe('private encrypted search store', () => {
     store.close(); await deletePrivateSearchDatabase(scope);
   });
 
+  it.each([false, true])('does not recreate private search storage when clear follows a restore in the same turn (existing=%s)', async (existing) => {
+    const clearing = { userId: '@restore-clear:test', homeserver: 'https://matrix.test' };
+    if (existing) {
+      const store = await PrivateSearchStore.unlock(clearing, passphrase);
+      await store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 });
+      store.close();
+    }
+    await Promise.all([
+      allowPrivateSearchRoom(clearing, '!restore:test'),
+      deletePrivateSearchDatabase(clearing),
+    ]);
+    expect((await indexedDB.databases()).some((entry) => entry.name === privateSearchDatabaseName(clearing))).toBe(false);
+  });
+
   it('rejects a future database schema without overwriting it', async () => {
     const future = { userId: '@future:test', homeserver: 'https://matrix.test' };
     await new Promise<void>((resolve) => { const request = indexedDB.open(privateSearchDatabaseName(future), 3); request.onupgradeneeded = () => request.result.createObjectStore('future'); request.onsuccess = () => { request.result.close(); resolve(); }; });

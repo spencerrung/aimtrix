@@ -281,10 +281,14 @@ export async function allowPrivateSearchRoom(scope: PrivateSearchScope, roomId: 
   // Share an open/transaction across the burst without skipping persisted
   // membership blocks. Every caller still awaits commit, so the controller's
   // per-room leave/index/rejoin queues retain their ordering guarantees.
-  batch.promise = Promise.resolve().then(async () => {
+  // Enqueue the open synchronously so a same-turn clear cannot overtake it.
+  batch.promise = (async () => {
     let db: IDBDatabase | undefined;
     try {
       db = await openDatabase(scope);
+      // Let an immediately queued clear wait for this transaction to finish
+      // rather than treating our short-lived connection as another open tab.
+      db.onversionchange = () => db?.close();
       roomRestoreBatches.delete(key);
       const tx = db.transaction('rooms', 'readwrite');
       const rooms = tx.objectStore('rooms');
@@ -297,7 +301,7 @@ export async function allowPrivateSearchRoom(scope: PrivateSearchScope, roomId: 
       if (roomRestoreBatches.get(key) === batch) roomRestoreBatches.delete(key);
       db?.close();
     }
-  });
+  })();
   roomRestoreBatches.set(key, batch);
   return batch.promise;
 }
