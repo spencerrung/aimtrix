@@ -1,5 +1,8 @@
 import { expect, test } from '@playwright/test';
 
+// Mock catalog assets at the network boundary; service-worker lifecycle has its own production gate.
+test.use({ serviceWorkers: 'block' });
+
 test('configured custom image emoji remain searchable and selectable as reactions', async ({ page, isMobile }) => {
   await page.route('**/emoji/packs/*/manifest.json', (route) => route.fulfill({ json: { entries: [{ id: 'synthetic-wave', name: 'Synthetic wave', aliases: ['synthetic cheer'], src: '/synthetic-emoji.svg' }] } }));
   await page.route('**/synthetic-emoji.svg', (route) => route.fulfill({ contentType: 'image/svg+xml', body: '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24"><circle cx="12" cy="12" r="10" fill="purple"/></svg>' }));
