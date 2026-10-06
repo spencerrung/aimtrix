@@ -73,15 +73,26 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
     const heap = async () => (await rendererMetrics()).JSHeapUsedSize;
     const heapBefore = await heap();
     let syncResponses = 0;
+    let loginStarted;
+    let firstSyncObserved = false;
     page.on('response', (response) => {
       if (!new URL(response.url()).pathname.endsWith('/sync') || !response.ok()) return;
       syncResponses += 1;
       metrics.largeAccountSyncResponses = syncResponses;
+      if (loginStarted === undefined || firstSyncObserved || response.request().method() !== 'GET') return;
+      firstSyncObserved = true;
+      metrics.largeAccountFirstSyncHeadersMs = Date.now() - loginStarted;
+      // Wait for transfer completion without reading, copying or parsing its body.
+      // A closed/failed response leaves completion absent instead of inventing a time.
+      void response.finished().then((failure) => {
+        if (!failure) metrics.largeAccountFirstSyncBodyCompleteMs = Date.now() - loginStarted;
+      }).catch(() => {});
     });
     await check('large-account-initial-sync', async () => {
       await page.getByRole('textbox', { name: 'Matrix ID', exact: true }).fill('@large-account-reader:aimtrix.test');
       await page.getByLabel('Password', { exact: true }).fill(stack.credentials.password);
       const started = Date.now();
+      loginStarted = started;
       await page.getByRole('button', { name: 'Sign On', exact: true }).click();
       await page.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: readinessLimitMs });
       metrics.largeAccountShellReadyMs = Date.now() - started;
