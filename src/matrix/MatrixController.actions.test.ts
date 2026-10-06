@@ -164,3 +164,33 @@ describe('message action authorization and detached event ownership', () => {
     expect(test.client.sendEvent).not.toHaveBeenCalled();
   });
 });
+
+it('uploads an image reaction and sends the portable MXC annotation with a bounded fallback label', async () => {
+  const test = fixture();
+  vi.mocked(test.internal.uploadInlineEmotes).mockResolvedValueOnce([{ mxcUrl: 'mxc://test/synthetic', name: 'Synthetic', shortcode: ':synthetic:' }] as never);
+  await test.controller.toggleReaction(roomId, '$original', ':synthetic:', undefined, { id: 'synthetic', name: 'Synthetic', src: '/emoji/synthetic.png' });
+  expect(test.internal.uploadInlineEmotes).toHaveBeenCalledWith([{ id: 'synthetic', name: 'Synthetic', src: '/emoji/synthetic.png', shortcode: ':synthetic:' }]);
+  expect(test.client.sendEvent).toHaveBeenCalledWith(roomId, 'm.reaction', {
+    'm.relates_to': { rel_type: 'm.annotation', event_id: '$original', key: 'mxc://test/synthetic' },
+    'dev.alucard.aimtrix.reaction.v1': { name: 'Synthetic' },
+  });
+});
+it('rechecks reaction permissions after an image upload', async () => {
+  const test = fixture();
+  vi.mocked(test.internal.uploadInlineEmotes).mockImplementationOnce(async () => { test.power({ 'm.reaction': 90 }); return [{ mxcUrl: 'mxc://test/synthetic' }] as never; });
+  await expect(test.controller.toggleReaction(roomId, '$original', ':synthetic:', undefined, { id: 'synthetic', name: 'Synthetic', src: '/emoji/synthetic.png' })).rejects.toThrow('no longer available');
+  expect(test.client.sendEvent).not.toHaveBeenCalled();
+});
+it('uses an existing MXC emoji without downloading or reuploading it', async () => {
+  const test = fixture();
+  await test.controller.toggleReaction(roomId, '$original', ':synthetic:', undefined, { id: 'synthetic', name: 'Synthetic', src: 'mxc://test/synthetic' });
+  expect(test.internal.uploadInlineEmotes).not.toHaveBeenCalled();
+  expect(test.client.sendEvent).toHaveBeenCalledWith(roomId, 'm.reaction', expect.objectContaining({ 'm.relates_to': expect.objectContaining({ key: 'mxc://test/synthetic' }) }));
+});
+
+it('does not send a completed image upload into a replaced account session', async () => {
+  const test = fixture();
+  vi.mocked(test.internal.uploadInlineEmotes).mockImplementationOnce(async () => { test.internal.client = undefined; return [{ mxcUrl: 'mxc://test/synthetic' }] as never; });
+  await expect(test.controller.toggleReaction(roomId, '$original', ':synthetic:', undefined, { id: 'synthetic', name: 'Synthetic', src: '/emoji/synthetic.png' })).rejects.toThrow();
+  expect(test.client.sendEvent).not.toHaveBeenCalled();
+});

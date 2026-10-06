@@ -5,7 +5,7 @@ import { Avatar } from '../../components/Avatar';
 import { useAnchoredPopover } from '../../components/useAnchoredPopover';
 import { Popover } from '../../components/Popover';
 import { colorForId, type MessageSummary } from '../../matrix/viewModels';
-import { emojiReactionKey, type EmojiPackEntry } from '../media/emojiPacks';
+import { emojiReactionKey, isMxcEmoji, type ReactionImage, type EmojiPackEntry } from '../media/emojiPacks';
 import { MessageDeliveryStatus, type MessageDeliveryActions } from './MessageDeliveryStatus';
 import { EmojiAsset, MessageContent, LinkPreviewCard, type LinkPreview } from './MessageContent';
 import { MessageActions } from './MessageActions';
@@ -13,7 +13,6 @@ import { useMessageGeneration } from './useMessageGeneration';
 
 const reactionFallback = ['👍', '❤️', '😂', '🎉', '😮', '😢'];
 const MAX_VISIBLE_EMOJI_RESULTS = 240;
-type TextEmojiEntry = EmojiPackEntry & { emoji: string };
 const formatTime = (timestamp: number) => new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(timestamp);
 
 export const TimelineMessage = memo(function TimelineMessage({
@@ -58,7 +57,7 @@ export const TimelineMessage = memo(function TimelineMessage({
   onSave?: (message: MessageSummary) => void | Promise<void>;
   saved?: boolean;
   canPin: boolean;
-  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void | Promise<void>;
+  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string, image?: ReactionImage) => void | Promise<void>;
   emojiCatalog: EmojiPackEntry[];
   recentEmojis: string[];
   onLoadEmojiCatalog: () => void;
@@ -78,13 +77,13 @@ export const TimelineMessage = memo(function TimelineMessage({
   const reactionPicker = useRef<HTMLDivElement>(null);
   const reactionEmojis = useMemo(() => {
     const fallback = reactionFallback.map<EmojiPackEntry>((emoji) => ({ id: `fallback-${emoji}`, emoji, name: emoji }));
-    const portableCatalog = emojiCatalog.filter((entry): entry is TextEmojiEntry => Boolean(entry.emoji));
+    const portableCatalog = emojiCatalog;
     const source = portableCatalog.length
       ? [...portableCatalog, ...fallback.filter((fallbackEntry) => !portableCatalog.some((entry) => entry.emoji === fallbackEntry.emoji))]
       : fallback;
     const query = reactionQuery.trim().toLowerCase().replace(/^:/, '').replace(/:$/, '').replace(/[_-]+/g, ' ');
     const matches = source.filter((entry) =>
-      !query || `${entry.name} ${entry.emoji ?? ''} ${entry.aliases?.join(' ') ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ').includes(query),
+      !query || `${entry.id} ${entry.name} ${entry.emoji ?? ''} ${entry.aliases?.join(' ') ?? ''}`.toLowerCase().replace(/[_-]+/g, ' ').includes(query),
     );
     if (query) return { quick: [], matches: matches.slice(0, MAX_VISIBLE_EMOJI_RESULTS) };
     const quick = [...recentEmojis, ...reactionFallback]
@@ -100,14 +99,14 @@ export const TimelineMessage = memo(function TimelineMessage({
   }, [emojiCatalog, reactionQuery, recentEmojis]);
   useAnchoredPopover(reactionPickerOpen, reactionTrigger, reactionPicker, 8);
 
-  const react = (reaction: string, ownEventId?: string) => {
+  const react = (reaction: string, ownEventId?: string, image?: ReactionImage) => {
     const existing = ownEventId ? message.reactions?.find((reaction) => reaction.ownEventId === ownEventId) : undefined;
     if (reactionBusy.current || (existing ? existing.canRemove === false : message.actions?.react === false)) return;
     reactionBusy.current = true;
     const generation = reactionGeneration.current;
     setReactionFeedback('pending');
     let result: void | Promise<void>;
-    try { result = onReact(message, reaction, ownEventId); } catch { result = Promise.reject(new Error('Reaction failed')); }
+    try { result = image ? onReact(message, reaction, ownEventId, image) : onReact(message, reaction, ownEventId); } catch { result = Promise.reject(new Error('Reaction failed')); }
     void Promise.resolve(result).then(() => {
       if (generation === reactionGeneration.current) setReactionFeedback(undefined);
     }).catch(() => {
@@ -116,7 +115,8 @@ export const TimelineMessage = memo(function TimelineMessage({
   };
   const chooseReaction = (reaction: string) => {
     onEmojiUsed(reaction);
-    react(reaction);
+    const entry = emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction);
+    react(reaction, undefined, entry?.src && !entry.emoji ? { id: entry.id, name: entry.name, src: entry.src } : undefined);
     setReactionPickerOpen(false);
     setReactionQuery('');
   };
@@ -159,13 +159,13 @@ export const TimelineMessage = memo(function TimelineMessage({
                 type="button"
                 className={reaction.reacted ? 'reaction reaction--mine' : 'reaction'}
                 key={reaction.key}
-                aria-label={`${reaction.key}, ${reaction.count} reactions`}
+                aria-label={`${reaction.name ?? (isMxcEmoji(reaction.key) ? 'Custom emoji' : reaction.key)}, ${reaction.count} reactions`}
                 disabled={(reaction.ownEventId ? reaction.canRemove === false : message.actions?.react === false) || reactionFeedback === 'pending'}
                 onClick={() => react(reaction.key, reaction.ownEventId)}
               >
                 {emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key) ? (
                   <EmojiAsset entry={emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key)!} />
-                ) : reaction.key} <span>{reaction.count}</span>
+                ) : isMxcEmoji(reaction.key) ? (dataSaver || !autoplayMedia ? reaction.name ?? 'Custom emoji' : <EmojiAsset entry={{ src: reaction.key, name: reaction.name ?? 'Custom emoji' }} alt={reaction.name ?? 'Custom emoji'} />) : reaction.key} <span>{reaction.count}</span>
               </button>
             ))}
           </div>

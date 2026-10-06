@@ -960,3 +960,10 @@ describe('social message transformations', () => {
     expect(messages[0]).toMatchObject({ kind: 'poll', poll: { question: 'Lunch?', answers: [{ text: 'Soup' }, { text: 'Salad' }] } });
   });
 });
+
+it('retains bounded custom reaction names from Matrix events after a fresh snapshot', () => {
+  const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic' }, '$original');
+  const reaction = fakeEvent('m.reaction', { 'm.relates_to': { rel_type: 'm.annotation', event_id: '$original', key: 'mxc://test/synthetic' }, 'dev.alucard.aimtrix.reaction.v1': { name: 'Synthetic wave' } }, '$reaction', '@me:test');
+  const result = buildWorkspaceSnapshot(fakeClient([original, reaction]), 'online');
+  expect(result.messagesByRoom['!room:test'][0].reactions?.[0]).toMatchObject({ key: 'mxc://test/synthetic', name: 'Synthetic wave' });
+});

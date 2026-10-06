@@ -582,7 +582,7 @@ describe('Workspace demo', () => {
     expect(JSON.parse(localStorage.getItem('aimtrix.recent-emoji.v1') || '[]')).toContain('🎊');
   });
 
-  it('keeps reactions Unicode-only for cross-client portability', async () => {
+  it('includes configured image emoji in reaction search and forwards the selected image', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
       ok: true,
       headers: { get: () => null },
@@ -597,8 +597,8 @@ describe('Workspace demo', () => {
       target: { value: 'bufo' },
     });
 
-    await waitFor(() => expect(within(picker).queryByRole('button', { name: /bufo/i })).not.toBeInTheDocument());
-    expect(onToggleReaction).not.toHaveBeenCalled();
+    fireEvent.click(await within(picker).findByRole('button', { name: 'React with :bufo-wave:' }));
+    expect(onToggleReaction).toHaveBeenCalledWith('welcome', 'm1', ':bufo-wave:', undefined, { id: 'bufo-wave', name: 'Bufo wave', src: 'http://localhost:3000/emoji/packs/standard/bufo-wave.png' });
   });
 
   it('keeps animated emoji on a static preview until pointer hover', async () => {

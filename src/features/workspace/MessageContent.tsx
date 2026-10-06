@@ -24,11 +24,14 @@ export function EmojiAsset({
   style?: CSSProperties;
 }) {
   const [animated, setAnimated] = useState(false);
+  const source = animated ? entry.src : entry.previewSrc ?? entry.src;
+  const resolved = useMediaSource(source, 48);
   if (!entry.src) return entry.emoji;
+  if (!resolved) return <span>{alt || entry.name}</span>;
   const canAnimate = Boolean(entry.previewSrc && entry.previewSrc !== entry.src);
   return <img
     className="emoji-asset"
-    src={animated ? entry.src : entry.previewSrc ?? entry.src}
+    src={resolved}
     alt={alt}
     title={title}
     style={style}

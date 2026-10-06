@@ -1,3 +1,4 @@
+import type { ReactionImage } from '../media/emojiPacks';
 import type { ThreadAttentionActions } from './ThreadAttention';
 import type { ActivityActions, HomePosition } from './HomeActivity';
 import { MemberActions } from './MemberActions';
@@ -227,6 +228,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
     eventId: string,
     key: string,
     ownReactionEventId?: string,
+    image?: ReactionImage,
   ) => Promise<void>;
   onSendTyping?: (roomId: string, typing: boolean) => Promise<void>;
   onSendSticker?: (
@@ -1656,7 +1658,7 @@ function Conversation({
   onTogglePin: (message: MessageSummary) => void | Promise<void>;
   onCancelContext: () => void;
   onCancelThreadEdit: () => void;
-  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string) => void | Promise<void>;
+  onReact: (message: MessageSummary, key: string, ownReactionEventId?: string, image?: ReactionImage) => void | Promise<void>;
   emojiPacks: EmojiPackDefinition[];
   emojiAssetBaseUrl?: string;
   onSendSticker: (sticker: { id: string; name: string; src: string }, threadRootId?: string) => Promise<unknown>;
@@ -4135,10 +4137,11 @@ export function Workspace({
 
   const handleDeleteMessage = useCallback((message: MessageSummary) => { setDeleteTarget(message); }, []);
 
-  const handleReact = useCallback(async (message: MessageSummary, key: string, ownReactionEventId?: string) => {
+  const handleReact = useCallback(async (message: MessageSummary, key: string, ownReactionEventId?: string, image?: ReactionImage) => {
     if (workspace.mode === 'matrix') {
       if (!onToggleReaction) throw new Error('Reactions are unavailable.');
-      await onToggleReaction(message.roomId, message.id, key, ownReactionEventId);
+      if (image) await onToggleReaction(message.roomId, message.id, key, ownReactionEventId, image);
+      else await onToggleReaction(message.roomId, message.id, key, ownReactionEventId);
     } else setDemoMessageOverrides((current) => {
       const reactions = [...(current[message.id]?.reactions ?? message.reactions ?? [])];
       const previous = reactions.find((item) => item.key === key);
