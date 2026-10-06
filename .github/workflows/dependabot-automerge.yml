@@ -11,6 +11,7 @@ permissions:
 jobs:
   automerge:
     if: github.event.pull_request.user.login == 'dependabot[bot]'
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Fetch dependency metadata

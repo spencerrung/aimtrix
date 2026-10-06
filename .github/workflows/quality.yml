@@ -8,9 +8,14 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   dependency-review:
     if: github.event_name == 'pull_request'
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -23,6 +28,7 @@ jobs:
           allow-ghsas: GHSA-wrw7-89jp-8q8g
 
   check:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -43,34 +49,53 @@ jobs:
       - name: Validate release contract
         run: npm run release:validate
 
-      - name: Install Chromium
-        run: npx playwright install --with-deps chromium
-
-      - name: Browser and accessibility tests
-        run: PLAYWRIGHT_PREVIEW=1 npm run test:e2e
-
-      - name: Preserve browser evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: browser-evidence-${{ github.run_id }}
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 14
-
       - name: Push privacy proofs
         run: npm run proof:push && npm run proof:push-sw
 
       - name: Scheduling feasibility proof
         run: npm run proof:scheduling
 
+  browser-chromium:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Build static client
+        run: npm run build
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Browser and accessibility tests
+        run: PLAYWRIGHT_PREVIEW=1 npm run test:e2e -- --shard=${{ matrix.shard }}/2
+      - name: Preserve browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-chromium-${{ matrix.shard }}-${{ github.run_id }}
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
+          retention-days: 14
+
   browser-compat:
     strategy:
       fail-fast: false
       matrix:
         browser: [firefox, webkit]
+        shard: [1, 2]
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -87,12 +112,12 @@ jobs:
       - name: Install browser
         run: npx playwright install --with-deps ${{ matrix.browser }}
       - name: Browser compatibility and accessibility
-        run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e
+        run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e -- --shard=${{ matrix.shard }}/2
       - name: Preserve browser evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: browser-compat-${{ matrix.browser }}-${{ github.run_id }}
+          name: browser-compat-${{ matrix.browser }}-${{ matrix.shard }}-${{ github.run_id }}
           path: |
             playwright-report/
             test-results/
@@ -100,6 +125,7 @@ jobs:
           retention-days: 14
 
   mobile-shell:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
