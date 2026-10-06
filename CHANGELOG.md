@@ -2,12 +2,24 @@
 
 ## Unreleased
 
+## 0.3.0-rc.7 — 2026-10-06
+
+Phone PWA feedback candidate replacing RC6.
+
+- Reduce phone navigation, list and timeline spacing while retaining touch targets, readable editors, zoom and density preferences.
+- Keep the installed app viewport and header opaque, account for safe areas and keyboard offsets, and request an opaque iOS status bar. Physical iOS blur verification remains open.
+- Include configured image emoji in reactions, upload standard MXC annotations, preserve accessible names and respect data-saver preferences.
+- Prevent delayed live snapshots from trapping Jump to latest in a returning state; retain bounded failure and retry behavior.
+- Stage thumbnails inside room/thread composers with one Send action and compact caption, reorder, retry and removal controls.
+
 - Give production service workers a build identity and discover waiting updates on foreground/reconnect without bypassing draft confirmation.
 - Enlarge mobile sign-in targets and preserve visible keyboard focus on short screens.
 - Patch compatible development dependency advisories and the native Rustls TLS dependency.
 - Split browser and native packaging checks, parallelize independent Matrix runs, and retain full endurance profiles as an explicit local release gate.
 - Guard image publication against mismatched source/version and existing immutable tags; verify native metadata against the actual release asset inventory.
 - Extend disposable acceptance to natural delegated-token expiry and real SFU interruption recovery; live execution results belong in the acceptance record.
+
+The previous homelab image `v0.3.0-rc.6` at `sha256:3a9b962061172f20b86131aded9af542c7af3e0b2a4a81cc5cb81e062e172a67` remains the rollback target. Physical-device and native release acceptance remain open; desktop artifacts remain drafts.
 
 ## 0.3.0-rc.6 — 2026-10-06
 
