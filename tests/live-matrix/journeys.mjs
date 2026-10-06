@@ -1,4 +1,5 @@
 /* global localStorage, indexedDB, fetch, AbortController, AbortSignal, window, document, Event, navigator, Blob, atob, HTMLSelectElement */
+import { expect } from '@playwright/test';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -1337,26 +1338,29 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const historyWireStart = wire.length;
       const composer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
       const sentIds = [];
-      for (let index = 0; index < 350; index++) {
+      // Ten events beyond the 250-row cap still force a shifted history window;
+      // retain the independent context/navigation anchors at indices 20, 40 and 240.
+      const historyCount = 260;
+      for (let index = 0; index < historyCount; index++) {
         await composer.fill(`${prefix} ${String(index).padStart(3, '0')}`);
         const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.room.encrypted/') && response.ok());
         // Fixture volume exercises the real keyboard send path without waiting
         // for pointer stability on a button beside a continually moving timeline.
         await composer.press('Enter');
         sentIds.push((await (await sent).json()).event_id);
-        await composer.filter({ hasText: /^$/ }).waitFor();
+        await expect(composer).toHaveValue('', { timeout: 20000 });
       }
       invariant(wire.slice(historyWireStart).every((event) => event.content['m.relates_to']?.rel_type !== 'm.thread'), 'history-main-conversation-events');
-      invariant(new Set(sentIds).size === 350 && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
+      invariant(new Set(sentIds).size === historyCount && wire.every((event) => event.path.includes('/m.room.encrypted/') && !JSON.stringify(event.content).includes(prefix)), 'history-encrypted-wire');
       navigationHistory = { firstId: sentIds[40], secondId: sentIds[240], firstText: `${prefix} 040`, secondText: `${prefix} 240` };
       // Reload removes the in-memory SDK timeline; existing keys remain on this
       // device and online peers can still share keys, as in the reload journey.
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
       const timeline = aliceSecond.getByRole('region', { name: 'Messages', exact: true });
       const entry = (index) => timeline.locator('.timeline-message').filter({ hasText: `${prefix} ${String(index).padStart(3, '0')}` });
-      await until(async () => await entry(349).count() > 0 || await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count() > 0, 'history-initial-view-ready');
+      await until(async () => await entry(historyCount - 1).count() > 0 || await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count() > 0, 'history-initial-view-ready');
       if (await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).count()) await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
-      await entry(349).waitFor({ timeout: 45000 });
+      await entry(historyCount - 1).waitFor({ timeout: 45000 });
       invariant(await entry(0).count() === 0, 'old-history-outside-live-window');
       for (let attempt = 0; attempt < 12 && await entry(0).count() === 0; attempt++) {
         const older = aliceSecond.getByRole('button', { name: 'Load older messages', exact: true });
@@ -1368,18 +1372,18 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }
       await entry(0).waitFor({ state: 'attached' });
       await entry(0).scrollIntoViewIfNeeded();
-      invariant(await entry(349).count() === 0, 'history-window-moved');
+      invariant(await entry(historyCount - 1).count() === 0, 'history-window-moved');
       const previousLast = await timeline.locator('.timeline-message').last().getAttribute('data-event-id');
       await aliceSecond.getByRole('button', { name: 'Load newer messages', exact: true }).and(aliceSecond.locator(':enabled')).evaluate((button) => button.click());
       await until(async () => await timeline.locator('.timeline-message').last().getAttribute('data-event-id') !== previousLast, 'history-forward-navigation');
       await aliceSecond.getByRole('button', { name: 'Jump to latest messages', exact: true }).click();
-      await entry(349).waitFor();
+      await entry(historyCount - 1).waitFor();
       // A fresh app navigation must use the real /context endpoint and load both
       // sides: SDK getEventTimeline itself requests context with limit=0.
       await aliceSecond.goto(`${stack.origins.app}/?room=${encode(roomId)}&event=${encode(sentIds[20])}`);
       await entry(20).waitFor({ timeout: 45000 });
       await entry(19).waitFor(); await entry(21).waitFor();
-      invariant(await entry(349).count() === 0 && await timeline.locator('.timeline-message').count() <= 250, 'bounded-event-context');
+      invariant(await entry(historyCount - 1).count() === 0 && await timeline.locator('.timeline-message').count() <= 250, 'bounded-event-context');
       const top = (await entry(20).boundingBox()).y;
       await composer.fill(`${prefix} incoming`);
       await alice.getByRole('button', { name: 'Send message', exact: true }).click();
@@ -1653,7 +1657,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await composer.press('Enter');
         const response = await accepted;
         invariant(response.ok(), 'old-thread-reply-accepted');
-        await composer.filter({ hasText: /^$/ }).waitFor();
+        await expect(composer).toHaveValue('', { timeout: 20000 });
         return (await response.json()).event_id;
       };
       const start = wire.length;
