@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessageSummary } from '../../matrix/viewModels';
 import { parseIncomingFormatting } from '../../matrix/incomingFormatting';
@@ -20,6 +20,17 @@ describe('shared timeline message', () => {
     expect(within(articles[1]).getByRole('button', { name: 'More message actions' })).toBeVisible();
   });
 
+  it('focuses the clicked thread summary before opening context when pointer activation leaves focus in the composer', () => {
+    const openedFrom: Element[] = [];
+    render(<><textarea aria-label="Existing composer" /><TimelineMessage {...props} message={{ ...message, thread: { replyCount: 2 } }} onOpenThread={() => { openedFrom.push(document.activeElement!); }} /></>);
+    screen.getByRole('textbox', { name: 'Existing composer' }).focus();
+    const trigger = screen.getByRole('button', { name: /2 replies/ });
+    // fireEvent.click does not give buttons focus, matching Safari pointer activation.
+    fireEvent.click(trigger);
+    expect(openedFrom).toEqual([trigger]);
+    expect(trigger).toHaveFocus();
+  });
+
   it('keeps rejected reactions visible inside the message instead of leaking server details', async () => {
     const react = vi.fn().mockRejectedValue(new Error('Synthetic private server detail'));
     render(<TimelineMessage {...props} message={message} onReact={react} />);
@@ -28,6 +39,16 @@ describe('shared timeline message', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Reaction could not be updated. Try again.');
     expect(screen.queryByText(/private server detail/)).not.toBeInTheDocument();
     expect(react).toHaveBeenCalledWith(message, '👍', undefined);
+  });
+
+  it('anchors a reaction opened from More to the visible menu trigger', async () => {
+    render(<TimelineMessage {...props} message={message} />);
+    const more = screen.getByRole('button', { name: 'More message actions' });
+    fireEvent.click(more);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add reaction' }));
+    const picker = await screen.findByRole('dialog', { name: 'Choose a reaction' });
+    fireEvent.keyDown(picker, { key: 'Escape' });
+    await waitFor(() => expect(more).toHaveFocus());
   });
 
   it('can remove an owned reaction when new reactions are forbidden', () => {

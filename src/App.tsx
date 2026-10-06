@@ -12,6 +12,8 @@ import { ConnectionError } from './features/auth/ConnectionError';
 import { LoginWindow } from './features/auth/LoginWindow';
 import { InstallPrompt } from './features/pwa/InstallPrompt';
 import { NetworkStatus } from './features/pwa/NetworkStatus';
+import { useAppViewport } from './features/pwa/useAppViewport';
+import './features/pwa/appFrame.css';
 import { StartupScreen } from './features/auth/StartupScreen';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { MatrixController } from './matrix/MatrixController';
@@ -493,6 +495,8 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
 }
 
 export default function App() {
+  const noticesRef = useRef<HTMLDivElement>(null);
+  useAppViewport(noticesRef);
   const [result, setResult] = useState<RuntimeConfigResult>();
   const [updateWorker, setUpdateWorker] = useState<ServiceWorker>();
   const [draftState, setDraftState] = useState<DraftStateSummary>(EMPTY_DRAFT_STATE);
@@ -551,38 +555,21 @@ export default function App() {
   }, []);
 
   return (
-    <>
-      {!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} onClearPushRoute={clearPushRoute} onDraftStateChange={setDraftState} />}
+    <div className="app-frame">
+      <div className="app-notices" ref={noticesRef}>
       <NetworkStatus />
       <InstallPrompt />
       {updateWorker ? (
         <div
           role="status"
           aria-live="polite"
-          style={{
-            position: 'fixed',
-            zIndex: 100,
-            right: 18,
-            bottom: 'calc(18px + env(safe-area-inset-bottom, 0px))',
-            display: 'flex',
-            width: 'min(540px, calc(100vw - 36px))',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            flexWrap: 'wrap',
-            gap: 14,
-            padding: '11px 12px',
-            color: 'var(--text)',
-            border: '1px solid var(--border-strong)',
-            borderRadius: 9,
-            background: 'var(--surface-raised)',
-            boxShadow: '0 14px 40px rgba(20,35,46,0.36)',
-          }}
+          className="app-notice app-notice--update"
         >
-          <span style={{ display: 'grid', minWidth: 0, gap: 2 }}>
+          <span className="app-notice-copy">
             <strong>Aimtrix update ready</strong>
             <small style={{ color: 'var(--text-faint)', fontSize: '0.62rem' }}>{draftState.sending ? 'Wait for current sends to finish before reloading.' : 'Reload when you are ready. Encrypted account storage is preserved.'}</small>
           </span>
-          <div style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', gap: 7 }}>
+          <div className="app-notice-actions">
             <button className="text-button" type="button" onClick={() => { setUpdateWorker(undefined); setConfirmReload(false); }}>Later</button>
             <button className="aqua-button aqua-button--primary" type="button" disabled={draftState.sending} onClick={() => {
               if (draftState.hasDrafts || draftState.hasAttachments) setConfirmReload(true);
@@ -591,7 +578,9 @@ export default function App() {
           </div>
         </div>
       ) : null}
+      </div>
+      <div className="app-content">{!result ? <StartupScreen /> : <ConfiguredApp result={result} pushRoute={pushRoute} onClearPushRoute={clearPushRoute} onDraftStateChange={setDraftState} />}</div>
       {confirmReload && updateWorker ? <ConfirmDialog title="Reload Aimtrix?" description={draftState.sending ? 'A send is now in progress. Wait for it to finish before reloading.' : reloadDescription} actionLabel="Reload now" onClose={() => setConfirmReload(false)} onConfirm={async () => { if (draftState.sending) throw new Error('Send in progress'); applyUpdate(); }} /> : null}
-    </>
+    </div>
   );
 }

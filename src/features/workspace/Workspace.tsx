@@ -2,8 +2,11 @@ import type { ThreadAttentionActions } from './ThreadAttention';
 import type { ActivityActions, HomePosition } from './HomeActivity';
 import { MemberActions } from './MemberActions';
 import '../auth/sessionRecovery.css';
+import './conversationHeader.css';
 import { useShellNavigation, type ShellReadingPosition } from './useShellNavigation';
 import { useThreadViewport } from './useThreadViewport';
+import { useWorkspaceKeyboardNavigation } from './useWorkspaceKeyboardNavigation';
+import './shellNavigation.css';
 import { QuickSwitcher } from './QuickSwitcher';
 import { NavigationDialogs } from './NavigationDialogs';
 import { getNavigationShortcut, type NavigationTarget } from './quickNavigation';
@@ -27,6 +30,7 @@ import type { AttachmentSendOptions } from '../../matrix/AttachmentSender';
 import { useDialogBusy } from '../../components/dialogContext';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { Popover } from '../../components/Popover';
+import { useAnchoredPopover } from '../../components/useAnchoredPopover';
 import { Dialog, DialogClose } from '../../components/Dialog';
 import { MessageSendError } from '../../matrix/messageDelivery';
 import {
@@ -48,6 +52,7 @@ import {
   Info,
   Lock,
   MessageCircle,
+  MoreHorizontal,
   Paintbrush,
   PanelRight,
   Phone,
@@ -286,11 +291,7 @@ interface WorkspaceProps extends MessageDeliveryActions {
 
 const roomGroups: RoomSummary['group'][] = ['Invites', 'Favorites', 'Direct Messages', 'Rooms'];
 const ROOM_LIST_PAGE_SIZE = 100;
-const themes: Array<{ id: ThemeName; label: string }> = [
-  { id: 'aqua', label: 'Aqua' },
-  { id: 'graphite', label: 'Graphite' },
-  { id: 'midnight', label: 'Midnight' },
-];
+
 
 function groupLabel(group: RoomSummary['group']): string {
   if (group === 'Favorites') return 'New & Favorite';
@@ -318,6 +319,7 @@ function IconButton({
   disabled,
   active = false,
   className,
+  focusOnActivate = false,
 }: {
   label: string;
   children: ReactNode;
@@ -325,6 +327,7 @@ function IconButton({
   disabled?: boolean;
   active?: boolean;
   className?: string;
+  focusOnActivate?: boolean;
 }) {
   const isDisabled = disabled ?? onClick === undefined;
   return (
@@ -333,7 +336,7 @@ function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      onClick={onClick}
+      onClick={(event) => { if (focusOnActivate) event.currentTarget.focus({ preventScroll: true }); onClick?.(); }}
       disabled={isDisabled}
     >
       {children}
@@ -1716,9 +1719,12 @@ function Conversation({
   const [threadReadError, setThreadReadError] = useState<{ roomId: string; rootId: string; eventId: string }>();
   const readActionsTrigger = useRef<HTMLButtonElement>(null);
   const readActionsSurface = useRef<HTMLDivElement>(null);
+  const headerActionsSurface = useRef<HTMLDivElement>(null);
+  const [headerActionsRoom, setHeaderActionsRoom] = useState<string>();
+  if (headerActionsRoom && (headerActionsRoom !== room?.id || !conversationVisible)) setHeaderActionsRoom(undefined);
   const [readActionsRoom, setReadActionsRoom] = useState<string>();
-  const [readPopoverTop, setReadPopoverTop] = useState(68);
-  const [readPopoverRight, setReadPopoverRight] = useState(12);
+  useAnchoredPopover(Boolean(room && conversationVisible && headerActionsRoom === room.id), readActionsTrigger, headerActionsSurface);
+  useAnchoredPopover(Boolean(room && conversationVisible && readActionsRoom === room.id), readActionsTrigger, readActionsSurface);
   if (readActionsRoom && (readActionsRoom !== room?.id || !conversationVisible)) setReadActionsRoom(undefined);
   const [readAction, setReadAction] = useState<{ roomId: string; pending?: boolean; error?: string; status?: string }>();
   const readActionRequest = useRef<object | undefined>(undefined);
@@ -2328,29 +2334,30 @@ function Conversation({
           size="small"
         />
         <div className="conversation-header__copy">
-          <h2 tabIndex={-1} data-room-heading>{room.name}</h2>
-          <p>{room.statusMessage || (room.kind === 'direct' ? 'Direct message' : 'Matrix room')}</p>
+          <h2 tabIndex={-1} data-room-heading title={room.name}>{room.name}</h2>
+          <p>{room.encrypted ? <ShieldCheck size={12} aria-label="Encrypted" /> : null}<span>{room.statusMessage || (room.kind === 'direct' ? 'Direct message' : 'Matrix room')}</span></p>
         </div>
         <div className="conversation-header__actions">
-          {onToggleFavorite ? <button className="icon-button" type="button" aria-label={room.favorite ? 'Remove from favorites' : 'Add to favorites'} aria-pressed={Boolean(room.favorite)} aria-disabled={favoritePending || undefined} onClick={() => { if (!favoritePending) onToggleFavorite(); }}><Star size={17} fill={room.favorite ? 'currentColor' : 'none'} /></button> : null}
-          {onMarkUnread || onMarkRead ? <button ref={readActionsTrigger} className="icon-button" type="button" aria-label="Read status" aria-haspopup="dialog" aria-expanded={readActionsRoom === room.id} onClick={(event) => { const bounds = event.currentTarget.getBoundingClientRect(); setReadPopoverTop(Math.max(12, Math.min(bounds.bottom + 8, window.innerHeight - 240))); setReadPopoverRight(Math.max(12, Math.min(window.innerWidth - bounds.right, window.innerWidth - 344))); setReadActionsRoom((current) => current === room.id ? undefined : room.id); }}><Check size={17} /></button> : null}
-          <IconButton label="Search message history" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
-          {room.encrypted ? <span className="encrypted-pill"><ShieldCheck size={13} /> Encrypted</span> : null}
-          {callsEnabled && room.kind === 'direct' ? (
-            <span className="header-call-actions">
-              <IconButton label="Start voice call" onClick={() => onStartCall(false)}><Phone size={17} /></IconButton>
-              <IconButton label="Start video call" onClick={() => onStartCall(true)}><Video size={17} /></IconButton>
-            </span>
-          ) : null}
-          {groupCallsEnabled && room.kind !== 'direct' && room.membership === 'join' ? <span className="header-call-actions"><IconButton label={groupCallMembers ? `Join group call (${groupCallMembers} in call)` : 'Start group call'} onClick={onOpenGroupCall}><Users size={17} /></IconButton></span> : null}
-          <IconButton label="Decorate conversation background" onClick={onOpenBackground}><Paintbrush size={17} /></IconButton>
-          <IconButton className="conversation-header__desktop-action" label="Collapse conversation" onClick={onCollapseConversation}><ChevronRight size={17} /></IconButton>
-          <IconButton label="Toggle room details" onClick={onToggleDetails}>
-            <PanelRight size={18} />
-          </IconButton>
+          <IconButton focusOnActivate label="Search message history" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
+          <IconButton focusOnActivate label="Toggle room details" onClick={onToggleDetails}><PanelRight size={18} /></IconButton>
+          <button ref={readActionsTrigger} className="icon-button" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="dialog" aria-expanded={headerActionsRoom === room.id || readActionsRoom === room.id} onClick={() => {
+            setReadActionsRoom(undefined);
+            setHeaderActionsRoom((current) => current === room.id ? undefined : room.id);
+          }}><MoreHorizontal size={19} /></button>
         </div>
       </header>
-      {readActionsRoom === room.id && conversationVisible ? createPortal(<Popover trigger={readActionsTrigger} surfaceRef={readActionsSurface} className="history-context" label="Conversation read status" onClose={() => setReadActionsRoom(undefined)} style={{ position: 'fixed', zIndex: 60, top: readPopoverTop, right: readPopoverRight, width: 'min(320px, calc(100vw - 24px))', maxHeight: `calc(100dvh - ${readPopoverTop + 12}px)`, overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px #0003' }}>
+      {headerActionsRoom === room.id && conversationVisible ? createPortal(<Popover trigger={readActionsTrigger} surfaceRef={headerActionsSurface} className="conversation-actions-popover" label="Conversation actions" onClose={() => setHeaderActionsRoom(undefined)}>
+        {onToggleFavorite ? <button type="button" aria-pressed={Boolean(room.favorite)} aria-disabled={favoritePending || undefined} onClick={() => { if (!favoritePending) onToggleFavorite(); }}><Star size={17} fill={room.favorite ? 'currentColor' : 'none'} />{room.favorite ? 'Remove from favorites' : 'Add to favorites'}</button> : null}
+        {onMarkUnread || onMarkRead ? <button type="button" onClick={() => { setHeaderActionsRoom(undefined); setReadActionsRoom(room.id); }}><Check size={17} />Read status</button> : null}
+        {callsEnabled && room.kind === 'direct' ? <>
+          <button type="button" onClick={() => { setHeaderActionsRoom(undefined); onStartCall(false); }}><Phone size={17} />Start voice call</button>
+          <button type="button" onClick={() => { setHeaderActionsRoom(undefined); onStartCall(true); }}><Video size={17} />Start video call</button>
+        </> : null}
+        {groupCallsEnabled && room.kind !== 'direct' && room.membership === 'join' ? <button type="button" onClick={() => { setHeaderActionsRoom(undefined); onOpenGroupCall?.(); }}><Users size={17} />{groupCallMembers ? `Join group call (${groupCallMembers} in call)` : 'Start group call'}</button> : null}
+        <button type="button" onClick={() => { setHeaderActionsRoom(undefined); onOpenBackground(); }}><Paintbrush size={17} />Decorate conversation background</button>
+        <button className="conversation-header__desktop-action" type="button" onClick={() => { setHeaderActionsRoom(undefined); onCollapseConversation(); }}><ChevronRight size={17} />Collapse conversation</button>
+      </Popover>, document.body) : null}
+      {readActionsRoom === room.id && conversationVisible ? createPortal(<Popover trigger={readActionsTrigger} surfaceRef={readActionsSurface} className="history-context" label="Conversation read status" onClose={() => setReadActionsRoom(undefined)} style={{ position: 'fixed', zIndex: 60, width: 'min(320px, calc(100vw - 24px))', overflow: 'auto', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 8px 24px #0003' }}>
         <p>{room.markedUnread ? 'Marked unread for later.' : 'Keep a reminder or update your read position.'}</p>
         {onMarkRead ? <button type="button" className="aqua-button" disabled={readAction?.roomId === room.id && readAction.pending} onClick={() => void updateReadStatus(false)}>Mark conversation read</button> : null}
         {onMarkUnread ? <button type="button" className="aqua-button" disabled={readAction?.roomId === room.id && readAction.pending} onClick={() => void updateReadStatus(true)}>Mark unread</button> : null}
@@ -2467,7 +2474,7 @@ function Conversation({
         </div>
         </MediaGalleryContext.Provider>
       </section>
-      {timelineDetached || historicalWindow ? <button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button> : null}
+      {timelineDetached || historicalWindow ? <div className="timeline-jump"><button className="jump-to-latest" type="button" disabled={Boolean(historyLoading)} onClick={returnToLatest}>Jump to latest messages</button></div> : null}
 
       {contextHost && activeThread ? createPortal(
         <aside hidden={contextPanel !== 'thread' || threadCollapsed} inert={contextPanel !== 'thread' || threadCollapsed} className="thread-panel" data-room-id={room.id} data-thread-root={activeThread.rootId} data-latest-reply-id={activeThread.latestReplyEventId} aria-label="Thread">
@@ -3218,6 +3225,7 @@ export function Workspace({
   accountCleanupError,
 }: WorkspaceProps) {
   const appStage = useRef<HTMLDivElement>(null);
+  useWorkspaceKeyboardNavigation(appStage);
   const accountScope = JSON.stringify([draftScope?.homeserver ?? '', workspace.user.id]);
   const locationKey = `aimtrix.location.v2:${accountScope}`;
   const [selectedRoomId, setSelectedRoomId] = useState<string | undefined>(() => {
@@ -4225,24 +4233,9 @@ export function Workspace({
     panelResizeStart.current = undefined;
   };
 
-  useEffect(() => {
-    const viewport = window.visualViewport;
-    const syncViewportHeight = () => {
-      const height = viewport?.height ?? window.innerHeight;
-      appStage.current?.style.setProperty('--aimtrix-viewport-height', `${Math.round(height)}px`);
-    };
-    syncViewportHeight();
-    viewport?.addEventListener('resize', syncViewportHeight);
-    viewport?.addEventListener('scroll', syncViewportHeight);
-    window.addEventListener('resize', syncViewportHeight);
-    window.addEventListener('orientationchange', syncViewportHeight);
-    return () => {
-      viewport?.removeEventListener('resize', syncViewportHeight);
-      viewport?.removeEventListener('scroll', syncViewportHeight);
-      window.removeEventListener('resize', syncViewportHeight);
-      window.removeEventListener('orientationchange', syncViewportHeight);
-    };
-  }, []);
+
+  const showDraftNotice = !draftsState.active || Boolean(draftsState.writeIssue)
+    || (draftsState.status.mode !== 'persistent' && draftsState.list.length > 0);
 
   const pollActions: PollActions | undefined = useMemo(() => onLoadPoll && onVotePoll && onEndPoll
     ? { load: onLoadPoll, vote: onVotePoll, end: onEndPoll } : undefined,
@@ -4259,7 +4252,7 @@ export function Workspace({
       if (!matrixLink) return;
       event.preventDefault();
       void openMatrixLink(value).catch(() => { setNotice('This Matrix link could not be opened. Use Open Matrix link in the quick switcher to check access or start a conversation.'); });
-    }} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}${contextPanel ? ' context-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented && contextPanel && !(event.target as HTMLElement).closest('dialog,[role=dialog]')) { event.preventDefault(); closePanel(); } }}>
+    }} className={`app-stage${mobileChatOpen ? ' mobile-chat-open' : ''}${contextPanel ? ' context-open' : ''}${showingHome ? ' activity-open' : ''}`} onKeyDown={(event) => { if (event.key === 'Escape' && !event.defaultPrevented && contextPanel && !(event.target as HTMLElement).closest('dialog,[role=dialog]')) { event.preventDefault(); closePanel(); } }}>
       {draftListOpen ? <DraftList durable={!draftsVolatile} drafts={draftsState.list} rooms={workspace.rooms} onClose={() => setDraftListOpen(false)} onOpen={(context) => {
         setDraftListOpen(false);
         const space = workspace.spaces.find((candidate) => candidate.roomIds.includes(context.roomId));
@@ -4280,11 +4273,8 @@ export function Workspace({
           {notice === 'No other unread conversations. You’re all caught up!' ? <p role="status" style={{ margin: 0 }}>{notice}</p> : null}
         </div>
       </QuickSwitcher> : navigationDialog ? <NavigationDialogs kind={navigationDialog} onClose={() => setNavigationDialog(undefined)} onOpenLink={openMatrixLink} onStartConversation={onCreateDirectRoom ? async (userId) => { const id = await onCreateDirectRoom(userId); selectRoom(id, workspace.spaces.find((space) => space.kind === 'home')?.id ?? activeSpace); } : undefined} /> : null}
-      <section className={`aimtrix-window${connectionNotice || structuredDraftStore || draftsState.list.length ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
+      <section className={`aimtrix-window${connectionNotice || showDraftNotice ? ' has-connection-notice' : ''}${detailsOpen ? ' details-open' : ''}${nudgeActive ? ' is-nudging' : ''}`}>
         <header className="app-titlebar">
-          <button className="icon-button" type="button" aria-label="Home activity" title="Home activity" style={{ minWidth: 44, minHeight: 44 }} onClick={() => { setPanelCollapsed('conversation', false); navigateShell({ surface: 'activity', panel: null, spaceId: workspace.spaces.find((space) => space.kind === 'home')?.id, roomId: selectedRoomId }); }}><Sparkles size={18} /></button>
-          <button className="icon-button" type="button" aria-label="Quick switcher" title="Quick switcher" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setNavigationDialog('switcher')}><Search size={18} /></button>
-          <button className="icon-button" type="button" aria-label="Saved messages" title="Saved messages" style={{ minWidth: 44, minHeight: 44 }} onClick={() => setSavedListOpen(true)}><Bookmark size={18} /></button>
           <div className="app-titlebar__identity">
             <BrandMark compact />
             <strong>{config.brandName}</strong>
@@ -4294,28 +4284,22 @@ export function Workspace({
             {workspace.connection === 'offline' ? <WifiOff size={12} /> : <i />}
             {connectionCopy(workspace.connection)}
           </div>
-          <div className="theme-switcher" aria-label="Appearance">
-            {themes.map((option) => (
-              <button
-                type="button"
-                className={theme === option.id ? 'is-active' : ''}
-                aria-pressed={theme === option.id}
-                onClick={() => onThemeChange(option.id)}
-                key={option.id}
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
+          <nav className="workspace-navigation" aria-label="Main navigation">
+            <button className="workspace-navigation__chats" type="button" aria-label="Chats" aria-current={!showingHome ? 'page' : undefined} onClick={() => { setPanelCollapsed('buddies', false); navigateShell({ ...shellRoute, surface: 'list', panel: null }); }}><MessageCircle size={19} /><span>Chats</span></button>
+            <button type="button" aria-label="Home activity" aria-current={showingHome ? 'page' : undefined} onClick={() => { setPanelCollapsed('conversation', false); navigateShell({ surface: 'activity', panel: null, spaceId: workspace.spaces.find((space) => space.kind === 'home')?.id, roomId: selectedRoomId }); }}><Sparkles size={19} /><span>Activity</span></button>
+            <button type="button" aria-label="Search conversations (quick switcher)" onClick={() => setNavigationDialog('switcher')}><Search size={19} /><span>Search</span></button>
+            <button type="button" aria-label="Saved messages" onClick={() => setSavedListOpen(true)}><Bookmark size={19} /><span>Saved</span></button>
+            <button type="button" aria-label="You settings" onClick={() => { setProfileOpen(false); setSettingsOpen(true); }}><Settings size={19} /><span>You</span></button>
+          </nav>
           {unreadTotal ? <span className="titlebar-unread">{unreadTotal} unread</span> : null}
         </header>
 
         {incomingVerification?.length && incomingVerificationActions ? <IncomingVerification requests={incomingVerification} actions={incomingVerificationActions} /> : null}
 
-        {(connectionNotice || structuredDraftStore || draftsState.list.length > 0) ? <div className="workspace-notices">{connectionNotice}
-        {(structuredDraftStore || draftsState.list.length > 0) ? <div className="session-connection-banner" role="status">
+        {(connectionNotice || showDraftNotice) ? <div className="workspace-notices">{connectionNotice}
+        {showDraftNotice ? <div className="session-connection-banner" role="status">
           <button className="aqua-button" type="button" onClick={() => setDraftListOpen(true)}>Drafts ({draftsState.list.length})</button>
-          <span>{!draftsState.active ? 'Draft access ended. Sign in again to continue.' : draftsState.writeIssue === 'conflict' ? 'Another tab changed this draft. Your unsaved version stays in this tab.' : draftsState.writeIssue ? 'This draft could not be saved. Your text stays in this tab.' : draftsState.status.mode === 'persistent' ? 'Drafts saved on this device.' : 'Drafts stay in this tab. Reloading or closing it can lose changes.'}</span>
+          <span>{!draftsState.active ? 'Draft access ended. Sign in again to continue.' : draftsState.writeIssue === 'conflict' ? 'Another tab changed this draft. Your unsaved version stays in this tab.' : draftsState.writeIssue ? 'This draft could not be saved. Your text stays in this tab.' : 'Drafts stay in this tab. Reloading or closing it can lose changes.'}</span>
         </div> : null}
         </div> : null}
         <div

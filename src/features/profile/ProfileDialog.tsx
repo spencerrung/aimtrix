@@ -275,13 +275,15 @@ export function ProfileDialog({
 
               {saveError ? <p className="settings-error" role="alert">{saveError}</p> : null}
               {notice ? <p className="profile-editor-notice" role="status">{notice}</p> : null}
-              <div className="profile-editor-save">
-                <button className="text-button" type="button" onClick={() => setDraft({ ...defaultProfilePersonalization, installedStickerPacks: draft.installedStickerPacks })}><RotateCcw size={13} /> Reset decorations</button>
-                <button className="aqua-button aqua-button--primary" type="button" onClick={() => { if (busy) return; setBusy(true); setSaveError(undefined); void Promise.resolve().then(() => onChange(draft)).then(() => { setEditing(false); setNotice('Profile decorations saved.'); }).catch(() => setSaveError('Your profile decorations could not be saved. Your edits are still here; try again.')).finally(() => setBusy(false)); }}><Check size={14} /> Save my page</button>
-              </div>
             </div>
           ) : null}
         </fieldset>
+        {editing ? (
+          <footer className="profile-editor-save">
+            <button className="text-button" type="button" disabled={busy} onClick={() => setDraft({ ...defaultProfilePersonalization, installedStickerPacks: draft.installedStickerPacks })}><RotateCcw size={13} /> Reset decorations</button>
+            <button className="aqua-button aqua-button--primary" type="button" disabled={busy} onClick={() => { if (busy) return; setBusy(true); setSaveError(undefined); void Promise.resolve().then(() => onChange(draft)).then(() => { setEditing(false); setNotice('Profile decorations saved.'); }).catch(() => setSaveError('Your profile decorations could not be saved. Your edits are still here; try again.')).finally(() => setBusy(false)); }}><Check size={14} /> Save my page</button>
+          </footer>
+        ) : null}
         {!editing && notice ? <p className="profile-editor-notice" role="status">{notice}</p> : null}
     </Dialog>
   );

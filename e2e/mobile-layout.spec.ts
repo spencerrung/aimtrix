@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-test.beforeEach(async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'mobile', 'Mobile viewport checks run against the Pixel 7 project.');
+test.beforeEach(async ({ page, isMobile }) => {
+  test.skip(!isMobile, 'Requires a mobile browser context.');
   await page.goto('/?demo=1');
   await page.getByRole('button', { name: /Welcome Lounge/ }).click();
 });

@@ -1,0 +1,51 @@
+@layer responsive {
+  .workspace-navigation { display: flex; align-items: center; gap: 4px; margin-left: auto; }
+  .workspace-navigation button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-width: 44px; min-height: 44px; padding: 4px 10px; color: var(--text-soft); border: 1px solid transparent; border-radius: 8px; background: transparent; font: inherit; font-size: .75rem; cursor: pointer; }
+  .workspace-navigation button:hover { background: var(--surface-soft); }
+  .workspace-navigation button[aria-current="page"] { color: var(--blue-deep); border-color: var(--border); background: var(--blue-soft); font-weight: 700; }
+  .workspace-navigation .workspace-navigation__chats { display: none; }
+
+  @media (min-width: 768px) and (max-width: 1199px) {
+    :root[data-compact-viewport="true"] .app-stage.mobile-chat-open .space-rail { display: none; }
+    :root[data-compact-viewport="true"] .app-stage.mobile-chat-open .workspace-grid { grid-template-columns: 0 0 232px 8px minmax(0,1fr) 0 0 0 0 !important; }
+    :root[data-compact-viewport="true"] .app-stage .aimtrix-window { grid-template-rows: 44px minmax(0,1fr); }
+    :root[data-compact-viewport="true"] .app-stage .aimtrix-window.has-connection-notice { grid-template-rows: 44px auto minmax(0,1fr); }
+    :root[data-compact-viewport="true"] .app-stage .app-titlebar { gap: 6px; }
+    :root[data-compact-viewport="true"] .workspace-navigation button { min-height: 44px; padding-block: 0; }
+    /* Short tablets have enough width for tools beside the field, preserving reading space. */
+    :root[data-compact-viewport="true"] .app-stage .composer { display: flex; flex-wrap: nowrap; }
+    :root[data-compact-viewport="true"] .app-stage .composer__field { flex: 1; order: -1; }
+    :root[data-compact-viewport="true"] .app-stage .composer__actions { width: auto; max-width: 45%; flex: none; flex-wrap: nowrap; overflow-x: auto; order: 0; }
+    :root[data-compact-viewport="true"] .app-stage .composer__actions > * { flex-shrink: 0; }
+    :root[data-compact-viewport="true"] .app-stage .composer__actions :focus-visible { outline-offset: -3px; }
+    :root[data-compact-viewport="true"] .app-stage .composer .send-button { flex: none; order: 1; }
+  }
+  @media (max-width: 1199px) {
+    :root[data-compact-viewport="true"] .app-stage .conversation-header { min-height: 48px; }
+    :root[data-compact-viewport="true"] .app-stage .conversation { grid-template-rows: auto auto minmax(0,1fr) 20px auto; }
+    :root[data-compact-viewport="true"] .app-stage .thread-panel__header { min-height: 48px; padding: 2px 8px; }
+    :root[data-compact-viewport="true"] .app-stage .thread-panel__root { max-height: 90px; overflow: auto; }
+  }
+
+  @media (max-width: 767px) {
+    .app-stage .aimtrix-window { display: flex; flex-direction: column; }
+    .app-stage .workspace-grid { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr); padding-top: 0; }
+    .app-stage .app-titlebar { order: 3; flex: none; min-height: 60px; padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); border-top: 1px solid var(--border-strong); border-bottom: 0; }
+    .app-stage .app-titlebar__identity, .app-stage .app-titlebar > .connection-pill, .app-stage .app-titlebar > .titlebar-unread { display: none; }
+    .workspace-navigation { width: 100%; margin: 0; gap: 2px; }
+    .workspace-navigation button, .workspace-navigation .workspace-navigation__chats { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; min-height: 56px; padding: 5px 2px; font-size: .7rem; }
+    .app-stage .space-rail { grid-row: 1; border-top: 0; border-bottom: 1px solid var(--border-strong); padding-bottom: 7px; }
+    .app-stage .buddy-panel { grid-row: 2; }
+    .app-stage.mobile-chat-open .space-rail, .app-stage.context-open .space-rail, .app-stage.activity-open .space-rail { display: none; }
+    .app-stage.mobile-chat-open .workspace-grid, .app-stage.context-open .workspace-grid, .app-stage.activity-open .workspace-grid { grid-template-rows: minmax(0, 1fr); }
+    .app-stage .workspace-grid > .conversation, .app-stage .context-panel, .app-stage .home-activity { grid-row: 1; }
+    .app-stage.activity-open .buddy-panel { display: none; }
+    :root[data-compact-viewport="true"] .app-stage.mobile-chat-open:not(.activity-open) .app-titlebar { display: none; }
+    :root[data-compact-viewport="true"] .app-stage.context-open .app-titlebar { display: none; }
+    :root[data-compact-viewport="true"] .app-stage.mobile-chat-open:not(.activity-open) .workspace-grid { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  }
+  @media (max-width: 767px) and (max-height: 480px) {
+    .app-stage.mobile-chat-open:not(.activity-open) .app-titlebar, .app-stage.context-open .app-titlebar { display: none; }
+    .app-stage.mobile-chat-open:not(.activity-open) .workspace-grid { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  }
+}

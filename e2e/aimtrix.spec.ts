@@ -74,6 +74,7 @@ test('desktop workspace panels resize, collapse, and restore', async ({ page }, 
   await detailsResize.press('ArrowRight');
   await expect.poll(async () => (await page.getByRole('main', { name: /Welcome Lounge/ }).boundingBox())?.width).toBeGreaterThan(chatBeforeDetailsResize?.width ?? 0);
 
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Collapse conversation' }).click();
   await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeHidden();
   await page.getByRole('button', { name: 'Expand conversation' }).click();
@@ -114,6 +115,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
   await expect(page.getByLabel('Read by Mara')).toBeVisible();
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Decorate conversation background' }).click();
   let dialog = page.getByRole('dialog', { name: 'Decorate Welcome Lounge' });
   await dialog.getByRole('button', { name: 'Soft twilight' }).click();
@@ -131,6 +133,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
   if (testInfo.project.name === 'desktop') {
     await page.getByRole('button', { name: 'Friends' }).click();
     await page.getByRole('button', { name: /GIF Club/ }).click();
+    await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
     await page.getByRole('button', { name: 'Decorate conversation background' }).click();
     dialog = page.getByRole('dialog', { name: 'Decorate GIF Club' });
     await dialog.getByRole('button', { name: 'Friends space' }).click();
@@ -144,6 +147,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
   }
   await page.getByRole('button', { name: 'Direct Messages', exact: true }).click();
   await page.getByRole('button', { name: /Mara Chen/ }).click();
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Decorate conversation background' }).click();
   dialog = page.getByRole('dialog', { name: 'Decorate Mara Chen' });
   await expect(dialog.getByText('Only you see this choice.', { exact: false })).toBeVisible();
@@ -306,7 +310,10 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
-  await page.getByRole('button', { name: 'Add reaction' }).first().click();
+  if (testInfo.project.use.hasTouch) {
+    await page.locator('.conversation').getByRole('button', { name: 'More message actions' }).first().click();
+    await page.getByRole('menuitem', { name: 'Add reaction', exact: true }).click();
+  } else await page.getByRole('button', { name: 'Add reaction' }).first().click();
   let picker = page.getByRole('dialog', { name: 'Choose a reaction' });
   await expect(picker).toBeVisible();
   await expect(picker.getByRole('textbox', { name: 'Search reaction emoji' })).toBeFocused();
@@ -315,11 +322,14 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
 
   await page.getByRole('button', { name: /2 replies/ }).click();
   const thread = page.getByRole('complementary', { name: 'Thread' });
-  await thread.getByRole('button', { name: 'Add reaction' }).first().click();
+  const reactionTrigger = thread.getByRole('button', { name: testInfo.project.use.hasTouch ? 'More message actions' : 'Add reaction' }).first();
+  await reactionTrigger.click();
+  if (testInfo.project.use.hasTouch) await page.getByRole('menuitem', { name: 'Add reaction', exact: true }).click();
   picker = page.getByRole('dialog', { name: 'Choose a reaction' });
   await expect(picker).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(picker).toBeHidden();
+  await expect(reactionTrigger).toBeFocused();
 });
 
 test('shared images open in an accessible viewer', async ({ page }, testInfo) => {

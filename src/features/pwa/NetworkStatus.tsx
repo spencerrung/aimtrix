@@ -31,24 +31,12 @@ export function NetworkStatus() {
     <aside
       role="status"
       aria-live="polite"
-      style={{
-        position: 'fixed',
-        zIndex: 100,
-        top: 18,
-        right: 18,
-        maxWidth: 'min(430px, calc(100vw - 36px))',
-        padding: '9px 12px',
-        color: 'var(--text)',
-        border: '1px solid var(--border-strong)',
-        borderRadius: 8,
-        background: 'var(--surface-raised)',
-        boxShadow: '0 10px 30px rgba(20,35,46,0.3)',
-      }}
+      className="app-notice network-notice"
     >
-      <strong>{online ? 'Connection restored' : 'You’re offline'}</strong>
+      <div className="app-notice-copy"><strong>{online ? 'Connection restored' : 'You’re offline'}</strong>
       <small style={{ display: 'block', marginTop: 2, color: 'var(--text-faint)' }}>
         {online ? 'Aimtrix is reconnecting to Matrix.' : 'Aimtrix will reconnect; Matrix history may be unavailable until the connection returns.'}
-      </small>
+      </small></div>
     </aside>
   );
 }

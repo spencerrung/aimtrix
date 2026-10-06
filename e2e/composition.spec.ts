@@ -14,7 +14,7 @@ test.beforeEach(async ({ page }, info) => {
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.route('**/composition-fixture', (route) => route.fulfill({ contentType: 'text/html; charset=utf-8', body: '<!doctype html><html lang="en" data-theme="aqua"><head><meta name="viewport" content="width=device-width, initial-scale=1"><title>Composition fixture</title><style>' + css + '</style></head><body><div id="root"></div><script type="module">' + script + '</script></body></html>' }));
   await page.goto('/composition-fixture');
-  if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  if (info.project.name.includes('mobile')) await page.getByRole('button', { name: /Welcome Lounge/ }).click();
 });
 
 test('room and thread drafts restore after reload with honest file reattachment', async ({ page }, info) => {
@@ -24,7 +24,7 @@ test('room and thread drafts restore after reload with honest file reattachment'
   const tray = page.getByRole('region', { name: 'Attachments', exact: true });
   await tray.getByLabel('Caption for retained.txt').fill('A retained caption');
   await page.reload();
-  if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  if (info.project.name.includes('mobile')) await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   await expect(composer).toHaveText('A synthetic draft that survives reload');
   await expect(tray.getByText('Reattach file', { exact: true })).toBeVisible();
   await expect(tray.getByLabel('Caption for retained.txt')).toHaveValue('A retained caption');
@@ -33,10 +33,10 @@ test('room and thread drafts restore after reload with honest file reattachment'
   const thread = page.getByRole('complementary', { name: 'Thread', exact: true });
   await thread.getByRole('textbox', { name: 'Message thread', exact: true }).fill('Thread idea saved separately');
   await page.reload();
-  if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  if (info.project.name.includes('mobile')) await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   await page.getByRole('button', { name: /2 replies/ }).click();
   await expect(thread.getByRole('textbox', { name: 'Message thread', exact: true })).toHaveText('Thread idea saved separately');
-  if (info.project.name === 'mobile') await thread.getByRole('button', { name: 'More message tools', exact: true }).click();
+  if (info.project.name.includes('mobile')) await thread.getByRole('button', { name: 'More message tools', exact: true }).click();
   await expect(thread.getByRole('button', { name: 'Add emoji', exact: true })).toBeVisible();
   await expect(thread.getByRole('button', { name: 'Insert code block', exact: true })).toBeVisible();
   await page.screenshot({ path: info.outputPath('shared-thread-composer.png') });
@@ -61,7 +61,7 @@ test('reviews, reorders and retries one file without resending successful files'
 });
 
 test('desktop room and thread tools are visible without opening the plus menu', async ({ page }, info) => {
-  if (info.project.name === 'mobile') test.skip();
+  if (info.project.name.includes('mobile')) test.skip();
   for (const kind of ['room', 'thread'] as const) {
     if (kind === 'thread') await page.getByRole('button', { name: /2 replies/ }).click();
     const surface = kind === 'thread' ? page.getByRole('complementary', { name: 'Thread', exact: true }) : page.getByRole('main', { name: 'Conversation with Welcome Lounge' });
@@ -85,8 +85,10 @@ test('captioned image leaves the attachment tray after its send is confirmed', a
 test('staged files and expanded tools leave room and thread composers reachable on short screens', async ({ page }, info) => {
   for (const kind of ['room', 'thread'] as const) {
     await page.setViewportSize({ width: 412, height: 915 });
-    const openRoom = page.getByRole('button', { name: /Welcome Lounge/ });
-    if (await openRoom.isVisible()) await openRoom.click();
+    // Resize notifications are asynchronous in WebKit. Navigate explicitly
+    // instead of sampling visibility before the responsive route has settled.
+    await page.getByRole('button', { name: 'Chats', exact: true }).click();
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
     if (kind === 'thread') await page.getByRole('button', { name: /2 replies/ }).click();
     const surface = kind === 'thread' ? page.getByRole('complementary', { name: 'Thread', exact: true }) : page.getByRole('main', { name: 'Conversation with Welcome Lounge' });
     await surface.getByLabel(kind === 'thread' ? 'Choose thread attachment' : 'Choose attachment', { exact: true }).setInputFiles(Array.from({ length: 4 }, (_, index) => ({ name: `${kind}-${index}.txt`, mimeType: 'text/plain', buffer: Buffer.from('synthetic') })));

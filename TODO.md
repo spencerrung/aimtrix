@@ -135,7 +135,7 @@ The [visual reference handoff](docs/design/interaction-rules.md) records the ste
 
 ### Browser, accessibility, and QA
 
-- [ ] Resolve the [October 5 usability audit](docs/usability-audit-2026-10-05.md): mobile message-action clutter, install-prompt obstruction, viewport/overlay handling, navigation hierarchy, touch targets, and desktop keyboard efficiency. Add actionable-control and visual regression checks alongside the existing browser/device gates; implemented feature breadth does not close this usability pass.
+- [x] Implement the [October 5 usability audit](docs/usability-audit-2026-10-05.md) software pass: compact touch message actions, reserved PWA notices, shared visual-viewport handling, labeled navigation, touch targets, efficient desktop keyboard access, bounded dialogs, actionable-control tests, and reviewed visual baselines. The integrated record separates clean local browser/unit gates from exact-revision PR CI; physical-device, installed-PWA, native and spoken-screen-reader release gates remain open in this backlog.
 
 - [x] Shared native modal/picker focus, nested dismissal, guarded confirmations, failed-action retention and cancellable initiated verification; see [interaction behavior and evidence boundaries](docs/accessible-interactions.md). Broader screen-reader/browser acceptance remains #162.
 

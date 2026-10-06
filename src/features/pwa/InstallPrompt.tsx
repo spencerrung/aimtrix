@@ -24,7 +24,13 @@ export function InstallPrompt() {
   const native = getAimtrixPlatform().capabilities.platform !== 'browser';
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent>();
   const [expanded, setExpanded] = useState(false);
-  const [dismissed, setDismissed] = useState(false);
+  const [dismissed, setDismissed] = useState(() => {
+    try { return Number(localStorage.getItem('aimtrix.install-dismissed-until')) > Date.now(); } catch { return false; }
+  });
+  const dismiss = () => {
+    setDismissed(true);
+    try { localStorage.setItem('aimtrix.install-dismissed-until', String(Date.now() + 7 * 24 * 60 * 60 * 1000)); } catch { /* Storage may be unavailable. */ }
+  };
   const ios = isIos();
 
   useEffect(() => {
@@ -55,37 +61,20 @@ export function InstallPrompt() {
 
   return (
     <aside
-      className="install-prompt"
+      className="install-prompt app-notice"
       aria-label="Install Aimtrix"
-      style={{
-        position: 'fixed',
-        zIndex: 100,
-        right: 18,
-        bottom: 'calc(18px + env(safe-area-inset-bottom, 0px) + 74px)',
-        display: 'flex',
-        width: 'min(540px, calc(100vw - 36px))',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        flexWrap: 'wrap',
-        gap: 14,
-        padding: '11px 12px',
-        color: 'var(--text)',
-        border: '1px solid var(--border-strong)',
-        borderRadius: 9,
-        background: 'var(--surface-raised)',
-        boxShadow: '0 14px 40px rgba(20,35,46,0.36)',
-      }}
+
     >
-      <div style={{ display: 'grid', minWidth: 0, gap: 2 }}>
+      <div className="app-notice-copy">
         <strong>Install Aimtrix</strong>
         <small>Keep your Matrix workspace one tap away.</small>
         {expanded ? (
           <p>In Safari, tap Share, then Add to Home Screen. Aimtrix will open in its own window.</p>
         ) : null}
       </div>
-      <div style={{ display: 'flex', flex: '0 0 auto', alignItems: 'center', gap: 7 }}>
-        <button className="text-button" type="button" onClick={() => setDismissed(true)}>Later</button>
-        <button className="aqua-button aqua-button--primary" type="button" onClick={() => void install()}>
+      <div className="app-notice-actions">
+        <button className="text-button" type="button" onClick={dismiss}>Later</button>
+        <button className="aqua-button aqua-button--primary" type="button" aria-expanded={ios ? expanded : undefined} onClick={() => void install()}>
           {ios ? (expanded ? 'Hide help' : 'How to install') : 'Install'}
         </button>
       </div>

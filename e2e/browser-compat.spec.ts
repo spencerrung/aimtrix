@@ -84,7 +84,7 @@ test('error feedback and shared media viewer remain accessible across themes', a
   await page.goto('/?demo=1');
   const settings = page.getByRole('button', { name: 'Open settings' });
   await expect(settings).toBeVisible({ timeout: 15_000 });
-  await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+  await page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
   await page.getByRole('button', { name: 'Open Matrix link' }).click();
   const linkDialog = page.getByRole('dialog', { name: 'Open Matrix link' });
   await linkDialog.getByRole('textbox', { name: 'Matrix link' }).fill('https://matrix.to/#/!synthetic:test/not-an-event');

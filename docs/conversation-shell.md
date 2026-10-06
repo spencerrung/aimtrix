@@ -1,5 +1,21 @@
 # Conversation shell
 
+## October 5 navigation and viewport update
+
+The current shell keeps one global navigation surface: Activity opens Home activity, Search opens the conversation quick switcher, Saved opens saved messages, and You opens settings. Themes remain in Settings → Appearance. On phones, these labeled controls form a bottom navigation bar with an additional Chats destination. Chats returns to the room list, where the horizontal space rail appears above conversations. Opening a conversation, context, or Activity hides that rail. Existing room/space selection, browser Back/Forward, drafts, and reading anchors continue through the same shell navigation actions.
+
+Conversation headers keep room identity, encryption indication, message-history search, details, and a named Conversation actions control. Its overflow surface contains available favorite, read-status, call, decoration, and desktop collapse actions. Global Search finds conversations; header Search message history searches messages. Touch message rows expose one named More action, with reply, reaction, thread, and permitted mutations available in its menu. Pending actions and failures remain next to their message. These changes retain the existing Matrix operations and permission checks.
+
+Keyboard users can move between visible workspace sections with F6 and Shift+F6. A populated timeline contributes one message entry to the Tab sequence. Arrow Up/Down and Home/End select messages; Enter enters the selected message's available controls; Escape from message controls returns to the relevant composer. Editable fields, selected message text, active menus, and dialogs retain their own keyboard handling. Open menus expose their actions without requiring traversal through every message's buttons.
+
+The App frame now owns visual viewport height and offset, reserves a top area for installation/connectivity/update notices, and applies the top safe-area inset once. The workspace receives the remaining content height. Bottom navigation and compact conversation layouts account for the bottom safe area. Compact chrome follows usable content height at 480px or below, including a visual-viewport-only keyboard shrink; pinch zoom does not become a keyboard-layout signal. Compact phone conversations hide bottom navigation while retaining Back and composition. Compact tablets keep 44px global navigation targets. Popovers and dialog backdrops share the visible viewport geometry. Jump to latest occupies the timeline's grid area, so it cannot cover Send when the composer grows.
+
+Healthy persistent drafts remain discoverable through Activity's Drafts action. A global draft notice appears for write/conflict/access failures or existing volatile drafts, preserving recovery guidance without occupying conversation space for an empty healthy store.
+
+The behavior above supersedes the original layout and input descriptions below where they differ. Current thread composition, durable drafts, and search capabilities have their own records in [room/thread messaging](room-thread-messaging.md), [draft storage](draft-storage.md), and [history retrieval](collections-history-retrieval.md). The original implementation record does not establish current cross-browser or physical-device acceptance. The October 5 Chromium baselines and keyboard/dialog screenshots have been inspected. Local gate totals and final PR CI are recorded in the [usability audit](usability-audit-2026-10-05.md#integrated-regression-loop).
+
+## Original shell implementation
+
 Polish 08 implements the [accepted interaction rules](design/interaction-rules.md) in the application. Threads, loaded-message search, and the Buddy Card / Room Lounge share one contextual surface. Opening one replaces the visible surface; closing it returns to the conversation without reopening another drawer. Main and thread text drafts, the current thread, drawer tab, search query, and detached reading position survive these switches within the mounted workspace.
 
 At 1200px and wider, the contextual surface docks beside the conversation. Stored room-list and contextual widths are bounded together to leave at least 420px for the conversation. The existing keyboard/pointer resizing, collapse/restore choices, themes, accents, message density, bubbles, and original backdrops remain available. Contextual width is shared across drawers rather than maintaining competing thread/detail widths.
@@ -20,3 +36,8 @@ Search clearly covers loaded messages only. Results occupy the contextual surfac
 - Chromium coverage exercises desktop resizing, mobile/tablet Back and Forward with pixel reading anchors, resize without history changes, loaded search result navigation, and reduced-height main/thread controls. Shell screenshots are emitted with the Playwright results; Axe covers the contextual route alongside existing theme/accessibility scenarios.
 - These browser checks emulate viewport and touch conditions. Physical iOS/Android software keyboards, native Back, WebView safe areas, screen readers, and Firefox/WebKit are separate acceptance evidence under [#162](https://github.com/spencerrung/aimtrix/issues/162) and [#175](https://github.com/spencerrung/aimtrix/issues/175).
 - The shell adds no Matrix event type or plaintext fallback. Existing encrypted sending, attachments, history and session recovery retain their protocol paths. Old/unloaded thread roots, pagination and thread-read reconciliation remain separate work; a loaded demo thread is not proof of those boundaries.
+
+
+### Short tablet notice combinations
+
+When the visual viewport is short, app notices use a bounded scroll area so simultaneous installation/update messages cannot consume all reading space. At compact tablet widths, message tools sit beside the editor and remain horizontally scrollable when necessary; Send stays outside that scrolling tool group. Regression tests combine notices with volatile-draft feedback and verify actual thread entry, sending, retained drafts, and notice dismissal at 320–1024px.

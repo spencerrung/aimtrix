@@ -25,7 +25,8 @@ describe('room and thread composition routing', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     const root = thread.querySelector<HTMLElement>('[data-event-id="m2"]')!;
-    const editButton = within(root).getByRole('button', { name: 'Edit message' });
+    fireEvent.click(within(root).getByRole('button', { name: 'More message actions' }));
+    const editButton = screen.getByRole('menuitem', { name: 'Edit message' });
     fireEvent.pointerDown(editButton); editButton.focus(); fireEvent.click(editButton);
     expect(within(thread).getByText('Editing message')).toBeVisible();
     const composer = within(thread).getByRole('textbox', { name: 'Message thread' });
@@ -59,7 +60,8 @@ describe('room and thread composition routing', () => {
     const select = vi.fn().mockResolvedValue(undefined), send = vi.fn().mockResolvedValue(undefined);
     setup({ onThreadSelected: select, onSendThreadMessage: send });
     const main = screen.getByRole('main', { name: 'Conversation with Welcome Lounge' });
-    fireEvent.click(within(main.querySelector<HTMLElement>('[data-event-id="m1"]')!).getByRole('button', { name: 'Reply in thread' }));
+    fireEvent.click(within(main.querySelector<HTMLElement>('[data-event-id="m1"]')!).getByRole('button', { name: 'More message actions' }));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Reply in thread' }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     const composer = within(thread).getByRole('textbox', { name: 'Message thread' });
     expect(within(thread).getByText('0 replies')).toBeVisible();

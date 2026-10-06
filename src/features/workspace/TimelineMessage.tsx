@@ -1,7 +1,8 @@
-import { memo, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react';
+import { memo, useMemo, useRef, useState, type CSSProperties } from 'react';
 import { createPortal } from 'react-dom';
 import { MessageCircle, Pin, Search } from 'lucide-react';
 import { Avatar } from '../../components/Avatar';
+import { useAnchoredPopover } from '../../components/useAnchoredPopover';
 import { Popover } from '../../components/Popover';
 import { colorForId, type MessageSummary } from '../../matrix/viewModels';
 import { emojiReactionKey, type EmojiPackEntry } from '../media/emojiPacks';
@@ -73,7 +74,6 @@ export const TimelineMessage = memo(function TimelineMessage({
   const reactionBusy = useRef(false);
   const reactionGeneration = useMessageGeneration(message.id);
   const [reactionQuery, setReactionQuery] = useState('');
-  const [reactionPickerPosition, setReactionPickerPosition] = useState({ top: 0, left: 0 });
   const reactionTrigger = useRef<HTMLButtonElement>(null);
   const reactionPicker = useRef<HTMLDivElement>(null);
   const reactionEmojis = useMemo(() => {
@@ -98,20 +98,7 @@ export const TimelineMessage = memo(function TimelineMessage({
         .slice(0, MAX_VISIBLE_EMOJI_RESULTS),
     };
   }, [emojiCatalog, reactionQuery, recentEmojis]);
-  useLayoutEffect(() => {
-    if (!reactionPickerOpen || !reactionPicker.current || !reactionTrigger.current) return;
-    const trigger = reactionTrigger.current.getBoundingClientRect();
-    const picker = reactionPicker.current.getBoundingClientRect();
-    const left = Math.min(
-      Math.max(12, trigger.right - picker.width),
-      Math.max(12, window.innerWidth - picker.width - 12),
-    );
-    const below = trigger.bottom + 8;
-    const top = below + picker.height <= window.innerHeight - 12
-      ? below
-      : Math.max(12, trigger.top - picker.height - 8);
-    setReactionPickerPosition({ top, left });
-  }, [reactionPickerOpen, reactionQuery, emojiCatalog]);
+  useAnchoredPopover(reactionPickerOpen, reactionTrigger, reactionPicker, 8);
 
   const react = (reaction: string, ownEventId?: string) => {
     const existing = ownEventId ? message.reactions?.find((reaction) => reaction.ownEventId === ownEventId) : undefined;
@@ -134,7 +121,7 @@ export const TimelineMessage = memo(function TimelineMessage({
     setReactionQuery('');
   };
   return (
-    <article className={`timeline-message${hideThreadControls ? ' timeline-message--root' : ''}${message.isOwn ? ' timeline-message--own' : ''}${highlighted ? ' timeline-message--target' : ''}`} data-event-id={message.id} data-message-key={message.transactionId ?? message.id} tabIndex={-1}>
+    <article className={`timeline-message${hideThreadControls ? ' timeline-message--root' : ''}${message.isOwn ? ' timeline-message--own' : ''}${highlighted ? ' timeline-message--target' : ''}`} data-keyboard-message data-event-id={message.id} data-message-key={message.transactionId ?? message.id} tabIndex={-1}>
       <Avatar
         name={message.senderName}
         src={message.senderAvatarUrl}
@@ -150,6 +137,10 @@ export const TimelineMessage = memo(function TimelineMessage({
           {message.edited ? <span className="sending-label edited-label" aria-label="Edited message">edited</span> : null}
           {message.pinned ? <span className="sending-label pinned-label"><Pin size={10} /> pinned</span> : null}
 
+          <MessageActions key={message.id} message={message} onReply={onReply} onOpenThread={onOpenThread} onStartThread={onStartThread}
+            onEdit={onEdit} onDelete={onDelete} onPin={onPin} onSave={onSave} saved={saved} canPin={canPin} onMarkUnread={onMarkUnread}
+            hideThreadControls={hideThreadControls} reactionTrigger={reactionTrigger} reactionPickerOpen={reactionPickerOpen}
+            onOpenReaction={() => { setReactionPickerOpen((open) => !open); if (!reactionPickerOpen) onLoadEmojiCatalog(); }} />
         </header>
         {message.replyTo ? (
           <button type="button" className="message-reply-context" aria-label={`Jump to replied message from ${message.replyTo.senderName}`} onClick={() => onJumpToEvent?.(message.replyTo!.eventId)}>
@@ -203,7 +194,7 @@ export const TimelineMessage = memo(function TimelineMessage({
           <button
             className="thread-summary"
             type="button"
-            onClick={() => onOpenThread(message)}
+            onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); onOpenThread(message); }}
           >
             <MessageCircle size={14} />
             <strong>{message.thread.replyCount}{message.thread.replyCountIsLowerBound ? '+' : ''} {message.thread.replyCount === 1 && !message.thread.replyCountIsLowerBound ? 'reply' : 'replies'}</strong>
@@ -212,11 +203,8 @@ export const TimelineMessage = memo(function TimelineMessage({
           </button>
         ) : null}
       </div>
-      <MessageActions key={message.id} message={message} onReply={onReply} onOpenThread={onOpenThread} onStartThread={onStartThread}
-        onEdit={onEdit} onDelete={onDelete} onPin={onPin} onSave={onSave} saved={saved} canPin={canPin} onMarkUnread={onMarkUnread}
-        hideThreadControls={hideThreadControls} reactionTrigger={reactionTrigger} reactionPickerOpen={reactionPickerOpen}
-        onOpenReaction={() => { setReactionPickerOpen((open) => !open); if (!reactionPickerOpen) onLoadEmojiCatalog(); }} />
-        {reactionPickerOpen ? createPortal(<Popover surfaceRef={reactionPicker} trigger={reactionTrigger} onClose={() => setReactionPickerOpen(false)} className="reaction-picker emoji-tray" label="Choose a reaction" style={{ top: reactionPickerPosition.top, left: reactionPickerPosition.left }}>
+
+        {reactionPickerOpen ? createPortal(<Popover surfaceRef={reactionPicker} trigger={reactionTrigger} onClose={() => setReactionPickerOpen(false)} className="reaction-picker emoji-tray" label="Choose a reaction">
           <header><strong>React</strong><span>{recentEmojis.length ? 'Recents first' : 'Search by name'}</span></header>
           <label className="emoji-search"><Search size={13} /><span className="sr-only">Search reaction emoji</span><input value={reactionQuery} placeholder="Search emoji" onChange={(event) => setReactionQuery(event.target.value)} /></label>
           {reactionEmojis.quick.length ? <>

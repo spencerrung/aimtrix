@@ -1,0 +1,7 @@
+@layer responsive {
+  dialog.interaction-dialog > .navigation-dialog { display: grid; grid-template-rows: 44px minmax(0, 1fr); overflow: hidden; }
+  dialog.interaction-dialog > .navigation-dialog--help { grid-template-rows: 44px minmax(0, 1fr) auto; }
+  .navigation-dialog__body { min-height: 0; overflow: auto; overscroll-behavior: contain; padding: 20px; scroll-padding-block: 12px; }
+  .navigation-dialog__body:focus-visible { outline-offset: -3px; }
+  .navigation-dialog__footer { display: flex; justify-content: end; padding: 10px 16px; border-top: 1px solid var(--border); background: var(--surface-raised); }
+}
