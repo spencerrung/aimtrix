@@ -172,7 +172,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     // Element's authenticated-media download path uses its service worker to
     // rewrite legacy MXC URLs and attach the session token. Keep Aimtrix's
     // isolated contexts worker-free while exercising Element as deployed.
-    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, serviceWorkers: element ? 'allow' : 'block' });
+    const context = await browser.newContext({ viewport: { width: 1440, height: 1000 }, reducedMotion: 'reduce', serviceWorkers: element ? 'allow' : 'block' });
     contexts.push(context);
     // A bad default/discovery target must fail locally, never contact a real account service.
     const permitted = new Set(Object.values(stack.origins));
@@ -1328,6 +1328,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       }
     });
     await check('encrypted-history-and-context', async () => {
+      await alice.bringToFront();
       await openRoom(alice, roomName);
       // Buddy rows prefer a room topic to message previews. Clear this test
       // topic so the receiving device's live preview is observable in context.
@@ -1339,7 +1340,9 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       for (let index = 0; index < 350; index++) {
         await composer.fill(`${prefix} ${String(index).padStart(3, '0')}`);
         const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.room.encrypted/') && response.ok());
-        await alice.getByRole('button', { name: 'Send message', exact: true }).click();
+        // Fixture volume exercises the real keyboard send path without waiting
+        // for pointer stability on a button beside a continually moving timeline.
+        await composer.press('Enter');
         sentIds.push((await (await sent).json()).event_id);
         await composer.filter({ hasText: /^$/ }).waitFor();
       }
@@ -1645,10 +1648,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const sendReply = async () => {
         await alice.bringToFront();
         const accepted = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/'));
-        await senderThread.getByRole('textbox', { name: 'Message thread', exact: true }).fill(`Synthetic old thread reply ${randomBytes(8).toString('hex')}`);
-        await senderThread.getByRole('button', { name: 'Send thread reply', exact: true }).click();
+        const composer = senderThread.getByRole('textbox', { name: 'Message thread', exact: true });
+        await composer.fill(`Synthetic old thread reply ${randomBytes(8).toString('hex')}`);
+        await composer.press('Enter');
         const response = await accepted;
         invariant(response.ok(), 'old-thread-reply-accepted');
+        await composer.filter({ hasText: /^$/ }).waitFor();
         return (await response.json()).event_id;
       };
       const start = wire.length;
