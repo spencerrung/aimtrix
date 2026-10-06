@@ -1,0 +1,20 @@
+@layer reset, tokens, base, components, layout, responsive;
+@layer responsive {
+  .conversation .conversation-header { flex-wrap:nowrap; }
+  .conversation .conversation-header__copy { flex:1;min-width:0; }
+  .conversation .conversation-header__copy p { display:flex;align-items:center;gap:4px; }
+  .conversation .conversation-header__copy p svg { flex:none; }
+  .conversation .conversation-header__copy p span { overflow:hidden;text-overflow:ellipsis; }
+  .conversation .conversation-header__actions { flex:none;margin-left:0; }
+  .conversation-actions-popover { position:fixed;z-index:65;display:grid;gap:2px;min-width:0;width:280px;max-width:calc(100vw - 24px);max-height:calc(var(--aimtrix-viewport-height,100dvh) - 24px);overflow:auto;padding:6px;border:1px solid var(--border);border-radius:9px;background:var(--surface-raised);box-shadow:var(--shadow); }
+  .conversation-actions-popover > button { display:flex;align-items:center;gap:9px;min-height:44px;padding:8px 10px;border:0;border-radius:5px;background:transparent;color:var(--text);font:inherit;text-align:left; }
+  .conversation-actions-popover > button svg { flex:none; }
+  .conversation-actions-popover > button:hover,.conversation-actions-popover > button:focus-visible { background:var(--blue-soft); }
+  .conversation-actions-popover > button[aria-disabled="true"] { opacity:.55; }
+  @media (max-width:767px) {
+    .conversation .conversation-header { gap:3px;padding-inline:4px; }
+    .conversation .conversation-header__copy h2 { font-size:.9rem; }
+    .conversation .conversation-header__actions { gap:0; }
+  }
+  @media (max-width:360px) { .conversation .conversation-header > .avatar { display:none; } }
+}

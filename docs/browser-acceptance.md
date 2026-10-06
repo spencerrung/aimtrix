@@ -15,3 +15,45 @@ Keyboard walkthrough for review, performed in browser automation and suitable fo
 Manual screen-reader walkthrough still required: with NVDA/Firefox or VoiceOver/Safari, start at signed-out login, read the Matrix ID and homeserver labels and capability status, then open a demo settings dialog and confirm its name, focus entry, control announcements, Escape/close announcement, and return target. Repeat on an empty account's first-use card and on incoming verification and recovery states with disposable Matrix accounts. Record date, browser/OS/AT versions, observed announcements, and any correction. No screen reader was available in this development host, so this is an open acceptance and release evidence boundary rather than a claimed pass.
 
 Physical iOS/Android keyboard, safe-area, installed-PWA, camera, and native-wrapper checks also remain open under #162/#175. Use the [platform acceptance checklist](platform-acceptance.md) with dated devices and disposable accounts. Browser emulation and synthetic fixtures cannot replace those checks.
+
+## October 5 viewport and PWA regression coverage
+
+The app frame reserves space for installation, connectivity, and update notices. Dismissing installation guidance stores only a seven-day expiry timestamp; it does not store account information. Updating still requires confirmation for drafts or attachments, and current sends disable reload. Test Send with actual pointer input while notices are present, including expanded iPhone-user-agent installation guidance. A DOM-visible composer can still be obstructed, so `e2e/pwa.spec.ts` also checks the center hit target.
+
+`e2e/mobile-layout.spec.ts` and `e2e/popover-viewport.spec.ts` distinguish layout resizing from a smaller, offset visual viewport. The shared viewport model reserves notice space and derives compact chrome from usable content height. Pinch zoom preserves the shell layout; anchored message, reaction, and conversation surfaces track the visible viewport and scroll when necessary. Narrow visual-viewport tests exercise menu width and reaction-grid reflow. These synthetic viewport overrides reproduce geometry constraints, not real operating-system keyboard or pinch gestures.
+
+Run the PWA checks against a fresh production build:
+
+```sh
+npm run build
+CI=1 PLAYWRIGHT_PREVIEW=1 npx playwright test e2e/pwa.spec.ts e2e/pwa-lifecycle.spec.ts e2e/popover-viewport.spec.ts --retries=0
+```
+
+The lifecycle suite verifies a real registered worker serving a previously warmed shell while offline. Its replacement test serves the actual `dist/` assets from a disposable local HTTP origin and changes only a worker revision comment. The browser discovers the changed script, installs a waiting worker, and receives the application's normal update notice. Cancel preserves the synthetic demo draft; explicit confirmation discards that volatile draft, activates the worker, and reloads the application. This establishes real browser update handling, not persistence of Matrix drafts across an authenticated account restart. The existing structured-draft tests cover stored draft behavior; live account restoration remains part of the platform acceptance journey.
+
+The offline check does not promise first-visit offline availability, cached Matrix history, or recovery of uncached optional assets. The replacement check does not validate a homelab reverse proxy, installed-app lifecycle, or native-shell updater. Record real iPhone and Android keyboard, pinch, safe-area, suspend/resume, storage, and installed-PWA results separately. When running independent Playwright jobs locally, give each a separate `--output` directory so one job does not delete another's screenshots and traces.
+
+### Integrated shell regression matrix
+
+The October 5 shell moves global navigation to labeled Activity, Search, Saved, and You controls, plus Chats on phones. Phone navigation sits below the active surface, while the space rail appears above the room list. Conversation actions and touch message actions use named overflow controls. Review the [current shell behavior](conversation-shell.md) alongside browser results; earlier dated evidence above remains unchanged.
+
+Firefox desktop and WebKit desktop/phone selection now includes shell, composition, mobile-layout, and usability journeys alongside the existing compatibility and first-use cases. Mobile layout eligibility uses the browser's mobile capability instead of the exact Chromium project name. A broader project selection is a configured gate, not a claim that those engines passed. Record passes, intentional skips, launch failures, retries, and screenshot inspection separately in the integrated validation report.
+
+| Gate | Required scenarios and assertions |
+| --- | --- |
+| Responsive navigation | Narrow/regular phones, landscape, tablet, and desktop; Chats → room → thread/details/search → Back; Activity and space changes; preserve drafts, reading anchors, and browser history through resize. |
+| Composition geometry | Layout-height shrink and visual-only height/offset changes; short/long room and thread drafts, attachment trays, expanded tools, and Jump to latest; hit-test and tap Send instead of relying only on visibility. |
+| Notices and modal surfaces | Simultaneous install/offline/update notices, expanded installation guidance, safe-area ownership, and dialogs above a reduced visual viewport; all primary and dismiss actions reachable. `e2e/dialog-viewport.spec.ts` covers the dialog viewport regression. |
+| Keyboard | F6/Shift+F6 section traversal, one timeline Tab entry, message Arrow/Home/End navigation, Enter into controls, Escape to composer, selection preservation, menu/dialog focus return, and hidden-route controls excluded from traversal. |
+| Reading and themes | Aqua/Graphite/Midnight screenshots, readable long room names, bounded header actions, touch More menus, no horizontal page overflow, and active composer/context screenshots at reduced heights. |
+| Production PWA | Real worker registration/control, warmed offline navigation, replacement waiting worker, draft confirmation/cancel, activation/reload, and safe reconnect feedback. |
+
+The shared frame owns the top safe-area inset, including notices and login; workspace height subtracts that inset and reserved notices once. Native dialog backdrops use visual viewport dimensions and offset, and anchored popovers track the same visible bounds. Unit tests exercise inset accounting with synthetic frame padding; browser geometry overrides do not prove real notch, browser-toolbar, or OS keyboard behavior.
+
+Repeat the keyboard journey with VoiceOver/Safari and NVDA/Firefox before claiming spoken accessibility acceptance. Actual Android/iPhone browser and installed-PWA checks still need software keyboards, selection handles, predictive input, safe areas, orientation, suspend/resume, storage recovery, permission prompts, and notifications. Native Tauri/Capacitor behavior and live encrypted Matrix/provider interoperability retain their existing independent release gates. No new device or live-infrastructure result is implied by these UI regressions; final October 5 gate totals and screenshot acceptance remain pending the integrated audit record.
+
+### Reviewed visual baselines
+
+`e2e/visual.spec.ts` compares the synthetic conversation at 320px, 390px, and 1280px against committed PNG baselines. The test fixes UTC time, DPR 1, reduced motion, and Arial/Liberation Sans for all text to reduce host font differences. Linux Chromium is the baseline environment; other browser engines retain the geometry and interaction gates. Browser/package upgrades can change rasterization and require review.
+
+Run against a freshly built preview with `PLAYWRIGHT_PREVIEW=1 npx playwright test e2e/visual.spec.ts`. A mismatch produces expected, actual, and difference images in the test output. Inspect the entire screenshot before accepting `--update-snapshots`: verify room identity, message/avatar/menu containment, readability, composer access, and navigation hierarchy. Do not update baselines merely to make a failing test pass. Keep `maxDiffPixelRatio` small; pointer hit tests and explicit geometry assertions catch obstructions even when the changed pixel area is small.

@@ -64,3 +64,52 @@ test('update confirmation warns before discarding a demo draft', async ({ page }
   await expect(page.getByRole('textbox', { name: /Message Welcome Lounge/ })).toHaveText('Synthetic update draft');
   await expect(page.locator('html')).not.toHaveAttribute('data-update-applied', 'yes');
 });
+
+test('stacked install and update notices reserve space and keep Send actionable', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  await page.evaluate(() => {
+    const event = new Event('beforeinstallprompt', { cancelable: true });
+    Object.defineProperties(event, {
+      prompt: { value: () => Promise.resolve() },
+      userChoice: { value: Promise.resolve({ outcome: 'dismissed' }) },
+    });
+    window.dispatchEvent(event);
+    window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: { postMessage: () => undefined } }));
+  });
+  const composer = page.getByRole('textbox', { name: /Message Welcome Lounge/ });
+  await composer.fill('Synthetic unobstructed composition');
+  const send = page.getByRole('button', { name: 'Send message', exact: true });
+  await expect(send).toBeVisible();
+  await expect.poll(() => send.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    return rect.bottom <= window.innerHeight && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+  })).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('reserved-notices-composer.png') });
+  await send.click();
+  await expect(composer).toHaveText('');
+});
+
+test('expanded iOS install guidance leaves the composer reachable and stays dismissed after reload', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 664 });
+  await page.addInitScript(() => Object.defineProperty(navigator, 'userAgent', { configurable: true, get: () => 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1' }));
+  await page.reload();
+  await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  const install = page.getByRole('complementary', { name: 'Install Aimtrix' });
+  await install.getByRole('button', { name: 'How to install' }).click();
+  await expect(install).toContainText('Add to Home Screen');
+  const composer = page.getByRole('textbox', { name: /Message Welcome Lounge/ });
+  await composer.fill('Synthetic iOS guidance draft');
+  const send = page.getByRole('button', { name: 'Send message', exact: true });
+  await expect.poll(() => send.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    return rect.bottom <= window.innerHeight && button.contains(document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2));
+  })).toBe(true);
+  await page.screenshot({ path: testInfo.outputPath('ios-expanded-install-guidance.png') });
+  await send.click();
+  await expect(composer).toHaveText('');
+  await install.getByRole('button', { name: 'Later' }).click();
+  await page.reload();
+  await expect(page.getByText('Welcome Lounge', { exact: true }).first()).toBeVisible();
+  await expect(install).toBeHidden();
+});

@@ -47,8 +47,9 @@ test('dialogs contain focus, restore triggers and retain Aqua character across t
   await page.keyboard.press('Escape');
   await expect(profileTrigger).toBeFocused();
   if (info.project.name === 'mobile') await page.getByRole('button', { name: /Welcome Lounge/ }).click();
-  const backdropTrigger = page.getByRole('button', { name: 'Decorate conversation background' });
+  const backdropTrigger = page.getByRole('button', { name: 'Conversation actions', exact: true });
   await backdropTrigger.click();
+  await page.getByRole('button', { name: 'Decorate conversation background' }).click();
   const backdrop = page.getByRole('dialog', { name: 'Decorate Welcome Lounge' });
   await contained(page, backdrop);
   await page.screenshot({ path: `/tmp/aimtrix-04-${info.project.name}-backdrop.png` });

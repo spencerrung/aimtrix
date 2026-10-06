@@ -14,6 +14,15 @@ import { Workspace } from './Workspace';
 import type { PushRoute } from '../../pwa/pushRouting';
 import { MessageSendError } from '../../matrix/messageDelivery';
 import type { SpaceAdministrationActions } from '../rooms/SpaceAdministration';
+function openConversationActions() {
+  if (!screen.queryByRole('dialog', { name: 'Conversation actions' })) fireEvent.click(screen.getByRole('button', { name: 'Conversation actions' }));
+}
+function editOwnMessage(scope: HTMLElement = document.body, last = false) {
+  const rows = [...scope.querySelectorAll<HTMLElement>('.timeline-message--own')].filter((row) => !row.closest('[hidden],[inert]'));
+  const row = last ? rows.at(-1)! : rows[0];
+  fireEvent.click(within(row).getByRole('button', { name: 'More message actions' }));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Edit message' }));
+}
 function installResizeObserver() {
   const observers = new Set<ResizeObserverCallback>();
   class ResizeObserverMock {
@@ -692,7 +701,7 @@ describe('Workspace demo', () => {
 
     const composer = screen.getByLabelText('Message Welcome Lounge');
     setComposerText(composer, 'do not lose this');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
+    editOwnMessage();
     expect(composer).toHaveTextContent('The goal: 2006 in spirit, 2026 where it matters.');
     fireEvent.click(screen.getByRole('button', { name: 'Cancel reply or edit' }));
 
@@ -814,7 +823,7 @@ describe('Workspace demo', () => {
     const { container } = renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage, onSendReply, onEditMessage });
     setComposerText(screen.getByLabelText('Message Welcome Lounge'), 'Synthetic welcome draft');
     fireEvent.click(screen.getByRole('button', { name: /Mara Chen/ }));
-    fireEvent.click(action === 'reply' ? screen.getAllByRole('button', { name: 'Reply' })[0] : screen.getByRole('button', { name: 'Edit message' }));
+    if (action === 'reply') fireEvent.click(screen.getAllByRole('button', { name: 'Reply' })[0]); else editOwnMessage();
     expect(container.querySelector('.composer-context')).not.toBeNull();
     act(() => window.history.back());
     await waitFor(() => expect(screen.getByLabelText('Message Welcome Lounge')).toBeInTheDocument());
@@ -1241,7 +1250,7 @@ describe('Workspace demo', () => {
     renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onEditMessage: () => pending.promise });
     const composer = screen.getByLabelText('Message Welcome Lounge');
     setComposerText(composer, 'My original draft');
-    fireEvent.click(screen.getByRole('button', { name: 'Edit message' }));
+    editOwnMessage();
     setComposerText(composer, 'Submitted edit');
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     fireEvent.click(screen.getByRole('button', { name: 'Cancel reply or edit' }));
@@ -1287,7 +1296,7 @@ describe('Workspace demo', () => {
     const composer = within(thread).getByLabelText('Message thread');
     setComposerText(composer, 'Submitted thread text');
     fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
-    fireEvent.click(within(thread).getAllByRole('button', { name: 'Edit message' }).at(-1)!);
+    editOwnMessage(thread, true);
     await act(async () => pending.resolve());
     expect(within(thread).getByText('Editing message')).toBeInTheDocument();
     expect(composer).toHaveTextContent('Keep the Aqua, lose the bad UX.');
@@ -1608,6 +1617,7 @@ describe('Workspace demo', () => {
     const { container } = renderWorkspace();
 
     expect(screen.getByLabelText('Read by Mara')).toBeInTheDocument();
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Decorate conversation background' }));
     const dialog = screen.getByRole('dialog', { name: 'Decorate Welcome Lounge' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Blue lagoon' }));
@@ -1627,6 +1637,7 @@ describe('Workspace demo', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Friends' }));
     fireEvent.click(screen.getByRole('button', { name: /GIF Club/ }));
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Decorate conversation background' }));
     const dialog = screen.getByRole('dialog', { name: 'Decorate GIF Club' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'Friends space' }));
@@ -2404,6 +2415,7 @@ describe('Workspace read bookkeeping', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Return to saved message' }));
     await waitFor(() => expect(onOpenEventContext).toHaveBeenCalledWith('welcome', '$saved-unloaded'));
     expect(onMarkRoomRead).not.toHaveBeenCalled();
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mark conversation read' }));
     await waitFor(() => expect(onMarkRoomRead).toHaveBeenCalledWith('welcome', { eventId: undefined, explicit: true }));
@@ -2420,6 +2432,7 @@ describe('Workspace read bookkeeping', () => {
     vi.spyOn(timeline, 'getBoundingClientRect').mockReturnValue({ ...rect(100), height: 400, bottom: 500 });
     const row = container.querySelector<HTMLElement>('[data-event-id="m2"]')!;
     vi.spyOn(row, 'getBoundingClientRect').mockReturnValue({ ...rect(160), height: 50, bottom: 210 });
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
     expect(onMarkRoomUnread).toHaveBeenCalledWith('welcome', 'm2');
@@ -2434,12 +2447,13 @@ describe('Workspace read bookkeeping', () => {
     expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
     fireEvent.keyDown(document.activeElement!, { key: 'Escape' });
     expect(screen.queryByRole('dialog', { name: 'Conversation read status' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Read status' })).toHaveFocus();
+    expect(screen.getByRole('button', { name: 'Conversation actions' })).toHaveFocus();
   });
 
   it('keeps Escape working during a read-status save and never steals focus when it finishes', async () => {
     const pending = pendingSend();
     renderWorkspace({ workspace: unreadWorkspace(), onMarkRoomUnread: vi.fn().mockReturnValue(pending.promise) });
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Read status' }));
     fireEvent.click(screen.getByRole('button', { name: 'Mark unread' }));
     expect(screen.getByRole('dialog', { name: 'Conversation read status' })).toHaveFocus();
@@ -2528,12 +2542,15 @@ describe('Workspace quick navigation', () => {
     fireEvent.change(screen.getByRole('combobox', { name: 'Conversation filter' }), { target: { value: 'favorites' } });
     expect(screen.getByText('No favorite conversations in this space.')).toBeVisible();
     expect(composer).toHaveTextContent('Synthetic favorite draft');
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
     expect(screen.getByRole('button', { name: 'Add to favorites' })).toHaveAttribute('aria-disabled', 'true');
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
     expect(save).toHaveBeenCalledTimes(1);
     await act(async () => pending.reject(new Error('Synthetic unavailable')));
     expect(screen.getByText('Could not update your favorite. Try the star again.')).toBeVisible();
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
     await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
     expect(screen.getByText('No favorite conversations in this space.')).toBeVisible();
@@ -2562,15 +2579,19 @@ describe('Workspace quick navigation', () => {
     const previous = pendingSend(); const current = pendingSend();
     const save = vi.fn().mockReturnValueOnce(previous.promise).mockReturnValueOnce(current.promise);
     renderWorkspace({ workspace, onSetRoomFavorite: save });
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
     fireEvent.click(screen.getByRole('button', { name: /Dev Shack/ }));
+    openConversationActions();
     expect(screen.getByRole('button', { name: 'Add to favorites' })).not.toHaveAttribute('aria-disabled', 'true');
+    openConversationActions();
     fireEvent.click(screen.getByRole('button', { name: 'Add to favorites' }));
     expect(save.mock.calls).toEqual([['welcome', true], ['dev-shack', true]]);
     await act(async () => previous.reject(new Error('Synthetic favorite failure')));
     expect(screen.queryByText('Could not update your favorite. Try the star again.')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add to favorites' })).toHaveAttribute('aria-disabled', 'true');
     await act(async () => current.resolve());
+    openConversationActions();
     expect(screen.getByRole('button', { name: 'Add to favorites' })).not.toHaveAttribute('aria-disabled', 'true');
   });
 
@@ -2606,7 +2627,7 @@ describe('Workspace quick navigation', () => {
     vi.stubGlobal('innerWidth', width);
     renderWorkspace();
     const choose = (query: string) => {
-      const opener = screen.getByRole('button', { name: 'Quick switcher' });
+      const opener = screen.getByRole('button', { name: 'Search conversations (quick switcher)' });
       opener.focus(); fireEvent.click(opener);
       const search = screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' });
       fireEvent.change(search, { target: { value: query } });
@@ -2623,7 +2644,7 @@ describe('Workspace quick navigation', () => {
     vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => { frames.push(callback); return frames.length; });
     vi.stubGlobal('cancelAnimationFrame', vi.fn());
     renderWorkspace();
-    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search conversations (quick switcher)' }));
     const search = screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' });
     fireEvent.change(search, { target: { value: 'Dev Shack' } });
     fireEvent.keyDown(search, { key: 'Enter' });
@@ -2648,11 +2669,11 @@ describe('Workspace quick navigation', () => {
     fireEvent.change(search, { target: { value: 'Dev Shack' } });
     fireEvent.keyDown(search, { key: 'Enter' });
     expect(screen.getByLabelText('Message Dev Shack')).toBeVisible();
-    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search conversations (quick switcher)' }));
     fireEvent.change(screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' }), { target: { value: 'Welcome Lounge' } });
     fireEvent.keyDown(screen.getByRole('combobox', { name: 'Search rooms, people, and spaces' }), { key: 'Enter' });
     expect(screen.getByLabelText('Message Welcome Lounge')).toHaveTextContent('Synthetic retained draft');
-    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search conversations (quick switcher)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Keyboard shortcuts' }));
     fireEvent.keyDown(screen.getByRole('dialog'), { key: 'k', ctrlKey: true });
     expect(screen.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
@@ -2668,7 +2689,7 @@ describe('Unread navigation feedback', () => {
     const workspace = structuredClone(demoWorkspace);
     for (const room of workspace.rooms) { room.unreadCount = 0; room.badgeCount = 0; }
     renderWorkspace({ workspace });
-    fireEvent.click(screen.getByRole('button', { name: 'Quick switcher' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Search conversations (quick switcher)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Next unread' }));
     const dialog = screen.getByRole('dialog', { name: 'Quick switcher' });
     expect(within(dialog).getByText('No other unread conversations. You’re all caught up!')).toBeVisible();

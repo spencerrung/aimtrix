@@ -12,7 +12,7 @@ async function openRoom(page: Page) {
 }
 
 test('ordinary desktop keeps one contextual panel and retains each surface’s state', async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== 'desktop', 'Desktop docking is covered at the accepted 1280px reference width.');
+  test.skip(testInfo.project.name.includes('mobile'), 'Desktop docking is covered at the accepted 1280px reference width.');
   test.setTimeout(60_000);
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.goto('/?demo=1');
@@ -49,7 +49,11 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   await thread.getByRole('separator', { name: 'Resize thread panel' }).press('Home');
   for (const theme of ['Aqua', 'Graphite', 'Midnight']) {
-    await page.getByRole('button', { name: theme, exact: true }).click();
+    await page.getByRole('button', { name: 'You settings', exact: true }).click();
+    const settings = page.getByRole('dialog', { name: 'Personalize Aimtrix' });
+    await settings.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await settings.getByRole('button', { name: new RegExp(`^${theme}`) }).click();
+    await page.keyboard.press('Escape');
     await expect(thread).toBeVisible();
     await expectReachable(composer);
     expect((await new AxeBuilder({ page }).include('.context-panel').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([]);
@@ -63,7 +67,7 @@ test('ordinary desktop keeps one contextual panel and retains each surface’s s
 });
 
 test('phone and tablet route Back preserves the room, draft and exact reading anchor', async ({ page }, testInfo) => {
-  const size = testInfo.project.name === 'mobile' ? { width: 412, height: 915 } : { width: 900, height: 800 };
+  const size = testInfo.project.name.includes('mobile') ? { width: 412, height: 915 } : { width: 900, height: 800 };
   await page.setViewportSize(size);
   await openRoom(page);
   const composer = page.getByLabel('Message Welcome Lounge');

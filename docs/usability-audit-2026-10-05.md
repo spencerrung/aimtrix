@@ -150,3 +150,18 @@ Unit logs: `/tmp/aimtrix-audit-check.log`, `/tmp/aimtrix-ux-audit/check-node26-n
 Final browser log: `/tmp/aimtrix-ux-audit/e2e-final.log`. The complete browser gate passes, but the unmodified local unit gate does not. Resolve the Node 26 test-environment behavior and repeat the unit baseline in the CI Node 22 environment before treating this audit as a clean quality-gate record.
 
 No production behavior was changed during this research pass. No commit, deployment, image publication, or live infrastructure change was performed.
+
+## Implementation follow-up
+
+The audit above records the pre-change baseline. Its plan was committed and merged through [PR #254](https://github.com/spencerrung/aimtrix/pull/254). The implementation preserves the existing Matrix lifecycle, routes, encrypted operations, drafts, reading anchors, and Aqua visual direction while changing their presentation:
+
+- Phone global navigation is labeled and sits below the active surface. Space selection belongs above the room list. Activity, conversation search, saved messages, and settings are available from the same navigation; appearance remains in Settings.
+- Conversation identity, message search, and details stay prominent. Favorite/read-status/background/call/collapse actions use a named overflow surface with preserved pending/error states and focus return.
+- Touch messages expose a single 44px More control inside the bubble header. Complete permitted operations remain in its menu; reactions and thread summaries have touch-sized targets. Desktop retains direct Reply/React access.
+- F6 traverses visible workspace sections. Timelines expose one Tab entry, arrows/Home/End select messages, Enter enters their controls, and Escape returns to composition. Text selection, media controls, retained hidden panels, and IME input receive explicit handling.
+- Install/update/connectivity notices reserve app space. The shared visual viewport model accounts for offsets, notice height and top safe area; compact chrome follows usable height. Dialogs and popovers use the same visible bounds. Pinch zoom does not trigger keyboard layout changes.
+- Jump to latest is constrained to the timeline rather than a fixed distance above the window bottom; direct hit testing reproduced its former obstruction of tablet Send. Healthy persistent drafts no longer require a permanent status banner; errors and volatile drafts remain explicit.
+
+Independent review additionally found and corrected touch More/avatar overlap, hidden-heading F6 targeting, native media controls escaping roving navigation, pinch-width menu overflow, safe-area ownership, and full-layout-height dialog centering. The Node 26 test environment now uses the actual JSDOM origin's storage, resolving the audit's host-storage failures.
+
+Validation adds 320/360/390/412px phones, tablet and desktop geometry, actual Send hit tests, keyboard-offset and pinch geometry, room/thread navigation, real worker offline/replacement journeys, and reviewed Linux Chromium screenshot baselines. See [browser acceptance](browser-acceptance.md) and [shell behavior](conversation-shell.md). Final production and CI totals will be recorded here after the implementation gate completes. Actual-device installation, OS keyboards, spoken screen readers, native packaging acceptance, and live Matrix/provider interoperability remain separate release evidence; browser emulation does not close them.

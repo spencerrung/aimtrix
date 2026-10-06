@@ -81,6 +81,8 @@ export function NavigationDialogs({ kind, onClose, onOpenLink, onStartConversati
       <dl style={{ display: 'grid', gap: 12, margin: '16px 0' }}>
         <div><dt><kbd>{modifier}+K</kbd></dt><dd style={{ margin: '4px 0 0' }}>Open the quick switcher. Use ↑ and ↓ to choose, Enter to open, and Escape to close.</dd></div>
         <div><dt><kbd>Alt+Shift+↑</kbd> / <kbd>Alt+Shift+↓</kbd></dt><dd style={{ margin: '4px 0 0' }}>Open the previous or next unread conversation across all your conversations.</dd></div>
+        <div><dt><kbd>F6</kbd> / <kbd>Shift+F6</kbd></dt><dd style={{ margin: '4px 0 0' }}>Move between spaces, conversations, messages, composition, and the open context panel.</dd></div>
+        <div><dt><kbd>↑</kbd> / <kbd>↓</kbd> · <kbd>Enter</kbd> · <kbd>Escape</kbd></dt><dd style={{ margin: '4px 0 0' }}>When a message is focused, arrows choose a message and Enter enters its controls. Escape from a message returns to composition. Tab leaves the message list.</dd></div>
         <div><dt><kbd>{modifier}+/</kbd></dt><dd style={{ margin: '4px 0 0' }}>Show these keyboard shortcuts.</dd></div>
       </dl>
       <p className="settings-hint">On touch screens, open the quick switcher from its search button. Its footer has the same unread navigation, Open Matrix link, and keyboard help actions.</p>

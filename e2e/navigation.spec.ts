@@ -16,7 +16,7 @@ async function switchTo(page: Page, name: string) {
   await expect(page.getByRole('dialog', { name: 'Quick switcher' })).toBeHidden();
 }
 async function openLink(page: Page, link: string) {
-  await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+  await page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
   await page.getByRole('button', { name: 'Open Matrix link', exact: true }).click();
   await page.getByRole('textbox', { name: 'Matrix link' }).fill(link);
   await page.getByRole('button', { name: 'Open link', exact: true }).click();
@@ -80,8 +80,10 @@ test('quick switching preserves drafts and real favorites filter independently o
   await expect.poll(() => page.getByRole('main', { name: 'Conversation with Mara Chen' }).evaluate((element) => element.contains(document.activeElement))).toBe(true);
   await switchTo(page, 'Welcome Lounge');
   await expect(composer).toHaveText('Keep my draft while finding another buddy');
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Add to favorites', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Remove from favorites' })).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('Escape');
   if (info.project.name === 'mobile') {
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.getByRole('button', { name: 'Browse conversations', exact: true }).click();
@@ -102,7 +104,9 @@ test('quick switching preserves drafts and real favorites filter independently o
   await expect(buddies.getByRole('button', { name: /Mara Chen/ })).toBeHidden();
   await page.screenshot({ path: info.outputPath('favorites-filter.png') });
   await buddies.getByRole('button', { name: /Welcome Lounge/ }).click();
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Remove from favorites' }).click();
+  await page.keyboard.press('Escape');
   if (info.project.name === 'mobile') {
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.getByRole('button', { name: 'Browse conversations', exact: true }).click();
@@ -125,7 +129,7 @@ test('touch controls reach the switcher, shortcut help and recoverable link erro
   await page.setViewportSize(info.project.name === 'mobile' ? { width: 320, height: 568 } : { width: 1280, height: 800 });
   await page.emulateMedia({ reducedMotion: 'reduce' });
   await page.goto('/?demo=1');
-  const trigger = page.getByRole('button', { name: 'Quick switcher', exact: true });
+  const trigger = page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true });
   await expect(trigger).toBeInViewport({ ratio: 1 });
   await trigger.click();
   const switcher = page.getByRole('dialog', { name: 'Quick switcher' });
@@ -163,7 +167,7 @@ test('touch controls reach the switcher, shortcut help and recoverable link erro
 test('short landscape keeps quick-switcher results and touch actions reachable', async ({ page }, info) => {
   await page.setViewportSize({ width: 568, height: 320 });
   await page.goto('/?demo=1');
-  await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+  await page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Quick switcher' });
   await dialog.getByRole('combobox').fill('Welcome Lounge');
   const result = dialog.getByRole('option', { name: /Welcome Lounge/ });

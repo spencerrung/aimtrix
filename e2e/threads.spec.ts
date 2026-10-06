@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 let script: string;
 let css: string;
 async function openThreadLink(page: Page, eventId: string) {
-  await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+  await page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
   await page.getByRole('button', { name: 'Open Matrix link', exact: true }).click();
   await page.getByRole('textbox', { name: 'Matrix link', exact: true }).fill(`https://matrix.to/#/!synthetic:test/${encodeURIComponent(eventId)}`);
   await page.getByRole('button', { name: 'Open link', exact: true }).click();

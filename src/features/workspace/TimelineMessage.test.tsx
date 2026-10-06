@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { MessageSummary } from '../../matrix/viewModels';
 import { parseIncomingFormatting } from '../../matrix/incomingFormatting';
@@ -28,6 +28,16 @@ describe('shared timeline message', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Reaction could not be updated. Try again.');
     expect(screen.queryByText(/private server detail/)).not.toBeInTheDocument();
     expect(react).toHaveBeenCalledWith(message, '👍', undefined);
+  });
+
+  it('anchors a reaction opened from More to the visible menu trigger', async () => {
+    render(<TimelineMessage {...props} message={message} />);
+    const more = screen.getByRole('button', { name: 'More message actions' });
+    fireEvent.click(more);
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Add reaction' }));
+    const picker = await screen.findByRole('dialog', { name: 'Choose a reaction' });
+    fireEvent.keyDown(picker, { key: 'Escape' });
+    await waitFor(() => expect(more).toHaveFocus());
   });
 
   it('can remove an owned reaction when new reactions are forbidden', () => {

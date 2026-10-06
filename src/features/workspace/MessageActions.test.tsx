@@ -37,11 +37,13 @@ describe('shared message actions', () => {
   it('uses actual permissions rather than legacy ownership and pin heuristics', () => {
     const action = vi.fn();
     render(<MessageActions message={{ ...message, isOwn: false, kind: 'media', actions: { ...enabled, pin: false, edit: false, react: false } }} canPin onReply={action} onStartThread={action} onPin={action} onEdit={action} onDelete={action} onOpenReaction={action} />);
-    expect(screen.getByRole('button', { name: 'Delete message' })).toBeVisible();
+    expect(screen.queryByRole('button', { name: 'Delete message' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Pin message' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Edit message' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add reaction' })).not.toBeInTheDocument();
-    expect(within(openMenu()).queryByRole('menuitem', { name: 'Pin message' })).not.toBeInTheDocument();
+    const menu = openMenu();
+    expect(within(menu).getByRole('menuitem', { name: 'Delete message' })).toBeVisible();
+    expect(within(menu).queryByRole('menuitem', { name: 'Pin message' })).not.toBeInTheDocument();
   });
 
   it('retains quick reply/edit semantics and avoids nested thread controls on a root card', () => {
@@ -57,9 +59,10 @@ describe('shared message actions', () => {
     let reject!: (error: Error) => void;
     const pin = vi.fn(() => new Promise<void>((_resolve, fail) => { reject = fail; }));
     render(<MessageActions message={{ ...message, actions: enabled }} onPin={pin} />);
-    const button = screen.getByRole('button', { name: 'Pin message' });
-    button.focus();
-    fireEvent.click(button); fireEvent.click(button);
+    const item = within(openMenu()).getByRole('menuitem', { name: 'Pin message' });
+    fireEvent.click(item);
+    const button = screen.getByRole('button', { name: 'More message actions' });
+    fireEvent.click(button);
     expect(pin).toHaveBeenCalledTimes(1);
     expect(button).toHaveFocus();
     expect(button).toHaveAttribute('aria-disabled', 'true');
@@ -72,7 +75,7 @@ describe('shared message actions', () => {
   it('keeps confirmation ownership in the parent and exposes mark unread only with backing callback', async () => {
     const redact = vi.fn(), unread = vi.fn().mockResolvedValue(undefined);
     render(<MessageActions message={message} onDelete={redact} onMarkUnread={unread} />);
-    fireEvent.click(screen.getByRole('button', { name: 'Delete message' }));
+    fireEvent.click(within(openMenu()).getByRole('menuitem', { name: 'Delete message' }));
     expect(redact).toHaveBeenCalledWith(message);
     await waitFor(() => expect(screen.getByRole('button', { name: 'More message actions' })).toHaveAttribute('aria-disabled', 'false'));
     fireEvent.click(within(openMenu()).getByRole('menuitem', { name: 'Mark unread' }));

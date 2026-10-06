@@ -24,12 +24,13 @@ test.beforeEach(async ({ page }, info) => {
 
 test('read actions, saved context and reminder feedback remain reachable across themes', async ({ page }, info) => {
   test.setTimeout(60_000);
-  const trigger = page.getByRole('button', { name: 'Read status', exact: true });
+  const trigger = page.getByRole('button', { name: 'Conversation actions', exact: true });
   const dialog = page.getByRole('dialog', { name: 'Conversation read status' });
   for (const theme of ['aqua', 'graphite', 'midnight']) {
     await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
     await expect(trigger).toBeInViewport({ ratio: 1 });
     await trigger.click();
+    await page.getByRole('button', { name: 'Read status', exact: true }).click();
     await expect(dialog.getByRole('button', { name: 'Mark conversation read' })).toBeFocused();
     await expect(dialog.getByRole('button', { name: 'Mark unread', exact: true })).toBeInViewport({ ratio: 1 });
     expect((await new AxeBuilder({ page }).include('[aria-label="Conversation read status"]').withTags(['wcag2a', 'wcag2aa']).analyze()).violations).toEqual([]);
@@ -39,6 +40,7 @@ test('read actions, saved context and reminder feedback remain reachable across 
   }
   if (info.project.name === 'mobile') {
     await trigger.click();
+    await page.getByRole('button', { name: 'Read status', exact: true }).click();
     await page.goBack();
     await expect(dialog).toHaveCount(0);
     await page.goForward();

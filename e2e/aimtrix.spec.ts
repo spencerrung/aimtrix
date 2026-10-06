@@ -74,6 +74,7 @@ test('desktop workspace panels resize, collapse, and restore', async ({ page }, 
   await detailsResize.press('ArrowRight');
   await expect.poll(async () => (await page.getByRole('main', { name: /Welcome Lounge/ }).boundingBox())?.width).toBeGreaterThan(chatBeforeDetailsResize?.width ?? 0);
 
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Collapse conversation' }).click();
   await expect(page.getByRole('main', { name: /Welcome Lounge/ })).toBeHidden();
   await page.getByRole('button', { name: 'Expand conversation' }).click();
@@ -114,6 +115,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
   await expect(page.getByLabel('Read by Mara')).toBeVisible();
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Decorate conversation background' }).click();
   let dialog = page.getByRole('dialog', { name: 'Decorate Welcome Lounge' });
   await dialog.getByRole('button', { name: 'Soft twilight' }).click();
@@ -131,6 +133,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
   if (testInfo.project.name === 'desktop') {
     await page.getByRole('button', { name: 'Friends' }).click();
     await page.getByRole('button', { name: /GIF Club/ }).click();
+    await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
     await page.getByRole('button', { name: 'Decorate conversation background' }).click();
     dialog = page.getByRole('dialog', { name: 'Decorate GIF Club' });
     await dialog.getByRole('button', { name: 'Friends space' }).click();
@@ -144,6 +147,7 @@ test('read indicators and safe room and DM backdrops are functional', async ({ p
   }
   await page.getByRole('button', { name: 'Direct Messages', exact: true }).click();
   await page.getByRole('button', { name: /Mara Chen/ }).click();
+  await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
   await page.getByRole('button', { name: 'Decorate conversation background' }).click();
   dialog = page.getByRole('dialog', { name: 'Decorate Mara Chen' });
   await expect(dialog.getByText('Only you see this choice.', { exact: false })).toBeVisible();
