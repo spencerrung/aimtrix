@@ -98,7 +98,12 @@ test('quick switching preserves drafts and real favorites filter independently o
   expect(panelBounds && searchBounds && filterBounds && groupsBounds).toBeTruthy();
   expect(filterBounds!.x).toBeGreaterThanOrEqual(panelBounds!.x);
   expect(filterBounds!.x + filterBounds!.width).toBeLessThanOrEqual(panelBounds!.x + panelBounds!.width);
-  expect(filterBounds!.y).toBeGreaterThanOrEqual(searchBounds!.y + searchBounds!.height);
+  if (info.project.name === 'mobile') {
+    // Phone search and filter intentionally share a row to leave more room for conversations.
+    expect(filterBounds!.x).toBeGreaterThanOrEqual(searchBounds!.x + searchBounds!.width);
+    expect(filterBounds!.y).toBeLessThanOrEqual(searchBounds!.y);
+    expect(filterBounds!.y + filterBounds!.height).toBeGreaterThanOrEqual(searchBounds!.y + searchBounds!.height);
+  } else expect(filterBounds!.y).toBeGreaterThanOrEqual(searchBounds!.y + searchBounds!.height);
   expect(filterBounds!.y + filterBounds!.height).toBeLessThanOrEqual(groupsBounds!.y + 1);
   await filter.selectOption('favorites');
   await expect(buddies.getByRole('button', { name: /Welcome Lounge/ })).toBeVisible();
