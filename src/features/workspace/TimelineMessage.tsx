@@ -120,6 +120,10 @@ export const TimelineMessage = memo(function TimelineMessage({
     setReactionPickerOpen(false);
     setReactionQuery('');
   };
+  const renderReactionEmoji = (entry: Pick<EmojiPackEntry, 'name' | 'src' | 'previewSrc' | 'emoji'>, alt = '') =>
+    entry.src && (dataSaver || !autoplayMedia)
+      ? <span className="reaction-image-label" title={entry.name}>{entry.name}</span>
+      : <EmojiAsset entry={entry} alt={alt} />;
   return (
     <article className={`timeline-message${hideThreadControls ? ' timeline-message--root' : ''}${message.isOwn ? ' timeline-message--own' : ''}${highlighted ? ' timeline-message--target' : ''}`} data-keyboard-message data-event-id={message.id} data-message-key={message.transactionId ?? message.id} tabIndex={-1}>
       <Avatar
@@ -161,11 +165,12 @@ export const TimelineMessage = memo(function TimelineMessage({
                 key={reaction.key}
                 aria-label={`${reaction.name ?? (isMxcEmoji(reaction.key) ? 'Custom emoji' : reaction.key)}, ${reaction.count} reactions`}
                 disabled={(reaction.ownEventId ? reaction.canRemove === false : message.actions?.react === false) || reactionFeedback === 'pending'}
-                onClick={() => react(reaction.key, reaction.ownEventId)}
+                onClick={() => react(reaction.key, reaction.ownEventId, !reaction.ownEventId && isMxcEmoji(reaction.key) && reaction.name
+                  ? { id: reaction.key, name: reaction.name, src: reaction.key } : undefined)}
               >
                 {emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key) ? (
-                  <EmojiAsset entry={emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key)!} />
-                ) : isMxcEmoji(reaction.key) ? (dataSaver || !autoplayMedia ? reaction.name ?? 'Custom emoji' : <EmojiAsset entry={{ src: reaction.key, name: reaction.name ?? 'Custom emoji' }} alt={reaction.name ?? 'Custom emoji'} />) : reaction.key} <span>{reaction.count}</span>
+                  renderReactionEmoji(emojiCatalog.find((entry) => emojiReactionKey(entry) === reaction.key)!)
+                ) : isMxcEmoji(reaction.key) ? renderReactionEmoji({ src: reaction.key, name: reaction.name ?? 'Custom emoji' }, reaction.name ?? 'Custom emoji') : reaction.key} <span>{reaction.count}</span>
               </button>
             ))}
           </div>
@@ -210,11 +215,11 @@ export const TimelineMessage = memo(function TimelineMessage({
           {reactionEmojis.quick.length ? <>
             <span className="reaction-picker__section">{recentEmojis.length ? 'Recent' : 'Quick picks'}</span>
             <div className="reaction-picker__grid reaction-picker__grid--quick">
-              {reactionEmojis.quick.map((entry) => <button type="button" key={emojiReactionKey(entry)} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
+              {reactionEmojis.quick.map((entry) => <button type="button" key={emojiReactionKey(entry)} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}>{renderReactionEmoji(entry)}</button>)}
             </div>
           </> : null}
           <div className="reaction-picker__grid">
-            {reactionEmojis.matches.map((entry) => <button type="button" key={entry.id} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}><EmojiAsset entry={entry} /></button>)}
+            {reactionEmojis.matches.map((entry) => <button type="button" key={entry.id} aria-label={`React with ${emojiReactionKey(entry)}`} title={entry.name} onClick={() => chooseReaction(emojiReactionKey(entry))}>{renderReactionEmoji(entry)}</button>)}
           </div>
           {!reactionEmojis.quick.length && !reactionEmojis.matches.length ? <p className="reaction-picker__empty">No emoji match that search.</p> : null}
         </Popover>, document.body) : null}
