@@ -35,6 +35,8 @@ PLAYWRIGHT_PREVIEW=1 npm run test:e2e
 
 The required CI evidence is the Quality workflow run, including its retained Playwright traces/screenshots on failure, unit/build output, push privacy proofs, dependency review, and mobile project synchronization checks. The release contract validator checks that public runtime config contains no secret-shaped keys, required operating docs exist, and CI keeps the release validator plus browser evidence artifact wiring.
 
+Hosted checks follow the [ten-minute runtime budget](ci-runtime-budget.md). All browser shards and both independent live Matrix replicas must pass. Full ten-minute plaintext/encrypted sync and 10,000-room endurance profiles run with `npm run test:matrix:endurance` on a Docker-capable local machine before release promotion. Attach the exact-revision allowlisted summaries; green hosted checks do not replace that evidence.
+
 ### Automated versus external evidence
 
 | Gate | Automated evidence | External evidence still required |

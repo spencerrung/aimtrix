@@ -4,6 +4,8 @@ This is the validation foundation for [Polish 03 / #143](https://github.com/spen
 
 ## Run locally
 
+Routine Actions checks run two clean Matrix replicas in parallel, an Element peer, delegated authentication, MatrixRTC, cache reload and synthetic large-account rendering. The full-duration live endurance profiles have moved to `npm run test:matrix:endurance`; see the [CI runtime budget and release evidence procedure](ci-runtime-budget.md). Historical CI results below remain dated evidence, not a claim that those long profiles still run on every PR.
+
 Requirements: Node.js 22+, npm dependencies, Docker Engine with Compose v2 or newer, and Playwright Chromium. Linux is the exercised host; Docker Desktop/native-shell behavior remains separate evidence.
 
 ```sh
