@@ -5,6 +5,8 @@ on:
     paths:
       - Dockerfile
       - nginx.conf
+      - build/**
+      - vite.config.ts
       - .github/workflows/docker.yml
       - scripts/validate-image-publication.mjs
       - tests/release/publication.test.mjs

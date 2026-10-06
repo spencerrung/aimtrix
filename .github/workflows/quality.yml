@@ -55,6 +55,9 @@ jobs:
       - name: Push privacy proofs
         run: npm run proof:push && npm run proof:push-sw
 
+      - name: Install Chromium for the scheduling proof
+        run: npx playwright install --with-deps chromium
+
       - name: Scheduling feasibility proof
         run: npm run proof:scheduling
 

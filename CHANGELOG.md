@@ -2,8 +2,9 @@
 
 ## Unreleased
 
+- Give production service workers a build identity and discover waiting updates on foreground/reconnect without bypassing draft confirmation.
 - Enlarge mobile sign-in targets and preserve visible keyboard focus on short screens.
-- Patch compatible development dependency advisories without changing runtime dependencies.
+- Patch compatible development dependency advisories and the native Rustls TLS dependency.
 - Split browser and native packaging checks, parallelize independent Matrix runs, and retain full endurance profiles as an explicit local release gate.
 - Guard image publication against mismatched source/version and existing immutable tags; verify native metadata against the actual release asset inventory.
 - Extend disposable acceptance to natural delegated-token expiry and real SFU interruption recovery; live execution results belong in the acceptance record.
