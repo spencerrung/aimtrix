@@ -4,7 +4,7 @@ The target is for each hosted workflow’s execution critical path to finish wit
 
 ## Routine checks
 
-Quality runs lint, all unit tests, the production build, release-contract validation and privacy/feasibility proofs. Chromium browser coverage runs in two independent shards; Firefox and WebKit each run two shards. Playwright's fully parallel test distribution partitions the existing complete project/test set without changing assertions, retries or intentional platform skips. Every shard builds the static client and keeps separately named failure evidence. All shards must pass; the old single `check` status alone no longer establishes browser acceptance. Update any branch protection allowlist to require all browser shard checks as well as `check`.
+Quality runs lint, all unit tests, the production build, release-contract validation and privacy/feasibility proofs. Chromium browser coverage runs in two independent shards; Firefox and WebKit each run two shards. Playwright's fully parallel test distribution partitions the existing complete project/test set without changing assertions, retries or intentional platform skips. Every shard builds the static client and keeps separately named failure evidence. The stable `check` status aggregates static checks, every browser shard, mobile-shell checks and dependency review. It fails when a required gate fails, is cancelled or is skipped; dependency review is allowed to skip only on pushes. Require `check` in branch protection.
 
 New pushes cancel obsolete Quality and desktop validation runs. Release publication retains serialization rather than cancelling a partially published release.
 

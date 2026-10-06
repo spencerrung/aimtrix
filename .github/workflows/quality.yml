@@ -27,7 +27,7 @@ jobs:
           # is fixed in glib 0.20, which is not compatible with that chain yet.
           allow-ghsas: GHSA-wrw7-89jp-8q8g
 
-  check:
+  static-check:
     timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
@@ -150,3 +150,29 @@ jobs:
           test -f ios/App/App/PrivacyInfo.xcprivacy
           grep -q 'applicationId "dev.alucard.aimtrix"' android/app/build.gradle
           grep -q 'custom_url_scheme.*aimtrix' android/app/src/main/res/values/strings.xml
+
+  # Keep one stable branch-protection status covering every required gate.
+  check:
+    if: always()
+    needs: [static-check, browser-chromium, browser-compat, mobile-shell, dependency-review]
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require all Quality gates
+        env:
+          STATIC_RESULT: ${{ needs.static-check.result }}
+          CHROMIUM_RESULT: ${{ needs.browser-chromium.result }}
+          COMPAT_RESULT: ${{ needs.browser-compat.result }}
+          MOBILE_RESULT: ${{ needs.mobile-shell.result }}
+          DEPENDENCY_RESULT: ${{ needs.dependency-review.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$STATIC_RESULT" = success
+          test "$CHROMIUM_RESULT" = success
+          test "$COMPAT_RESULT" = success
+          test "$MOBILE_RESULT" = success
+          if [ "$EVENT_NAME" = pull_request ]; then
+            test "$DEPENDENCY_RESULT" = success
+          else
+            test "$DEPENDENCY_RESULT" = skipped
+          fi
