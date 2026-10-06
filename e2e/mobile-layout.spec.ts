@@ -96,7 +96,7 @@ test('phone list keeps compact and roomy density preferences distinct', async ({
   const row = page.getByRole('button', { name: /Welcome Lounge/ });
   const heights: number[] = [];
   for (const density of ['compact', 'roomy']) {
-    await page.getByRole('button', { name: 'You', exact: true }).click();
+    await page.getByRole('button', { name: 'You settings', exact: true }).click();
     await page.getByRole('button', { name: 'Appearance', exact: true }).click();
     await page.getByRole('button', { name: density, exact: true }).click();
     await page.getByRole('button', { name: 'Close settings', exact: true }).click();
