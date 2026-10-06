@@ -30,16 +30,29 @@ test('production worker controls a warmed shell and reloads it offline', async (
   }
 });
 
-test('a real replacement worker waits for draft confirmation before activation', async ({ page, browserName }) => {
+test('a changed production build waits for draft confirmation before activation', async ({ page, browserName, isMobile }) => {
+  test.skip(isMobile, 'One actual two-build lifecycle gate; mobile notice layout is covered separately.');
+  test.setTimeout(120000);
   test.skip(!process.env.PLAYWRIGHT_PREVIEW, 'Real worker lifecycle requires the production build.');
   test.skip(browserName !== 'chromium', 'This gate exercises Chromium service-worker lifecycle.');
-  // Serve the actual build with a changed worker revision; browser routing cannot
-  // reliably intercept the browser process's service-worker update request.
+  // Build two real outputs. A changed document title is an actual HTML input
+  // change, not a hand-edited worker revision or fake worker.
   const { createServer } = await import('node:http');
-  const { readFile } = await import('node:fs/promises');
+  const { readFile, mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { build } = await import('vite');
   const { resolve, extname } = await import('node:path');
-  let revision = 1;
-  const root = resolve('dist');
+  const directory = await mkdtemp(resolve(tmpdir(), 'aimtrix-pwa-builds-'));
+  const first = resolve(directory, 'first'), second = resolve(directory, 'second');
+  try {
+    await build({ logLevel: 'silent', build: { outDir: first, emptyOutDir: true } });
+    await build({ logLevel: 'silent', build: { outDir: second, emptyOutDir: true }, plugins: [{
+      name: 'lifecycle-document-change',
+      transformIndexHtml: { order: 'pre', handler: (html) => html.replace('<title>Aimtrix</title>', '<title>Aimtrix updated build</title>') },
+    }] });
+    expect(await readFile(resolve(first, 'sw.js'), 'utf8')).not.toBe(await readFile(resolve(second, 'sw.js'), 'utf8'));
+  } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
+  let root = first;
   const types: Record<string, string> = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.wasm': 'application/wasm' };
   const server = createServer((request, response) => {
     void (async () => {
@@ -49,7 +62,7 @@ test('a real replacement worker waits for draft confirmation before activation',
       try {
         const body = await readFile(file);
         response.writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
-        response.end(pathname === '/sw.js' ? Buffer.concat([body, Buffer.from(`\n// lifecycle revision ${revision}\n`)]) : body);
+        response.end(body);
       } catch { response.writeHead(404).end(); }
     })();
   });
@@ -68,9 +81,11 @@ test('a real replacement worker waits for draft confirmation before activation',
       await navigator.serviceWorker.ready;
       if (!navigator.serviceWorker.controller) await new Promise<void>((resolve) => navigator.serviceWorker.addEventListener('controllerchange', () => resolve(), { once: true }));
     });
+    await page.evaluate(async () => { await caches.open('unrelated-origin-cache'); });
     await composer.fill('Synthetic draft survives deferred update');
-    revision = 2;
-    await page.evaluate(async () => { await (await navigator.serviceWorker.ready).update(); });
+    root = second;
+    // The running old page must discover an update when brought back to focus.
+    await page.evaluate(() => window.dispatchEvent(new Event('focus')));
     const notice = page.getByRole('status').filter({ hasText: 'Aimtrix update ready' });
     await expect(notice).toBeVisible();
     expect(await page.evaluate(async () => (await navigator.serviceWorker.ready).waiting?.state)).toBe('installed');
@@ -84,13 +99,17 @@ test('a real replacement worker waits for draft confirmation before activation',
     await Promise.all([page.waitForEvent('load'), page.getByRole('button', { name: 'Reload now', exact: true }).click()]);
     await expect(composer).toBeVisible();
     await expect(composer).toHaveText('');
+    await expect(page).toHaveTitle('Aimtrix updated build');
     expect(await page.evaluate(async () => Boolean((await navigator.serviceWorker.ready).waiting))).toBe(false);
     expect(await page.evaluate(() => navigator.serviceWorker.controller?.state)).toBe('activated');
     await expect(notice).toBeHidden();
+    await expect.poll(() => page.evaluate(async () => (await caches.keys()).filter((key) => key.startsWith('aimtrix-shell-')).length)).toBe(1);
+    expect(await page.evaluate(() => caches.has('unrelated-origin-cache'))).toBe(true);
   } finally {
     try { if (!page.isClosed()) await page.goto('about:blank'); }
     finally {
       await new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); });
+      await rm(directory, { recursive: true, force: true });
     }
   }
 });
