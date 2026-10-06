@@ -83,6 +83,16 @@ describe('shared message actions', () => {
     expect(unread).toHaveBeenCalledWith(message);
   });
 
+  it('opens a thread from a persistent trigger rather than a disappearing menu item', () => {
+    const openedFrom: Element[] = [];
+    render(<MessageActions message={message} onStartThread={() => { openedFrom.push(document.activeElement!); }} />);
+    const menu = openMenu();
+    const item = within(menu).getByRole('menuitem', { name: 'Reply in thread' });
+    item.focus();
+    fireEvent.click(item);
+    expect(openedFrom).toEqual([screen.getByRole('button', { name: 'More message actions' })]);
+  });
+
   it('hides accepted-only controls for pending sends and avoids fake demo permalinks', () => {
     const { rerender } = render(<MessageActions message={{ ...message, delivery: 'failed' }} onReply={vi.fn()} />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();

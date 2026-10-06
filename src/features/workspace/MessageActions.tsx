@@ -40,6 +40,7 @@ export function MessageActions({ message, onReply, onOpenThread, onStartThread, 
     if (busy.current) return;
     busy.current = true;
     const version = generation.current;
+    if (open) trigger.current?.focus({ preventScroll: true });
     setOpen(false); setPending(label); setFeedback(undefined);
     let result: void | Promise<void>;
     try { result = action(); } catch { result = Promise.reject(new Error('Message action failed')); }

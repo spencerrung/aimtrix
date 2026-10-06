@@ -1,3 +1,4 @@
+import './navigationDialogs.css';
 import { X } from 'lucide-react';
 import { useId, useRef, useState, type FormEvent } from 'react';
 import { Dialog, DialogClose } from '../../components/Dialog';
@@ -56,12 +57,12 @@ export function NavigationDialogs({ kind, onClose, onOpenLink, onStartConversati
     finally { pending.current = false; setBusy(false); }
   };
 
-  return <Dialog className="room-dialog" aria-labelledby={`${id}-title`} onClose={onClose} busy={busy}>
+  return <Dialog className={`room-dialog navigation-dialog navigation-dialog--${kind}`} aria-labelledby={`${id}-title`} onClose={onClose} busy={busy}>
     <header style={{ height: 44 }}>
       <h2 id={`${id}-title`} style={{ margin: 0, fontSize: '1rem' }}>{title}</h2>
       <DialogClose aria-label={`Close ${kind === 'link' ? 'Matrix link' : 'keyboard shortcuts'}`} style={{ width: 44, height: 44 }}><X size={18} /></DialogClose>
     </header>
-    {kind === 'link' ? <form noValidate onSubmit={(event) => void open(event)} aria-busy={busy} style={{ overflowY: 'auto', maxHeight: 'calc(100dvh - 120px)' }}>
+    {kind === 'link' ? <form noValidate onSubmit={(event) => void open(event)} aria-busy={busy} className="navigation-dialog__body">
       <fieldset className="interaction-fields">
         <label><span>Matrix link</span><input ref={input} type="url" value={value} readOnly={busy} data-initial-focus
           aria-describedby={`${id}-hint`} aria-invalid={Boolean(error)} autoComplete="off" autoCapitalize="none" spellCheck={false}
@@ -76,7 +77,7 @@ export function NavigationDialogs({ kind, onClose, onOpenLink, onStartConversati
         <button className="aqua-button" type="button" disabled={busy} style={{ minHeight: 44 }} onClick={() => void start()}>Start conversation</button>
       </div> : null}
       <button className="aqua-button aqua-button--primary" type="submit" disabled={busy || !value.trim()} style={{ minHeight: 44 }}>Open link</button>
-    </form> : <div style={{ padding: 20, overflowY: 'auto', maxHeight: 'calc(100dvh - 120px)' }}>
+    </form> : <><div className="navigation-dialog__body" tabIndex={0} role="region" aria-label="Keyboard shortcut reference">
       <p style={{ marginTop: 0 }}>Move between conversations without losing your place.</p>
       <dl style={{ display: 'grid', gap: 12, margin: '16px 0' }}>
         <div><dt><kbd>{modifier}+K</kbd></dt><dd style={{ margin: '4px 0 0' }}>Open the quick switcher. Use ↑ and ↓ to choose, Enter to open, and Escape to close.</dd></div>
@@ -86,7 +87,8 @@ export function NavigationDialogs({ kind, onClose, onOpenLink, onStartConversati
         <div><dt><kbd>{modifier}+/</kbd></dt><dd style={{ margin: '4px 0 0' }}>Show these keyboard shortcuts.</dd></div>
       </dl>
       <p className="settings-hint">On touch screens, open the quick switcher from its search button. Its footer has the same unread navigation, Open Matrix link, and keyboard help actions.</p>
+    </div><footer className="navigation-dialog__footer">
       <DialogClose className="aqua-button" style={{ minHeight: 44 }}>Done</DialogClose>
-    </div>}
+    </footer></>}
   </Dialog>;
 }

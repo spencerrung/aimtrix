@@ -51,6 +51,7 @@ test('read actions, saved context and reminder feedback remain reachable across 
   await expect(page.locator('[data-event-id="$saved-unloaded"]')).toBeFocused();
   await expect(page.getByText('Marked unread for later.', { exact: true })).toBeVisible();
   await trigger.click();
+  await page.getByRole('button', { name: 'Read status', exact: true }).click();
   await dialog.getByRole('button', { name: 'Mark conversation read' }).click();
   await expect(dialog.getByRole('status')).toHaveText('Conversation marked read. Unseen threads keep their unread state.');
   await expect(dialog).toBeFocused();
@@ -58,6 +59,7 @@ test('read actions, saved context and reminder feedback remain reachable across 
   await expect(dialog).toHaveCount(0);
   await expect(trigger).toBeFocused();
   await trigger.click();
+  await page.getByRole('button', { name: 'Read status', exact: true }).click();
   await dialog.getByRole('button', { name: 'Mark unread', exact: true }).click();
   await expect(dialog.getByRole('status')).toHaveText('Marked unread. Your reminder stays until you mark this conversation read.');
   await expect(dialog.getByRole('button', { name: 'Return to saved message' })).toBeEnabled();

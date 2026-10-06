@@ -111,3 +111,13 @@
     .profile-pinned-stickers > span { width: 47px; height: 47px; }
   }
 }
+
+@layer responsive {
+  /* The preview/editor scroll independently; save controls stay in their own row. */
+  dialog.interaction-dialog > .profile-dialog { grid-template-rows: 38px minmax(0, 1fr) auto; overflow: hidden; }
+  .profile-dialog__layout, .profile-decorator { scroll-padding-block: 12px; }
+  .profile-editor-save { position: static; margin: 0; padding: 12px 17px; }
+  @media (max-width: 767px) {
+    dialog.interaction-dialog.profile-dialog-backdrop { --dialog-gutter: 0px; }
+  }
+}

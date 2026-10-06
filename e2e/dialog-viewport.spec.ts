@@ -55,3 +55,38 @@ test('dialogs remain usable after a visual-only keyboard resize', async ({ page 
   await close.click();
   await expect(settings).toBeHidden();
 });
+
+test('profile Save and shortcut Done stay reachable above a visual-only keyboard', async ({ page }, info) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/?demo=1');
+  await page.locator('.self-card__profile').click();
+  const profile = page.getByRole('dialog', { name: 'My profile page' });
+  await profile.getByRole('button', { name: 'Decorate my page' }).click();
+  await page.evaluate(() => {
+    Object.defineProperties(window.visualViewport!, {
+      height: { configurable: true, value: 360 }, offsetTop: { configurable: true, value: 40 }, scale: { configurable: true, value: 1 },
+    });
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  const save = profile.getByRole('button', { name: 'Save my page' });
+  await save.focus();
+  await expect.poll(() => save.evaluate((button) => {
+    const bounds = button.getBoundingClientRect();
+    return bounds.top >= 43 && bounds.bottom + 3 <= 400 && button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })).toBe(true);
+  await page.screenshot({ path: info.outputPath('profile-save-visual-keyboard.png') });
+  await save.click();
+  await expect(profile.getByRole('button', { name: 'Decorate my page' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Search conversations (quick switcher)' }).click();
+  await page.getByRole('dialog', { name: 'Quick switcher' }).getByRole('button', { name: 'Keyboard shortcuts' }).click();
+  const help = page.getByRole('dialog', { name: 'Keyboard shortcuts' });
+  const done = help.getByRole('button', { name: 'Done' });
+  await expect.poll(() => done.evaluate((button) => {
+    const bounds = button.getBoundingClientRect();
+    return bounds.top >= 40 && bounds.bottom + 3 <= 400 && button.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+  })).toBe(true);
+  await page.screenshot({ path: info.outputPath('shortcut-done-visual-keyboard.png') });
+  await done.click();
+  await expect(help).toBeHidden();
+});

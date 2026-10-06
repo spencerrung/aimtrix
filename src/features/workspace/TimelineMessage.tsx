@@ -194,7 +194,7 @@ export const TimelineMessage = memo(function TimelineMessage({
           <button
             className="thread-summary"
             type="button"
-            onClick={() => onOpenThread(message)}
+            onClick={(event) => { event.currentTarget.focus({ preventScroll: true }); onOpenThread(message); }}
           >
             <MessageCircle size={14} />
             <strong>{message.thread.replyCount}{message.thread.replyCountIsLowerBound ? '+' : ''} {message.thread.replyCount === 1 && !message.thread.replyCountIsLowerBound ? 'reply' : 'replies'}</strong>

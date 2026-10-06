@@ -85,6 +85,7 @@ test('quick switching preserves drafts and real favorites filter independently o
   await expect(page.getByRole('button', { name: 'Remove from favorites' })).toHaveAttribute('aria-pressed', 'true');
   await page.keyboard.press('Escape');
   if (info.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Chats', exact: true }).click();
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.getByRole('button', { name: 'Browse conversations', exact: true }).click();
   }
@@ -108,6 +109,7 @@ test('quick switching preserves drafts and real favorites filter independently o
   await page.getByRole('button', { name: 'Remove from favorites' }).click();
   await page.keyboard.press('Escape');
   if (info.project.name === 'mobile') {
+    await page.getByRole('button', { name: 'Chats', exact: true }).click();
     await page.getByRole('button', { name: 'Home', exact: true }).click();
     await page.getByRole('button', { name: 'Browse conversations', exact: true }).click();
   }

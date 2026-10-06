@@ -32,9 +32,21 @@ export async function openRoom(page, name) {
   await page.locator('.buddy-row').filter({ hasText: name }).first().click();
   await page.getByRole('main', { name }).waitFor();
 }
+export async function conversationActions(page) {
+  const surface = page.getByRole('dialog', { name: 'Conversation actions', exact: true });
+  if (!await surface.isVisible()) await page.getByRole('button', { name: 'Conversation actions', exact: true }).click();
+  await surface.waitFor();
+  return surface;
+}
+async function messageActions(page, row) {
+  await row.getByRole('button', { name: 'More message actions', exact: true }).click();
+  const menu = page.getByRole('menu', { name: 'Message actions', exact: true });
+  await menu.waitFor();
+  return menu;
+}
 const encode = encodeURIComponent;
 async function openMatrixEvent(page, roomId, eventId) {
-  await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+  await page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
   await page.getByRole('dialog', { name: 'Quick switcher', exact: true }).getByRole('button', { name: 'Open Matrix link', exact: true }).click();
   const dialog = page.getByRole('dialog', { name: 'Open Matrix link', exact: true });
   await dialog.getByLabel('Matrix link', { exact: true }).fill(`https://matrix.to/#/${encode(roomId)}/${encode(eventId)}`);
@@ -1104,7 +1116,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     await check('encrypted-thread-retry', async () => {
       const root = alice.locator('.timeline-message').filter({ hasText: 'Retry round trip' }).first();
-      await root.getByRole('button', { name: 'Reply in thread', exact: true }).click();
+      await (await messageActions(alice, root)).getByRole('menuitem', { name: 'Reply in thread', exact: true }).click();
       const marker = `Synthetic thread retry ${randomBytes(10).toString('hex')}`;
       const pattern = '**/rooms/*/send/m.room.encrypted/*';
       const reject = (route) => route.fulfill({ status: 403, contentType: 'application/json', body: JSON.stringify({ errcode: 'M_FORBIDDEN', error: 'Synthetic thread rejection' }) });
@@ -1174,7 +1186,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       };
       const readAction = async (page, unread) => {
         await page.bringToFront();
-        await page.getByRole('button', { name: 'Read status', exact: true }).click();
+        await (await conversationActions(page)).getByRole('button', { name: 'Read status', exact: true }).click();
         const popover = page.getByRole('dialog', { name: 'Conversation read status', exact: true });
         await popover.getByRole('button', { name: unread ? 'Mark unread' : 'Mark conversation read', exact: true }).click();
         await popover.getByText(unread ? /^Marked unread\. Your reminder/ : /^Conversation marked read\./).waitFor();
@@ -1530,23 +1542,24 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await api(`${tagPath}/${encode(customTag)}`, { token: aliceSession.accessToken, method: 'PUT', body: { order: 0.25 } });
       for (const page of [alice, aliceSecond, bob]) await openRoom(page, roomName);
       await alice.bringToFront();
-      await alice.getByRole('button', { name: 'Add to favorites', exact: true }).click();
-      await alice.getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
+      await (await conversationActions(alice)).getByRole('button', { name: 'Add to favorites', exact: true }).click();
+      await (await conversationActions(alice)).getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
       await aliceSecond.bringToFront();
-      await aliceSecond.getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
+      await (await conversationActions(aliceSecond)).getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
       await until(async () => Object.hasOwn((await api(tagPath, { token: aliceSession.accessToken })).tags ?? {}, 'm.favourite'), 'favorite-server-tag');
       await aliceSecond.reload(); await openRoom(aliceSecond, roomName);
-      await aliceSecond.getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
-      invariant(await bob.getByRole('button', { name: 'Add to favorites', exact: true }).isVisible(), 'favorite-other-user-isolation');
+      await (await conversationActions(aliceSecond)).getByRole('button', { name: 'Remove from favorites', exact: true }).waitFor();
+      invariant(await (await conversationActions(bob)).getByRole('button', { name: 'Add to favorites', exact: true }).isVisible(), 'favorite-other-user-isolation');
       const otherTags = await api(`/_matrix/client/v3/user/${encode(bobSession.userId)}/rooms/${encode(roomId)}/tags`, { token: bobSession.accessToken });
       invariant(!Object.hasOwn(otherTags.tags ?? {}, 'm.favourite'), 'favorite-other-account-tag-absent');
       await aliceSecond.bringToFront();
-      await aliceSecond.getByRole('button', { name: 'Remove from favorites', exact: true }).click();
-      await aliceSecond.getByRole('button', { name: 'Add to favorites', exact: true }).waitFor();
+      await (await conversationActions(aliceSecond)).getByRole('button', { name: 'Remove from favorites', exact: true }).click();
+      await (await conversationActions(aliceSecond)).getByRole('button', { name: 'Add to favorites', exact: true }).waitFor();
       await alice.bringToFront();
-      await alice.getByRole('button', { name: 'Add to favorites', exact: true }).waitFor();
+      await (await conversationActions(alice)).getByRole('button', { name: 'Add to favorites', exact: true }).waitFor();
       const tags = (await api(tagPath, { token: aliceSession.accessToken })).tags ?? {};
       invariant(!Object.hasOwn(tags, 'm.favourite') && tags[customTag]?.order === 0.25, 'favorite-removal-preserves-other-tags');
+      for (const page of [alice, aliceSecond, bob]) await page.keyboard.press('Escape');
     });
     await check('matrix-links-and-navigation-history', async () => {
       invariant(Boolean(navigationHistory), 'navigation-history-available');
@@ -1574,7 +1587,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         if (request.method() === 'POST' && (path.includes('join') || path.at(-1) === 'createRoom')) joinedRoom = true;
       };
       const openLink = async (value) => {
-        await aliceSecond.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+        await aliceSecond.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
         await aliceSecond.getByRole('dialog', { name: 'Quick switcher', exact: true }).getByRole('button', { name: 'Open Matrix link', exact: true }).click();
         const dialog = aliceSecond.getByRole('dialog', { name: 'Open Matrix link', exact: true });
         await dialog.getByLabel('Matrix link', { exact: true }).fill(value);
@@ -1582,7 +1595,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await dialog.waitFor({ state: 'hidden' });
       };
       const appTraverse = async (direction) => {
-        await aliceSecond.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+        await aliceSecond.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
         const dialog = aliceSecond.getByRole('dialog', { name: 'Quick switcher', exact: true });
         await dialog.getByRole('button', { name: direction, exact: true }).click();
         await dialog.waitFor({ state: 'hidden' });
@@ -1631,7 +1644,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const { rootId, replyId } = threadHistory;
       const openLink = async (page, eventId) => {
         await page.bringToFront();
-        await page.getByRole('button', { name: 'Quick switcher', exact: true }).click();
+        await page.getByRole('button', { name: 'Search conversations (quick switcher)', exact: true }).click();
         await page.getByRole('button', { name: 'Open Matrix link', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Open Matrix link', exact: true });
         await dialog.getByRole('textbox', { name: 'Matrix link', exact: true }).fill(`https://matrix.to/#/${encode(roomId)}/${encode(eventId)}`);
@@ -2044,7 +2057,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       const root = alice.locator('.timeline-message').filter({ hasText: marker });
       await root.locator('.message-delivery-mark--accepted, .message-delivery-mark--read').waitFor();
       attachmentThreadRootId = await root.getAttribute('data-event-id');
-      await root.getByRole('button', { name: 'Reply in thread', exact: true }).click();
+      await (await messageActions(alice, root)).getByRole('menuitem', { name: 'Reply in thread', exact: true }).click();
       const thread = alice.getByRole('complementary', { name: 'Thread', exact: true });
       const file = { name: 'thread-attachment.bin', mimeType: 'application/octet-stream', buffer: randomBytes(96) };
       const caption = 'Synthetic threaded attachment caption';
@@ -2226,7 +2239,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       try {
         const formattedName = 'Disposable formatted API peer';
         const source = alice.locator(`[data-event-id=${JSON.stringify(formattedPeer.outboundId)}]`);
-        await source.getByRole('button', { name: 'Pin message', exact: true }).click();
+        await (await messageActions(alice, source)).getByRole('menuitem', { name: 'Pin message', exact: true }).click();
         const pinsPath = `/_matrix/client/v3/rooms/${encode(formattedPeer.roomId)}/state/m.room.pinned_events`;
         stage = 'pin-server-state';
         await until(async () => (await api(pinsPath, { token: bobSession.accessToken }).catch(() => ({}))).pinned?.includes(formattedPeer.outboundId), 'pin-server-state');
@@ -2239,10 +2252,12 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
         await drawer.locator('.drawer-collection-item').filter({ hasText: 'Synthetic outbound room formatting' }).waitFor({ timeout: 45000 });
         stage = 'pin-member-denied';
         const peerSource = bob.locator(`[data-event-id=${JSON.stringify(formattedPeer.outboundId)}]`);
-        invariant(await peerSource.getByRole('button', { name: 'Pin message', exact: true }).count() === 0, 'pin-member-control-hidden');
+        const peerMenu = await messageActions(bob, peerSource);
+        invariant(await peerMenu.getByRole('menuitem', { name: /^(?:Pin|Unpin) message$/ }).count() === 0, 'pin-member-control-hidden');
+        await bob.keyboard.press('Escape');
         await api(pinsPath, { token: bobSession.accessToken, method: 'PUT', body: { pinned: [] }, status: 403 });
         stage = 'pin-remove-sync';
-        await source.getByRole('button', { name: 'Unpin message', exact: true }).click();
+        await (await messageActions(alice, source)).getByRole('menuitem', { name: 'Unpin message', exact: true }).click();
         await until(async () => (await api(pinsPath, { token: bobSession.accessToken })).pinned?.length === 0, 'pin-removed-server-state');
         await drawer.getByText('No shared pins in this room.', { exact: true }).waitFor({ timeout: 45000 });
         for (const page of [alice, bob]) await openRoom(page, roomName);
@@ -2642,7 +2657,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
     });
     await check('shared-backdrop-and-permissions', async () => {
       const start = Date.now();
-      await alice.getByRole('button', { name: 'Decorate conversation background' }).click();
+      await (await conversationActions(alice)).getByRole('button', { name: 'Decorate conversation background', exact: true }).click();
       const dialog = alice.getByRole('dialog', { name: `Decorate ${roomName}` });
       await dialog.getByRole('button', { name: 'Soft twilight', exact: true }).click();
       await dialog.getByRole('button', { name: 'Save backdrop', exact: true }).click();
@@ -2697,7 +2712,7 @@ export async function runJourneys({ browser, stack, check, forceFailure, metrics
       await dialog.waitFor({ state: 'hidden' });
       await alice.getByRole('button', { name: 'Direct Messages', exact: true }).click();
       await openRoom(alice, 'bob');
-      await alice.getByRole('button', { name: 'Decorate conversation background' }).click();
+      await (await conversationActions(alice)).getByRole('button', { name: 'Decorate conversation background', exact: true }).click();
       const backdrop = alice.getByRole('dialog', { name: /Decorate/ });
       await backdrop.getByText('Only you see this choice.', { exact: false }).waitFor();
       await backdrop.getByRole('button', { name: 'Citrus grove', exact: true }).click();

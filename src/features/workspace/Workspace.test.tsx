@@ -188,6 +188,21 @@ describe('Workspace demo', () => {
     vi.restoreAllMocks();
   });
 
+  it.each([
+    { triggerName: /2 replies/, closeName: 'Close thread', panelName: 'Thread' },
+    { triggerName: 'Search message history', closeName: 'Close message search', panelName: 'Message search' },
+  ])('returns to the actual $panelName trigger after a pointer click leaves the composer focused', async ({ triggerName, closeName, panelName }) => {
+    renderWorkspace();
+    const trigger = screen.getByRole('button', { name: triggerName });
+    vi.spyOn(trigger, 'getClientRects').mockReturnValue({ length: 1 } as DOMRectList);
+    screen.getByLabelText('Message Welcome Lounge').focus();
+    fireEvent.click(trigger);
+    const panel = screen.getByRole('complementary', { name: panelName });
+    await waitFor(() => expect(panel.querySelector('[data-panel-heading]')).toHaveFocus());
+    fireEvent.click(within(panel).getByRole('button', { name: closeName }));
+    await waitFor(() => expect(trigger).toHaveFocus());
+  });
+
   it('sends a local demo message through the real composer interaction', () => {
     renderWorkspace();
 

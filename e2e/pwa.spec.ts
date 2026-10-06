@@ -113,3 +113,44 @@ test('expanded iOS install guidance leaves the composer reachable and stays dism
   await expect(page.getByText('Welcome Lounge', { exact: true }).first()).toBeVisible();
   await expect(install).toBeHidden();
 });
+
+test('thread Send remains tappable with stacked notices and a visual-only keyboard', async ({ page }, testInfo) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+  await page.getByRole('button', { name: /2 replies/ }).click();
+  const thread = page.getByRole('complementary', { name: 'Thread', exact: true });
+  const composer = thread.getByRole('textbox', { name: 'Message thread', exact: true });
+  await composer.fill('Synthetic thread draft with notices and keyboard');
+  await page.evaluate(() => {
+    const install = new Event('beforeinstallprompt', { cancelable: true });
+    Object.defineProperties(install, {
+      prompt: { value: () => Promise.resolve() },
+      userChoice: { value: Promise.resolve({ outcome: 'dismissed' }) },
+    });
+    window.dispatchEvent(install);
+    window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: { postMessage: () => undefined } }));
+    Object.defineProperties(window.visualViewport!, {
+      height: { configurable: true, value: 360 },
+      offsetTop: { configurable: true, value: 40 },
+      scale: { configurable: true, value: 1 },
+    });
+    window.visualViewport!.dispatchEvent(new Event('resize'));
+  });
+  await expect(page.getByRole('complementary', { name: 'Install Aimtrix' })).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Aimtrix update ready' })).toBeVisible();
+  await expect(page.locator('html')).toHaveAttribute('data-compact-viewport', 'true');
+  const send = thread.getByRole('button', { name: 'Send thread reply', exact: true });
+  for (const control of [composer, send]) {
+    await expect.poll(() => control.evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      const viewport = window.visualViewport!;
+      return bounds.top >= viewport.offsetTop && bounds.bottom <= viewport.offsetTop + viewport.height
+        && element.contains(document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2));
+    })).toBe(true);
+  }
+  await page.screenshot({ path: testInfo.outputPath('thread-notices-visual-keyboard.png') });
+  if (testInfo.project.use.hasTouch) await send.tap();
+  else await send.click();
+  await expect(composer).toHaveText('');
+  await expect(thread.getByText('Synthetic thread draft with notices and keyboard', { exact: true })).toBeVisible();
+});

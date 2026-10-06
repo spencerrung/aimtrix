@@ -310,7 +310,10 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
   if (testInfo.project.name === 'mobile') {
     await page.getByRole('button', { name: /Welcome Lounge/ }).click();
   }
-  await page.getByRole('button', { name: 'Add reaction' }).first().click();
+  if (testInfo.project.use.hasTouch) {
+    await page.locator('.conversation').getByRole('button', { name: 'More message actions' }).first().click();
+    await page.getByRole('menuitem', { name: 'Add reaction', exact: true }).click();
+  } else await page.getByRole('button', { name: 'Add reaction' }).first().click();
   let picker = page.getByRole('dialog', { name: 'Choose a reaction' });
   await expect(picker).toBeVisible();
   await expect(picker.getByRole('textbox', { name: 'Search reaction emoji' })).toBeFocused();
@@ -319,11 +322,14 @@ test('message and thread reactions use an accessible emoji chooser', async ({ pa
 
   await page.getByRole('button', { name: /2 replies/ }).click();
   const thread = page.getByRole('complementary', { name: 'Thread' });
-  await thread.getByRole('button', { name: 'Add reaction' }).first().click();
+  const reactionTrigger = thread.getByRole('button', { name: testInfo.project.use.hasTouch ? 'More message actions' : 'Add reaction' }).first();
+  await reactionTrigger.click();
+  if (testInfo.project.use.hasTouch) await page.getByRole('menuitem', { name: 'Add reaction', exact: true }).click();
   picker = page.getByRole('dialog', { name: 'Choose a reaction' });
   await expect(picker).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(picker).toBeHidden();
+  await expect(reactionTrigger).toBeFocused();
 });
 
 test('shared images open in an accessible viewer', async ({ page }, testInfo) => {

@@ -7,7 +7,7 @@ import { chromium } from '@playwright/test';
 import { preview } from 'vite';
 import { createStack, matrixApi, register, until } from './stack.mjs';
 import { startRtcStack } from './rtc-stack.mjs';
-import { login, openRoom } from './journeys.mjs';
+import { login, openRoom, conversationActions } from './journeys.mjs';
 
 const checks = [];
 let stage = 'setup';
@@ -107,7 +107,7 @@ try {
   });
   const join = async (page, label) => {
     stage = 'group-control';
-    await page.getByRole('button', { name: label }).click();
+    await (await conversationActions(page)).getByRole('button', { name: label }).click();
     const prejoin = page.getByRole('dialog', { name: 'Join group call' });
     stage = 'group-prejoin';
     await prejoin.getByLabel('Join with microphone on').check();
@@ -166,7 +166,7 @@ try {
     await aliceShelf.getByText('1 participant').waitFor();
   });
   await run('second-client-subscribes-to-encrypted-media', async () => {
-    await bob.getByRole('button', { name: /Join group call/ }).waitFor({ timeout: 60000 });
+    await (await conversationActions(bob)).getByRole('button', { name: /Join group call/ }).waitFor({ timeout: 60000 });
     bobShelf = await join(bob, /Join group call/);
     await bobShelf.getByText('2 participants').waitFor({ timeout: 60000 });
     await aliceShelf.getByText('2 participants').waitFor({ timeout: 60000 });
@@ -198,7 +198,7 @@ try {
     await modernAliceShelf.getByText('1 participant').waitFor();
   });
   await run('modern-second-client-subscribes-to-encrypted-media', async () => {
-    await modernBob.getByRole('button', { name: /Join group call/ }).waitFor({ timeout: 60000 });
+    await (await conversationActions(modernBob)).getByRole('button', { name: /Join group call/ }).waitFor({ timeout: 60000 });
     modernBobShelf = await join(modernBob, /Join group call/);
     await modernBobShelf.getByText('2 participants').waitFor({ timeout: 60000 });
     await modernAliceShelf.getByText('2 participants').waitFor({ timeout: 60000 });

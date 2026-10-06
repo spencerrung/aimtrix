@@ -319,6 +319,7 @@ function IconButton({
   disabled,
   active = false,
   className,
+  focusOnActivate = false,
 }: {
   label: string;
   children: ReactNode;
@@ -326,6 +327,7 @@ function IconButton({
   disabled?: boolean;
   active?: boolean;
   className?: string;
+  focusOnActivate?: boolean;
 }) {
   const isDisabled = disabled ?? onClick === undefined;
   return (
@@ -334,7 +336,7 @@ function IconButton({
       type="button"
       aria-label={label}
       title={label}
-      onClick={onClick}
+      onClick={(event) => { if (focusOnActivate) event.currentTarget.focus({ preventScroll: true }); onClick?.(); }}
       disabled={isDisabled}
     >
       {children}
@@ -2336,8 +2338,8 @@ function Conversation({
           <p>{room.encrypted ? <ShieldCheck size={12} aria-label="Encrypted" /> : null}<span>{room.statusMessage || (room.kind === 'direct' ? 'Direct message' : 'Matrix room')}</span></p>
         </div>
         <div className="conversation-header__actions">
-          <IconButton label="Search message history" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
-          <IconButton label="Toggle room details" onClick={onToggleDetails}><PanelRight size={18} /></IconButton>
+          <IconButton focusOnActivate label="Search message history" active={searchOpen} onClick={onSearch}><Search size={17} /></IconButton>
+          <IconButton focusOnActivate label="Toggle room details" onClick={onToggleDetails}><PanelRight size={18} /></IconButton>
           <button ref={readActionsTrigger} className="icon-button" type="button" aria-label="Conversation actions" title="Conversation actions" aria-haspopup="dialog" aria-expanded={headerActionsRoom === room.id || readActionsRoom === room.id} onClick={() => {
             setReadActionsRoom(undefined);
             setHeaderActionsRoom((current) => current === room.id ? undefined : room.id);

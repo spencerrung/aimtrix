@@ -78,11 +78,16 @@ test('phone and tablet route Back preserves the room, draft and exact reading an
   await composer.fill('A draft while reading');
   const root = timeline.locator('[data-event-id="m2"]');
   await expect(async () => {
-    await root.evaluate((element) => {
+    const settledOffset = await root.evaluate(async (element) => {
       const timelineElement = element.closest('.timeline')!;
       timelineElement.scrollTop += element.getBoundingClientRect().top - timelineElement.getBoundingClientRect().top;
       timelineElement.dispatchEvent(new Event('scroll'));
+      // Sending and draft notices can still resize the timeline. Establish the
+      // reading position after its observers/programmatic-scroll guard settle.
+      await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      return Math.abs(element.getBoundingClientRect().top - timelineElement.getBoundingClientRect().top);
     });
+    expect(settledOffset).toBeLessThan(3);
     await expect(page.getByRole('button', { name: 'Jump to latest messages' })).toBeVisible();
   }).toPass();
   expect(await timeline.evaluate((element) => {

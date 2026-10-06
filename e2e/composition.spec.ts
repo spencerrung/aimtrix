@@ -85,8 +85,10 @@ test('captioned image leaves the attachment tray after its send is confirmed', a
 test('staged files and expanded tools leave room and thread composers reachable on short screens', async ({ page }, info) => {
   for (const kind of ['room', 'thread'] as const) {
     await page.setViewportSize({ width: 412, height: 915 });
-    const openRoom = page.getByRole('button', { name: /Welcome Lounge/ });
-    if (await openRoom.isVisible()) await openRoom.click();
+    // Resize notifications are asynchronous in WebKit. Navigate explicitly
+    // instead of sampling visibility before the responsive route has settled.
+    await page.getByRole('button', { name: 'Chats', exact: true }).click();
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
     if (kind === 'thread') await page.getByRole('button', { name: /2 replies/ }).click();
     const surface = kind === 'thread' ? page.getByRole('complementary', { name: 'Thread', exact: true }) : page.getByRole('main', { name: 'Conversation with Welcome Lounge' });
     await surface.getByLabel(kind === 'thread' ? 'Choose thread attachment' : 'Choose attachment', { exact: true }).setInputFiles(Array.from({ length: 4 }, (_, index) => ({ name: `${kind}-${index}.txt`, mimeType: 'text/plain', buffer: Buffer.from('synthetic') })));
