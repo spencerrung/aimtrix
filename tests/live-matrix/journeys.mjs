@@ -1347,9 +1347,9 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       const historyWireStart = wire.length;
       const composer = alice.getByRole('textbox', { name: `Message ${roomName}`, exact: true });
       const sentIds = [];
-      // Ten events beyond the 250-row cap still force a shifted history window;
-      // retain the independent context/navigation anchors at indices 20, 40 and 240.
-      const historyCount = 260;
+      // Exceed the 250-row cap and leave anchor 240 outside the latest window.
+      // The dedicated history job retains the original full encrypted workload.
+      const historyCount = 350;
       for (let index = 0; index < historyCount; index++) {
         await composer.fill(`${prefix} ${String(index).padStart(3, '0')}`);
         const sent = alice.waitForResponse((response) => response.request().method() === 'PUT' && new URL(response.url()).pathname.includes('/send/m.room.encrypted/') && response.ok());
