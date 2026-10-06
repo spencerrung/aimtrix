@@ -1,4 +1,4 @@
-/* global localStorage, fetch */
+/* global localStorage, fetch, AbortSignal */
 import { randomBytes } from 'node:crypto';
 import { URL, URLSearchParams } from 'node:url';
 import { invariant, until } from './stack.mjs';
@@ -59,10 +59,12 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
       await page.getByRole('button', { name: 'Sign in with homeserver OAuth', exact: true }).waitFor({ timeout: 30000 });
     });
     let credentials;
+    let originalSessionReadAt;
     let tokenEndpoint;
     await check('delegated-auth-login', async () => {
       await signInWithProvider(page, stack, username);
       credentials = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+      originalSessionReadAt = Date.now();
       invariant(credentials?.userId === '@delegated:aimtrix.test' && credentials.oauth?.refreshToken &&
         credentials.oauth?.clientId && credentials.oauth?.issuer === `${stack.origins.mas}/`, 'delegated-session');
       invariant(!new URL(page.url()).searchParams.has('code') && !new URL(page.url()).hash.includes('code='), 'delegated-callback-cleanup');
@@ -92,6 +94,7 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
     });
     let recoveryKey;
     let recoveryRoomName;
+    let recoveryRoomId;
     let recoveryMarker;
     let recoveryEventId;
     await check('delegated-auth-recovery-setup', async () => {
@@ -113,6 +116,7 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         invariant(created.ok(), 'delegated-recovery-room-created');
         stage = 'delegated-recovery-room-response';
         const roomId = (await created.json()).room_id;
+        recoveryRoomId = roomId;
         invariant(typeof roomId === 'string' && roomId.startsWith('!'), stage);
         stage = 'delegated-recovery-session-read';
         const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
@@ -171,6 +175,54 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
         stage = 'delegated-recovery-close-settings';
         await settings.getByRole('button', { name: 'Close settings', exact: true }).click();
       } catch { throw new Error(stage); }
+    });
+    await check('delegated-auth-natural-expiry', async () => {
+      // This page has no request routes: both expiry and refresh use the real servers.
+      // Recovery setup overlaps the 60-second provider TTL instead of adding an idle minute.
+      const deadline = Date.now() + 90000;
+      await until(async () => {
+        if (Date.now() - originalSessionReadAt < 60000) return false;
+        const expired = await fetch(`${stack.origins.synapse}/_matrix/client/v3/account/whoami`, {
+          headers: { Authorization: `Bearer ${credentials.accessToken}` }, signal: AbortSignal.timeout(5000),
+        });
+        if (expired.status !== 401) return false;
+        invariant((await expired.json()).errcode === 'M_UNKNOWN_TOKEN', 'delegated-natural-expiry-code');
+        return true;
+      }, 'delegated-natural-expiry-old-token', Math.max(1, deadline - Date.now()));
+      metrics.delegatedNaturalExpiryObservedMs = Date.now() - originalSessionReadAt;
+      let rotated;
+      await until(async () => {
+        rotated = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+        return rotated?.accessToken && rotated.accessToken !== credentials.accessToken
+          && rotated.oauth?.refreshToken && rotated.oauth.refreshToken !== credentials.oauth.refreshToken;
+      }, 'delegated-natural-expiry-rotation', Math.max(1, deadline - Date.now()));
+      const identity = await fetch(`${stack.origins.synapse}/_matrix/client/v3/account/whoami`, {
+        headers: { Authorization: `Bearer ${rotated.accessToken}` }, signal: AbortSignal.timeout(5000),
+      });
+      invariant(identity.ok && (await identity.json()).user_id === credentials.userId,
+        'delegated-natural-expiry-identity');
+      metrics.delegatedNaturalExpiryRotated = 1;
+      const marker = `Synthetic post-expiry message ${randomBytes(8).toString('hex')}`;
+      await page.getByRole('textbox', { name: `Message ${recoveryRoomName}`, exact: true }).fill(marker);
+      await page.getByRole('button', { name: 'Send message', exact: true }).click();
+      const sent = page.locator('.timeline-message').filter({ hasText: marker });
+      await until(async () => (await sent.getAttribute('data-event-id'))?.startsWith('$'),
+        'delegated-natural-expiry-send');
+      const eventId = await sent.getAttribute('data-event-id');
+      // Always read the latest credential for fresh API work, since sync may rotate it again.
+      const current = await page.evaluate(() => JSON.parse(localStorage.getItem('aimtrix.matrix-session.v1')));
+      const response = await fetch(`${stack.origins.synapse}/_matrix/client/v3/rooms/${encodeURIComponent(recoveryRoomId)}/event/${encodeURIComponent(eventId)}`, {
+        headers: { Authorization: `Bearer ${current.accessToken}` }, signal: AbortSignal.timeout(5000),
+      });
+      invariant(response.ok, 'delegated-natural-expiry-event');
+      const event = await response.json();
+      invariant(event.type === 'm.room.encrypted' && event.content?.algorithm === 'm.megolm.v1.aes-sha2'
+        && typeof event.content.ciphertext === 'string' && !JSON.stringify(event.content).includes(marker),
+      'delegated-natural-expiry-ciphertext');
+      await page.reload();
+      await page.locator('.buddy-row').filter({ hasText: recoveryRoomName }).first().click();
+      await page.locator(`.timeline-message[data-event-id="${eventId}"]`).getByText(marker, { exact: true }).waitFor({ timeout: 45000 });
+      metrics.delegatedNaturalExpiryEncryptedRoundtrip = 1;
     });
     if (recoveryKey) await check('delegated-auth-recovery-restore', async () => {
       const secondContext = await browser.newContext({ serviceWorkers: 'block' });
@@ -241,9 +293,8 @@ export async function runDelegatedAuthJourney({ browser, stack, check, metrics }
           body: new URLSearchParams({ client_id: rotated.oauth.clientId,
             token: rotated.oauth.refreshToken, token_type_hint: 'refresh_token' }) });
         invariant(revoked.ok, 'delegated-refresh-revoked');
-        // The rotated access token is still fresh. The SDK logs out on an
-        // unexpected 401 in that window, so prove MAS rejected the revoked
-        // refresh token separately before exercising the browser logout path.
+        // Prove MAS rejected the revoked refresh token separately before
+        // exercising browser reauthentication (which may need an injected 401).
         const rejectedRefresh = await fetch(metadata.token_endpoint, { method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({ grant_type: 'refresh_token', client_id: rotated.oauth.clientId,

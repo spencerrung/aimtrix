@@ -160,6 +160,8 @@ export async function createStack({ elementUi = false, syncResponseCache = false
           resources: [{ name: 'discovery' }, { name: 'human' }, { name: 'oauth' }, { name: 'compat' }, { name: 'graphql' }, { name: 'assets' }, { name: 'health' }] }] },
         database: { uri: `postgresql://mas:${credentials.postgres}@postgres:5432/mas?sslmode=disable` },
         matrix: { kind: 'synapse', homeserver: 'aimtrix.test', endpoint: 'http://synapse:8008', secret: credentials.mas },
+        // MAS 1.26.0 validates OAuth access-token TTLs in the range 60..86400 seconds.
+        experimental: { access_token_ttl: 60 },
         passwords: { enabled: true },
         policy: { data: { client_registration: { allow_host_mismatch: true, allow_insecure_uris: true } } },
       });
