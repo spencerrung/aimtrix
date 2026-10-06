@@ -20,4 +20,6 @@ The app frame owns the safe-area inset once and is fixed to the tracked visual v
 
 ## Validation record
 
-Implementation and integrated validation are in progress. The final PR records exact unit/browser/live results and any remaining physical-device boundary. Earlier RC6 passes do not establish that these reported failures were fixed.
+The local integrated unit/build gate passed 1,160 tests in 106 files, lint, TypeScript and bundle budgets. A focused production Chromium run passed 38 applicable checks with 16 intentional platform skips; the reviewed 320/390px visual baselines and keyboard attachment screenshots cover layout and reachability. The new custom-MXC check passed as part of a disposable Synapse core journey (46 checks), including authenticated retrieval and receiver reload. Independent review also verified concurrent attachment edits and attachment-only history return; regression tests exercise the actual workspace.
+
+[PR #258](https://github.com/spencerrung/aimtrix/pull/258) records final full browser, hosted, local endurance and deployment results with source revisions. The longer profiles remain full length and run outside hosted Actions. Earlier RC6 passes do not establish that these reported failures were fixed. Physical installed-iOS status-bar blur and independent-client custom-image presentation remain separate acceptance boundaries.
