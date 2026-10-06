@@ -190,7 +190,11 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
     if (disabled || sending || busyRef.current || (!value.body.trim() && !hasAttachments)) return;
     const attachments = props.attachments;
     const attachmentIds = attachments?.queue.list(attachments.context).filter((item) => item.phase === 'staged').map((item) => item.id);
-    if (!value.body.trim()) { attachments?.queue.send(attachments.context, attachmentIds); return; }
+    if (!value.body.trim()) {
+      attachments?.queue.send(attachments.context, attachmentIds);
+      if (attachmentIds?.length && mounted.current && current.current.contextKey === identity && current.current.active !== false) props.onSubmitted?.('sent');
+      return;
+    }
     const submitted = current.current.value;
     const mentions = [...(submitted.mentions ?? []), ...(submitted.edit?.mentions ?? [])].filter((mention, index, items) => visibleMention(submitted.body, mention.label) && items.findIndex((item) => item.userId === mention.userId && item.label === mention.label) === index);
     const body = submitted.codeMode ? `\`\`\`${submitted.codeLanguage ?? 'text'}\n${submitted.body}\n\`\`\`` : submitted.body;

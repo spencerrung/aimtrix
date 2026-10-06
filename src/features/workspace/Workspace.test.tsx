@@ -92,6 +92,7 @@ function renderWorkspace(
     onLoadRoomHistory?: (roomId: string, direction: 'backward' | 'forward') => Promise<void>;
     onOpenEventContext?: (roomId: string, eventId: string) => Promise<void>;
     onReturnToLive?: (roomId: string) => Promise<void>;
+    onReturnThreadToLive?: (roomId: string, rootId: string) => Promise<void>;
     onHistoryDetached?: (roomId: string, detached: boolean) => void;
     onMarkRoomRead?: (roomId: string, options?: { eventId?: string; explicit?: boolean }) => Promise<void>;
     onSetRoomFavorite?: (roomId: string, favorite: boolean) => Promise<void>;
@@ -149,6 +150,7 @@ function renderWorkspace(
       onLoadRoomHistory={overrides.onLoadRoomHistory}
       onOpenEventContext={overrides.onOpenEventContext}
       onReturnToLive={overrides.onReturnToLive}
+      onReturnThreadToLive={overrides.onReturnThreadToLive}
       onHistoryDetached={overrides.onHistoryDetached}
       onMarkRoomRead={overrides.onMarkRoomRead}
       onMarkRoomUnread={overrides.onMarkRoomUnread}
@@ -1190,6 +1192,50 @@ describe('Workspace demo', () => {
     expect(composer).toHaveTextContent('This should remain a draft');
     expect(timeline.scrollTop).toBe(400);
     expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeInTheDocument();
+  });
+
+  it.each([false, true])('queues reviewed attachments after accepted text despite attachment revisions (new text: %s)', async (newText) => {
+    const pending = pendingSend();
+    const onSendMessage = vi.fn(() => pending.promise);
+    const onUploadAttachment = vi.fn().mockResolvedValue(undefined);
+    renderWorkspace({ workspace: { ...demoWorkspace, mode: 'matrix' }, onSendMessage, onUploadAttachment });
+    const input = screen.getByLabelText('Choose attachment');
+    const file = (name: string) => new File(['synthetic'], name, { type: 'text/plain' });
+    fireEvent.change(input, { target: { files: [file('reviewed.txt'), file('removed.txt')] } });
+    await screen.findByRole('button', { name: 'Remove reviewed.txt' });
+    const composer = screen.getByLabelText('Message Welcome Lounge');
+    setComposerText(composer, 'Accepted text');
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
+    await waitFor(() => expect(onSendMessage).toHaveBeenCalledOnce());
+    fireEvent.change(input, { target: { files: [file('later.txt')] } });
+    await screen.findByRole('button', { name: 'Remove later.txt' });
+    fireEvent.click(screen.getByRole('button', { name: 'Remove removed.txt' }));
+    screen.getByLabelText('Options for reviewed.txt').closest('details')!.open = true;
+    fireEvent.change(screen.getByRole('textbox', { name: 'Caption for reviewed.txt' }), { target: { value: 'Reviewed caption' } });
+    if (newText) setComposerText(composer, 'A newer draft');
+    await act(async () => pending.resolve());
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledExactlyOnceWith('welcome', expect.objectContaining({ name: 'reviewed.txt' }), expect.any(Function), undefined, undefined, expect.objectContaining({ caption: 'Reviewed caption' })));
+    expect(composer.textContent).toBe(newText ? 'A newer draft' : '');
+    expect(screen.getByRole('button', { name: 'Remove later.txt' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Remove removed.txt' })).not.toBeInTheDocument();
+  }, 15_000);
+
+  it.each(['room', 'thread'] as const)('returns historical %s messages to live when attachment-only Send queues an upload', async (kind) => {
+    const pending = pendingSend();
+    const onUploadAttachment = vi.fn(() => pending.promise);
+    const latest = vi.fn().mockResolvedValue(undefined);
+    const workspace = structuredClone(demoWorkspace); workspace.mode = 'matrix';
+    workspace.historyByRoom = { welcome: { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true } };
+    workspace.threadsByRoot.m2.history = { mode: 'history', revision: 1, canLoadOlder: true, canLoadNewer: true };
+    renderWorkspace({ workspace, onUploadAttachment, ...(kind === 'thread' ? { onReturnThreadToLive: latest } : { onReturnToLive: latest }) });
+    if (kind === 'thread') fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
+    const sendName = kind === 'thread' ? 'Send thread reply' : 'Send message';
+    fireEvent.change(screen.getByLabelText(kind === 'thread' ? 'Choose thread attachment' : 'Choose attachment'), { target: { files: [new File(['synthetic'], 'history.txt', { type: 'text/plain' })] } });
+    await waitFor(() => expect(screen.getByRole('button', { name: sendName })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: sendName }));
+    await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledOnce());
+    await waitFor(() => expect(latest).toHaveBeenCalledExactlyOnceWith(...(kind === 'thread' ? ['welcome', 'm2'] : ['welcome'])));
+    await act(async () => pending.resolve());
   });
 
   it.each(['accepted', 'retained', 'preparation'] as const)('preserves a newer main draft after an older send is %s', async (outcome) => {

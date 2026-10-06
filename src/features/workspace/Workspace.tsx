@@ -3921,7 +3921,7 @@ export function Workspace({
     cancel: (id) => attachmentActions.get('current')!.onCancelUpload?.(id),
     persist: (context, attachments) => {
       const state = attachmentActions.get('current')!.draftsState;
-      if (state.isActive()) state.update(context, { ...state.get(context), attachments });
+      if (state.isActive()) state.updateAttachments(context, attachments);
     },
   }));
   const restoredAttachmentIds = useRef(new Set<string>());
@@ -4203,7 +4203,7 @@ export function Workspace({
       }
       const cleared = finish();
       if (cleared && !context.threadRootId && preferences.sendTypingNotifications) void onSendTyping?.(context.roomId, false);
-      return cleared ? edit ? 'edited' : 'sent' : false;
+      return edit ? 'edited' : 'sent';
     } catch (error) {
       const retained = error instanceof MessageSendError && error.localEchoRetained;
       const cleared = retained && finish();
