@@ -112,4 +112,80 @@ describe('workspace keyboard navigation', () => {
     expect(row).toHaveFocus();
     selection.removeAllRanges();
   });
+
+  it('does not measure message rows for composer mutations or focus outside the timelines', async () => {
+    const { container } = render(<Example count={250} />);
+    const measurements = vi.mocked(HTMLElement.prototype.getClientRects);
+    measurements.mockClear();
+    await act(async () => {
+      screen.getByRole('textbox').focus();
+      container.querySelector('.composer')!.append(document.createElement('span'));
+      container.querySelector('header')!.append(document.createElement('button'));
+      container.querySelector('article p')!.textContent = 'Updated noninteractive message text';
+      screen.getByRole('button', { name: 'Global navigation' }).focus();
+      screen.getByRole('textbox').focus();
+    });
+    expect(measurements).not.toHaveBeenCalled();
+    expect(container.querySelectorAll('article[tabindex="0"]')).toHaveLength(1);
+    expect(container.querySelectorAll('article button[tabindex="-1"]')).toHaveLength(250);
+  });
+
+  it('changes only the entered rows when focus moves between message controls', () => {
+    const { container } = render(<Example />);
+    const [first, second] = [...container.querySelectorAll('article')];
+    const measurements = vi.mocked(HTMLElement.prototype.getClientRects);
+    measurements.mockClear();
+    act(() => first.querySelector('button')!.focus());
+    expect(first.querySelector('a')).not.toHaveAttribute('tabindex');
+    act(() => first.querySelector('a')!.focus());
+    expect(first.querySelector('button')).not.toHaveAttribute('tabindex');
+    act(() => second.querySelector('button')!.focus());
+    expect(first.querySelector('button')).toHaveAttribute('tabindex', '-1');
+    expect(second).toHaveAttribute('tabindex', '0');
+    expect(first).toHaveAttribute('tabindex', '-1');
+    act(() => screen.getByRole('textbox').focus());
+    expect(second.querySelector('button')).toHaveAttribute('tabindex', '-1');
+    expect(measurements).not.toHaveBeenCalled();
+  });
+
+  it('tracks inserted controls and restores their original attributes when detached', async () => {
+    const { container } = render(<Example />);
+    const row = container.querySelector('article')!;
+    const control = document.createElement('button');
+    control.tabIndex = 2;
+    await act(async () => { row.append(control); });
+    expect(control).toHaveAttribute('tabindex', '-1');
+    act(() => row.querySelector('button')!.focus());
+    expect(control).toHaveAttribute('tabindex', '2');
+    act(() => screen.getByRole('textbox').focus());
+    await act(async () => { control.remove(); });
+    expect(control).toHaveAttribute('tabindex', '2');
+    const action = row.querySelector('button')!;
+    await act(async () => { row.remove(); });
+    expect(action).not.toHaveAttribute('tabindex');
+    expect(row).toHaveAttribute('tabindex', '-1');
+    expect(container.querySelectorAll('article[tabindex="0"]')).toHaveLength(1);
+  });
+
+  it('updates eligibility when a timeline ancestor becomes visible or inert changes', async () => {
+    const { container } = render(<Example />);
+    const conversation = container.querySelector<HTMLElement>('.conversation')!;
+    const row = container.querySelector('article')!;
+    await act(async () => { conversation.hidden = true; });
+    const control = document.createElement('button');
+    await act(async () => { row.append(control); });
+    await act(async () => { conversation.hidden = false; });
+    expect(control).toHaveAttribute('tabindex', '-1');
+    await act(async () => { row.setAttribute('inert', ''); });
+    const next = row.nextElementSibling!;
+    expect(next).toHaveAttribute('tabindex', '0');
+    await act(async () => { row.removeAttribute('inert'); });
+    expect(row).toHaveAttribute('tabindex', '-1');
+    expect(next).toHaveAttribute('tabindex', '0');
+    const timeline = container.querySelector('.timeline')!;
+    await act(async () => { timeline.remove(); });
+    expect(control).not.toHaveAttribute('tabindex');
+    expect(next).toHaveAttribute('tabindex', '-1');
+  });
+
 });
