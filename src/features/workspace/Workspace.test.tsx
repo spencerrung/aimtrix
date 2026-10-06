@@ -1922,6 +1922,66 @@ describe('Workspace history navigation', () => {
     expect(screen.queryByRole('button', { name: 'Load older messages' })).not.toBeInTheDocument();
   });
 
+  it('does not freeze the controller again while a latest snapshot is still being published', async () => {
+    const workspace = historyWorkspace('live');
+    const pending = pendingSend();
+    const onReturnToLive = vi.fn().mockReturnValue(pending.promise);
+    const onHistoryDetached = vi.fn();
+    vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(200);
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive, onHistoryDetached });
+    const timeline = screen.getByRole('region', { name: 'Messages' });
+    onHistoryDetached.mockClear();
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    // Both an old unread snapshot render and an iOS-delayed scroll event can
+    // arrive after the controller has synchronously selected its live timeline.
+    timeline.scrollTop = 250;
+    fireEvent.scroll(timeline);
+    await act(async () => pending.resolve());
+    expect(onHistoryDetached).not.toHaveBeenCalledWith('welcome', true);
+    expect(screen.getByText('Returning to latest messages…')).toBeInTheDocument();
+    const live = structuredClone(workspace);
+    live.historyByRoom!.welcome.revision++;
+    rerenderWorkspace(live);
+    expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Jump to latest messages' })).not.toBeInTheDocument();
+    expect(timeline.scrollTop).toBe(1000);
+  });
+
+  it('offers retry when a latest snapshot never arrives and ignores late request failures', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const pending = pendingSend();
+      const onReturnToLive = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(undefined);
+      const workspace = historyWorkspace();
+      const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive });
+      fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+      await act(async () => { vi.advanceTimersByTime(15000); });
+      expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent('Latest messages have not appeared yet');
+      expect(screen.getByRole('button', { name: 'Jump to latest messages' })).toBeEnabled();
+      fireEvent.click(screen.getByRole('button', { name: 'Retry latest messages' }));
+      await act(async () => pending.reject(new Error('superseded failure')));
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+      const live = structuredClone(workspace);
+      live.historyByRoom!.welcome = { ...live.historyByRoom!.welcome, mode: 'live', revision: 2 };
+      rerenderWorkspace(live);
+      expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+      expect(onReturnToLive).toHaveBeenCalledTimes(2);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('settles latest feedback when the controller publishes an error instead of a live window', () => {
+    const workspace = historyWorkspace();
+    const { rerenderWorkspace } = renderWorkspace({ workspace, onReturnToLive: vi.fn().mockResolvedValue(undefined) });
+    fireEvent.click(screen.getByRole('button', { name: 'Jump to latest messages' }));
+    const failed = structuredClone(workspace);
+    failed.historyByRoom!.welcome = { ...failed.historyByRoom!.welcome, revision: 2, error: 'The room is unavailable.', errorDirection: 'latest' };
+    rerenderWorkspace(failed);
+    expect(screen.queryByText('Returning to latest messages…')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Retry latest messages' })).toBeEnabled();
+  });
+
   it('never marks a historical window read and waits for a new live snapshot before returning to the tail', async () => {
     const pending = pendingSend();
     const onReturnToLive = vi.fn().mockReturnValue(pending.promise);

@@ -1962,6 +1962,19 @@ function Conversation({
       previousTimelineMessages.current = messages;
       return;
     }
+    // The controller can publish a live selection before React receives it.
+    // Old unread/anchor renders must not freeze that new selection again while
+    // this explicit jump is waiting for its matching snapshot.
+    if (returning && returning.roomId === room?.id && returning.token === historyRequestToken.current) {
+      if (history?.error && history.revision > returning.afterRevision && !history.loading) {
+        pendingLatest.current = undefined;
+        activeHistoryRequest.current = undefined;
+        setHistoryAction(undefined);
+      }
+      restoreTimelineViewport();
+      previousTimelineMessages.current = messages;
+      return;
+    }
     if (historicalWindow && viewportMode.current === 'bottom') {
       viewportMode.current = 'detached';
       setTimelineDetached(true);
@@ -2022,7 +2035,7 @@ function Conversation({
   }, [captureNavigationReading]);
   useLayoutEffect(() => {
     const element = timeline.current;
-    if (!element || !conversationVisible || navigationPending || history?.loading) return;
+    if (!element || !conversationVisible || navigationPending || history?.loading || pendingLatest.current) return;
     if (restoredNavigationEntry.current !== navigationEntry) {
       const saved = navigationReading;
       if (saved?.atLatest) {
@@ -2246,13 +2259,28 @@ function Conversation({
     });
   }, [history, onCloseContext, onDetachedChange, onNavigationLive, onReturnToLive, reportLatestRead, room?.id, runProgrammaticScroll, searchOpen]);
 
+  useEffect(() => {
+    if (historyAction !== 'latest') return;
+    const request = pendingLatest.current;
+    if (!request || request.roomId !== room?.id) return;
+    const timer = window.setTimeout(() => {
+      if (pendingLatest.current !== request || request.token !== historyRequestToken.current) return;
+      historyRequestToken.current += 1;
+      pendingLatest.current = undefined;
+      activeHistoryRequest.current = undefined;
+      setHistoryAction(undefined);
+      setLocalHistoryError({ direction: 'latest', message: 'Latest messages have not appeared yet. Your reading position has been kept. Try again.' });
+    }, 15000);
+    return () => window.clearTimeout(timer);
+  }, [historyAction, room?.id]);
+
   useEffect(() => { if (viewportMode.current === 'bottom') reportLatestRead(); }, [history?.revision, latestMessageId, reportLatestRead, timelineDetached]);
 
   const handleMediaLoad = useCallback(() => { restoreTimelineViewport(); }, [restoreTimelineViewport]);
 
   const handleTimelineScroll = useCallback(() => {
     const element = timeline.current;
-    if (!element || !conversationVisible || programmaticTimelineScroll.current) return;
+    if (!element || !conversationVisible || programmaticTimelineScroll.current || pendingLatest.current) return;
     const movement = element.scrollTop - lastKnownScrollTop.current;
     const atBottom = element.scrollHeight - element.scrollTop - element.clientHeight <= 48;
     lastKnownScrollTop.current = element.scrollTop;
