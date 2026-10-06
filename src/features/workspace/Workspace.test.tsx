@@ -805,7 +805,7 @@ describe('Workspace demo', () => {
   it('uploads pasted images while preserving text paste and thread context', async () => {
     const onUploadAttachment = vi.fn().mockResolvedValue(undefined);
     const matrixWorkspace = { ...demoWorkspace, mode: 'matrix' as const };
-    renderWorkspace({ workspace: matrixWorkspace, onUploadAttachment });
+    renderWorkspace({ workspace: matrixWorkspace, onUploadAttachment, onSendMessage: vi.fn().mockResolvedValue(undefined) });
     const image = new File(['pixels'], '', { type: 'image/png' });
     const imageClipboard = {
       items: [{ kind: 'file', type: 'image/png', getAsFile: () => image }],
@@ -817,17 +817,20 @@ describe('Workspace demo', () => {
     fireEvent.paste(composer, { clipboardData: { items: [{ kind: 'string', type: 'text/plain', getAsFile: () => null }], files: [], getData: () => 'text' } });
     expect(onUploadAttachment).not.toHaveBeenCalled();
     fireEvent.paste(composer, { clipboardData: imageClipboard });
-    fireEvent.click(await screen.findByRole('button', { name: 'Send attachments' }));
+    await screen.findByAltText('Preview of pasted-image.png');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', expect.objectContaining({ name: 'pasted-image.png' }), expect.any(Function), undefined, undefined, expect.any(Object)));
     fireEvent.paste(composer, { clipboardData: { items: [], files: [image], getData: () => '' } });
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Send attachments' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Send attachments' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send message' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledTimes(2));
 
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const threadComposer = screen.getByLabelText('Message thread');
     fireEvent.paste(threadComposer, { clipboardData: imageClipboard });
-    fireEvent.click(await screen.findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send thread reply' })).toBeEnabled());
+    fireEvent.click(screen.getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenLastCalledWith('welcome', expect.any(File), expect.any(Function), 'm2', undefined, expect.any(Object)));
   }, 15_000);
 
@@ -872,7 +875,8 @@ describe('Workspace demo', () => {
     const file = new File(['synthetic upload'], 'synthetic-thread.txt', { type: 'text/plain' });
     fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [file] } });
     expect(onUploadAttachment).not.toHaveBeenCalled();
-    fireEvent.click(await within(thread).findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(within(thread).getByRole('button', { name: 'Send thread reply' })).toBeEnabled());
+    fireEvent.click(within(thread).getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledWith('welcome', file, expect.any(Function), 'm2', undefined, expect.objectContaining({ id: expect.any(String), signal: expect.any(AbortSignal) })));
     expect(container.querySelector('.conversation')).not.toBeVisible();
     act(() => onUploadAttachment.mock.calls[0][5].onPhase('encrypting'));
@@ -900,7 +904,8 @@ describe('Workspace demo', () => {
     fireEvent.click(screen.getByRole('button', { name: /2 replies/ }));
     const thread = screen.getByRole('complementary', { name: 'Thread' });
     fireEvent.change(within(thread).getByLabelText('Choose thread attachment'), { target: { files: [new File(['synthetic'], 'synthetic-cancel.txt')] } });
-    fireEvent.click(await within(thread).findByRole('button', { name: 'Send thread attachments' }));
+    await waitFor(() => expect(within(thread).getByRole('button', { name: 'Send thread reply' })).toBeEnabled());
+    fireEvent.click(within(thread).getByRole('button', { name: 'Send thread reply' }));
     await waitFor(() => expect(onUploadAttachment).toHaveBeenCalledOnce());
     fireEvent.click(within(thread).getByRole('button', { name: 'Cancel synthetic-cancel.txt' }));
     await waitFor(() => expect(onCancelUpload).toHaveBeenCalledOnce());

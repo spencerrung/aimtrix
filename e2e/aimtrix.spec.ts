@@ -209,7 +209,7 @@ test('composer sends messages, emoji, and starter stickers', async ({ page }, te
   await composer.fill('line one\nline two\nline three\nline four\nline five\nline six');
   await page.getByRole('button', { name: 'Send code as file' }).click();
   await expect(page.getByRole('region', { name: 'Attachments', exact: true })).toContainText('snippet.js');
-  await page.getByRole('button', { name: 'Send attachments', exact: true }).click();
+  await page.getByRole('button', { name: 'Send message', exact: true }).click();
   const codeFile = page.getByRole('region', { name: /snippet\.js code file/ });
   await expect(codeFile).toBeVisible();
   await codeFile.getByRole('button', { name: 'Expand' }).click();

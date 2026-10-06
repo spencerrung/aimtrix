@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { StagedAttachments, attachmentContextKey, type StagedAttachment } from './stagedAttachments';
 import type { DraftContext } from './structuredDrafts';
+import { File, X } from 'lucide-react';
 import './attachments.css';
 
 function AttachmentPreview({ item }: { item: StagedAttachment }) {
-  const [requested, setRequested] = useState(false);
+  const [requested, setRequested] = useState(!item.voice);
   const image = useRef<HTMLImageElement>(null);
   const audio = useRef<HTMLAudioElement>(null);
   useEffect(() => {
@@ -14,28 +15,29 @@ function AttachmentPreview({ item }: { item: StagedAttachment }) {
     if (audio.current) audio.current.src = url;
     return () => { URL.revokeObjectURL(url); };
   }, [requested, item.file, item.type, item.voice]);
-  if (!item.file || !(item.type.startsWith('image/') && item.type !== 'image/svg+xml' || item.voice)) return null;
+  if (!item.file || !(item.type.startsWith('image/') && item.type !== 'image/svg+xml' || item.voice)) return <File className="attachment-tray__file" aria-hidden="true" />;
   return requested ? item.voice ? <audio ref={audio} controls preload="metadata" aria-label={`Preview of ${item.name}`} />
     : <img ref={image} className="attachment-tray__preview" alt={`Preview of ${item.name}`} />
     : <button type="button" onClick={() => setRequested(true)}>Preview {item.name}</button>;
 }
 
-export function AttachmentTray({ queue, context }: { queue: StagedAttachments; context: DraftContext }) {
+export function AttachmentTray({ queue, context, integrated = false }: { queue: StagedAttachments; context: DraftContext; integrated?: boolean }) {
   useSyncExternalStore(queue.subscribe, queue.getVersion, queue.getVersion);
   const [error, setError] = useState<{ context: string; message?: string }>();
   const contextKey = attachmentContextKey(context);
   const items = queue.list(context);
   if (!items.length) return null;
   return <section className="attachment-tray" aria-label={context.threadRootId ? 'Thread attachments' : 'Attachments'}>
-    <header><strong>Attachments</strong><small>Review files before sending</small></header>
     {error?.context === contextKey && error.message ? <p role="alert">{error.message}</p> : null}
     <ol>{items.map((item, index) => {
       const active = ['queued', 'encrypting', 'uploading', 'sending'].includes(item.phase);
       return <li key={item.id}>
+        <AttachmentPreview item={item} />
         <div className="attachment-tray__details"><strong>{item.voice ? 'Voice message' : item.name}</strong><small>{Math.ceil(item.size / 1024)} KB{item.voice ? ` · ${Math.ceil(item.voice.durationMs / 1000)}s` : ''}</small>
           <span role="status">{({ staged: 'Ready to send', reattach: 'Reattach file', queued: 'Queued', encrypting: 'Encrypting…', uploading: `Uploading ${item.progress}%`, sending: 'Sending…', failed: 'Not confirmed', cancelled: 'Cancelled' })[item.phase]}</span>
         </div>
-        <AttachmentPreview item={item} />
+        <button className="attachment-tray__remove" type="button" aria-label={`${active ? 'Cancel' : 'Remove'} ${item.name}`} disabled={item.phase === 'sending'} title={item.phase === 'sending' ? 'A send already in progress cannot be safely cancelled.' : undefined} onClick={() => queue.remove(item.id)}><X size={16} /></button>
+        <details className="attachment-tray__options" open={item.phase === 'reattach' || undefined}><summary aria-label={`Options for ${item.name}`}>Caption & options</summary>
         {!item.voice && item.phase !== 'cancelled' ? <label>Caption for {item.name}<input aria-label={`Caption for ${item.name}`} maxLength={16_384} value={item.caption ?? ''} disabled={!['staged', 'reattach'].includes(item.phase)} onChange={(event) => queue.caption(item.id, event.target.value)} /></label> : null}
         {item.phase === 'reattach' ? <>
           <p>{item.interrupted ? 'A send was interrupted. Check the conversation before reattaching to avoid sending a second copy.' : 'File bytes are not saved with drafts. Choose the file again.'}</p>
@@ -43,15 +45,16 @@ export function AttachmentTray({ queue, context }: { queue: StagedAttachments; c
             const file = event.target.files?.[0]; if (file) setError({ context: contextKey, message: queue.reattach(item.id, file) }); event.target.value = '';
           }} /></label>
         </> : null}
-        {item.error ? <p role="alert">{item.error}</p> : null}
         <div className="attachment-tray__actions">
+          {integrated && item.phase === 'staged' ? <button type="button" aria-label={`Send only ${item.name}`} onClick={() => queue.sendOne(item.id)}>Send this file</button> : null}
           <button type="button" aria-label={`Move ${item.name} earlier`} disabled={active || index === 0 || ['queued', 'encrypting', 'uploading', 'sending'].includes(items[index - 1]?.phase)} onClick={() => queue.move(item.id, -1)}>Earlier</button>
           <button type="button" aria-label={`Move ${item.name} later`} disabled={active || index === items.length - 1 || ['queued', 'encrypting', 'uploading', 'sending'].includes(items[index + 1]?.phase)} onClick={() => queue.move(item.id, 1)}>Later</button>
-          {item.phase === 'failed' ? <button type="button" onClick={() => queue.retry(item.id)}>Retry {item.name}</button> : null}
-          <button type="button" disabled={item.phase === 'sending'} title={item.phase === 'sending' ? 'A send already in progress cannot be safely cancelled.' : undefined} onClick={() => queue.remove(item.id)}>{active ? 'Cancel' : 'Remove'} {item.name}</button>
         </div>
+        </details>
+        {item.error ? <p role="alert">{item.error}</p> : null}
+        {item.phase === 'failed' ? <button type="button" onClick={() => queue.retry(item.id)}>Retry {item.name}</button> : null}
       </li>;
     })}</ol>
-    <button type="button" className="aqua-button" disabled={!items.some((item) => item.phase === 'staged')} onClick={() => queue.send(context)}>Send {context.threadRootId ? 'thread ' : ''}attachments</button>
+    {!integrated ? <button type="button" className="aqua-button" disabled={!items.some((item) => item.phase === 'staged')} onClick={() => queue.send(context)}>Send {context.threadRootId ? 'thread ' : ''}attachments</button> : null}
   </section>;
 }

@@ -9,13 +9,12 @@ const file = (name: string, type = 'text/plain') => new File(['synthetic'], name
 afterEach(() => vi.restoreAllMocks());
 
 describe('attachment review tray', () => {
-  it('keeps preview opt-in, revokes object URLs on removal and never displays an SVG as an image', async () => {
+  it('shows local raster previews immediately, revokes object URLs on removal and never displays an SVG as an image', async () => {
     const create = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:synthetic');
     const revoke = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     const queue = makeQueue(); queue.stage(context, [file('image.png', 'image/png'), file('vector.svg', 'image/svg+xml')]);
     render(<AttachmentTray queue={queue} context={context} />);
-    expect(create).not.toHaveBeenCalled(); expect(screen.queryByRole('button', { name: 'Preview vector.svg' })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Preview image.png' }));
+    expect(create).toHaveBeenCalledTimes(1); expect(screen.queryByRole('button', { name: 'Preview vector.svg' })).not.toBeInTheDocument();
     expect(screen.getByAltText('Preview of image.png')).toHaveAttribute('src', 'blob:synthetic');
     fireEvent.click(screen.getByRole('button', { name: 'Remove image.png' }));
     await waitFor(() => expect(revoke).toHaveBeenCalledWith('blob:synthetic'));
@@ -41,6 +40,7 @@ describe('attachment review tray', () => {
     const send = vi.fn<ConstructorParameters<typeof StagedAttachments>[0]['send']>(async (_context, input) => { if (input.name === 'second.txt' && fail) { fail = false; throw new Error('private'); } });
     const queue = makeQueue(send); queue.stage(context, [file('first.txt'), file('second.txt')]);
     render(<AttachmentTray queue={queue} context={context} />);
+    screen.getAllByText('Caption & options').forEach((summary) => summary.closest('details')!.open = true);
     fireEvent.change(screen.getByRole('textbox', { name: 'Caption for second.txt' }), { target: { value: 'Caption two' } });
     fireEvent.click(screen.getByRole('button', { name: 'Move second.txt earlier' }));
     fireEvent.click(screen.getByRole('button', { name: 'Send thread attachments' }));

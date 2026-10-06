@@ -22,7 +22,6 @@ import type { HistorySearchFilters, HistorySearchPage } from '../../matrix/histo
 import { changeSavedReference, type SavedReference } from '../../matrix/savedReferences';
 import { type LinkPreview } from './MessageContent';
 import { SharedComposer, type SharedComposerHandle } from './SharedComposer';
-import { AttachmentTray } from './AttachmentTray';
 import { DraftList } from './DraftList';
 import { useWorkspaceDrafts } from './useWorkspaceDrafts';
 import { StagedAttachments } from './stagedAttachments';
@@ -1632,7 +1631,7 @@ function Conversation({
   onCompositionChange: (value: StructuredDraft) => void;
   onThreadCompositionChange: (value: StructuredDraft) => void;
   attachmentQueue: StagedAttachments;
-  onStageFiles: (files: File[], threadRootId?: string, codeLanguage?: string) => void | Promise<void>;
+  onStageFiles: (files: File[], threadRootId?: string, codeLanguage?: string) => boolean | void | Promise<boolean | void>;
   sending: boolean;
   threadSending: boolean;
   notice?: string;
@@ -2580,9 +2579,9 @@ function Conversation({
             {onLatestThread && activeThread.history?.mode !== 'live' ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><button type="button" disabled={threadHistoryBusy} onClick={latestThread}>Jump to latest replies</button></div> : null}
             {threadReadError?.roomId === room.id && threadReadError.rootId === activeThread.rootId ? <div className="history-feedback" style={{ gridColumn: '1 / -1' }}><p role="alert">Thread read status could not sync. Older homeservers may not support private thread tracking.</p><button type="button" disabled={threadHistoryBusy || Boolean(activeThread.history && activeThread.history.mode !== 'live')} title={activeThread.history && activeThread.history.mode !== 'live' ? 'Jump to latest replies to retry this observed read status' : undefined} onClick={() => reportThreadRead(true)}>Retry thread read status</button></div> : null}
           {notice ? <p className="history-feedback" role="status">{notice}</p> : null}
-          {!threadComposition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id, threadRootId: activeThread.rootId }} /> : null}
           <SharedComposer ref={threadComposer} key={`${room.id}:${activeThread.rootId}`} contextKey={JSON.stringify([room.id, activeThread.rootId])}
             disabled={Boolean(room.replacementRoomId)}
+            attachments={threadComposition.edit ? undefined : { queue: attachmentQueue, context: { roomId: room.id, threadRootId: activeThread.rootId } }}
             value={threadComposition} onChange={onThreadCompositionChange} onSubmit={onThreadSubmit}
             thread active={contextPanel === 'thread' && !threadCollapsed} sending={threadSending}
             members={members} roomName={room.name} emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl}
@@ -2611,9 +2610,9 @@ function Conversation({
         {notice ? <>{notice}</> : room.typingUsers?.length ? <><i /><i /><i /> {room.typingUsers.slice(0, 2).join(' and ')} {room.typingUsers.length === 1 ? 'is' : 'are'} typing</> : room.id === 'welcome' ? <><i /><i /><i /> Mara is typing</> : <>&nbsp;</>}
       </div>
       <div className="conversation-composition">
-      {!composition.edit ? <AttachmentTray queue={attachmentQueue} context={{ roomId: room.id }} /> : null}
       <SharedComposer ref={mainComposer} key={room.id} contextKey={JSON.stringify([room.id, null])}
         disabled={Boolean(room.replacementRoomId)}
+        attachments={composition.edit ? undefined : { queue: attachmentQueue, context: { roomId: room.id } }}
         value={composition} onChange={onCompositionChange} onSubmit={onSubmit}
         active={conversationVisible} sending={sending} members={members} roomName={room.name}
         emojiPacks={emojiPacks} emojiAssetBaseUrl={emojiAssetBaseUrl} stickerPacks={stickerPacks}
@@ -3941,10 +3940,11 @@ export function Workspace({
   const anySending = Object.values(mediaSends).some(Boolean) || sendingContexts.size > 0 || filesSending;
   useEffect(() => { onDraftStateChange?.({ hasDrafts: hasSavedDrafts, volatile: draftsVolatile, hasAttachments: hasStagedFiles, sending: anySending }); }, [onDraftStateChange, hasSavedDrafts, draftsVolatile, hasStagedFiles, anySending]);
   const stageFiles = (files: File[], threadRootId?: string, codeLanguage?: string) => {
-    if (!effectiveRoomId || !draftsState.isActive()) return;
-    if (roomIsUpgraded(workspace, effectiveRoomId)) { setNotice(upgradedSendNotice); return; }
+    if (!effectiveRoomId || !draftsState.isActive()) return false;
+    if (roomIsUpgraded(workspace, effectiveRoomId)) { setNotice(upgradedSendNotice); return false; }
     const errors = attachmentQueue.stage({ roomId: effectiveRoomId, ...(threadRootId ? { threadRootId } : {}) }, files, codeLanguage);
     if (errors.length) setNotice(errors.join(' '));
+    return errors.length === 0;
   };
   const sendRecordedVoice = async (target: { roomId: string; threadRootId?: string }, file: File, durationMs: number, waveform?: number[]) => {
     if (!draftsState.isActive()) throw new Error('This account is no longer active.');
