@@ -1285,7 +1285,7 @@ function BuddyPanel({
         />
       </label>
 
-      <label className="buddy-filter"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)}><option value="all">All conversations</option><option value="unread">Unread conversations</option><option value="favorites">Favorite conversations</option></select></label>
+      <label className="buddy-filter"><span className="sr-only">Conversation filter</span><select aria-label="Conversation filter" value={filter} onChange={(event) => onFilterChange(event.target.value as typeof filter)}><option value="all">All chats</option><option value="unread">Unread</option><option value="favorites">Favorites</option></select></label>
       <div ref={buddyGroupsRef} className={`buddy-groups${showSpaceTree ? ' buddy-groups--space-tree' : ''}`}>
         {showSpaceTree && scopeSpace ? (
           <>
