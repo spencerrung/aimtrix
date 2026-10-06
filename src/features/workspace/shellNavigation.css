@@ -71,6 +71,8 @@
     .self-card__profile > .avatar { width: 28px; height: 28px; }
     .self-card small { margin-top: 0; }
     .buddy-row { min-height: 50px; gap: 8px; padding: 5px 9px; }
+    :root[data-density="compact"] .buddy-row { min-height: 45px; padding-block: 4px; }
+    :root[data-density="roomy"] .buddy-row { min-height: 66px; padding-block: 10px; }
     .buddy-row > .avatar { width: 30px; height: 30px; border-radius: 8px; }
     .conversation .conversation-header { min-height: 52px; background: var(--surface-inset); isolation: isolate; }
     .conversation-header > .avatar { width: 30px; height: 30px; }

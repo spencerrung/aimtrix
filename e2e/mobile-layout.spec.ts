@@ -89,3 +89,19 @@ test('phone safe area stays outside fixed app content without document scrolling
   const sendBounds = (await send.boundingBox())!;
   expect(sendBounds.y + sendBounds.height).toBeLessThanOrEqual(844);
 });
+
+
+test('phone list keeps compact and roomy density preferences distinct', async ({ page }) => {
+  await page.getByRole('button', { name: 'Back to previous view', exact: true }).click();
+  const row = page.getByRole('button', { name: /Welcome Lounge/ });
+  const heights: number[] = [];
+  for (const density of ['compact', 'roomy']) {
+    await page.getByRole('button', { name: 'You', exact: true }).click();
+    await page.getByRole('button', { name: 'Appearance', exact: true }).click();
+    await page.getByRole('button', { name: density, exact: true }).click();
+    await page.getByRole('button', { name: 'Close settings', exact: true }).click();
+    heights.push((await row.boundingBox())!.height);
+  }
+  expect(heights[0]).toBeGreaterThanOrEqual(44);
+  expect(heights[1] - heights[0]).toBeGreaterThanOrEqual(15);
+});
