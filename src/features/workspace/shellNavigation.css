@@ -22,12 +22,25 @@
   }
   @media (max-width: 1199px) {
     :root[data-compact-viewport="true"] .app-stage .conversation-header { min-height: 48px; }
-    :root[data-compact-viewport="true"] .app-stage .conversation { grid-template-rows: auto auto minmax(0,1fr) 20px auto; }
+    :root[data-compact-viewport="true"] .app-stage .conversation { grid-template-rows: auto auto minmax(0,1fr) 20px minmax(0,auto); }
+    /* Budget the whole composition together; only the tray and editor scroll.
+       The form's first row always reserves the complete Send touch target. */
+    :root[data-compact-viewport="true"] .app-stage .thread-panel { grid-template-rows: auto minmax(0,1fr) minmax(0,auto); }
+    :root[data-compact-viewport="true"] .conversation-composition { display: flex; flex-direction: column; }
+    :root[data-compact-viewport="true"] .conversation-composition > :not(.composer) { flex: none; }
+    :root[data-compact-viewport="true"] .conversation-composition > .composer { min-height: 0; flex: 1 1 auto; }
+    :root[data-compact-viewport="true"] .composer__field { display: flex; flex-direction: column; align-self: stretch; min-height: 0; }
+    :root[data-compact-viewport="true"] .composer__field > .attachment-tray { min-height: 0; flex: 0 1 auto; }
+    :root[data-compact-viewport="true"] .composer__editor { display: grid; grid-template-rows: minmax(0,1fr); min-height: 40px; flex: 1 1 auto; }
     :root[data-compact-viewport="true"] .app-stage .thread-panel__header { min-height: 48px; padding: 2px 8px; }
     :root[data-compact-viewport="true"] .app-stage .thread-panel__root { max-height: 90px; overflow: auto; }
   }
 
   @media (max-width: 767px) {
+    :root[data-compact-viewport="true"] .app-stage .composer { grid-template-rows: minmax(44px,1fr) auto; }
+    :root[data-compact-viewport="true"] .composer__actions { flex-wrap: nowrap; overflow-x: auto; }
+    :root[data-compact-viewport="true"] .composer__actions > * { flex-shrink: 0; }
+    :root[data-compact-viewport="true"] .composer__actions :focus-visible { outline-offset: -3px; }
     .app-stage .aimtrix-window { display: flex; flex-direction: column; }
     .app-stage .workspace-grid { flex: 1; min-height: 0; grid-template-rows: auto minmax(0, 1fr); padding-top: 0; }
     .app-stage .app-titlebar { order: 3; flex: none; min-height: 60px; padding: 0 max(4px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(4px, env(safe-area-inset-left, 0px)); border-top: 1px solid var(--border-strong); border-bottom: 0; }
