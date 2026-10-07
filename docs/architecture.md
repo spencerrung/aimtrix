@@ -50,7 +50,9 @@ Configuration is validated and merged with conservative defaults. Invalid URLs, 
 
 ## PWA lifecycle
 
-The production shell is served from `public/sw.js`. Navigations use a network-first strategy and cache only the latest application shell; static assets, icons, and screenshots use a cache-first strategy. `/config.json` is never cached, and an offline banner explicitly says that Matrix history may be unavailable—the shell is not an offline Matrix sync client.
+The production shell is served from `public/sw.js`. The build injects the current entry and core Workspace static import graphs, including their CSS and emitted assets, into the required install cache list. Workspace stays deferred in the online application bundle; optional dynamic imports, catalogs and media remain loaded on demand. Installation succeeds only after every required resource has been fetched and cached. A failed candidate is discarded without activating or deleting the last working version's cache.
+
+Navigations use a network-first strategy; static assets, icons, and screenshots use a cache-first strategy. Precached same-origin build assets ignore response header variance when matching module requests, which may include an Origin header absent from installation requests. `/config.json` stays network-only and is never precached; an unavailable runtime configuration uses the existing safe defaults and startup warning. An offline banner explicitly says that Matrix history may be unavailable—the executable shell is not an offline Matrix sync client.
 
 Service-worker updates remain waiting until the user chooses **Reload**. Aimtrix explains that active drafts should be finished first, then sends `SKIP_WAITING` and reloads after `controllerchange`. The encrypted account store and Matrix credentials are not part of the shell cache. Install guidance uses the browser install event when available and gives iOS/iPadOS users the manual Share → Add to Home Screen path.
 
