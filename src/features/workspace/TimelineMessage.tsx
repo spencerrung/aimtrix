@@ -155,7 +155,7 @@ export const TimelineMessage = memo(function TimelineMessage({
         <MessageContent message={message} dataSaver={dataSaver} autoplayMedia={autoplayMedia} emojiCatalog={emojiCatalog} onMediaLoad={onMediaLoad} />
         {reactionFeedback ? <p className="message-action-feedback" role={reactionFeedback === 'failed' ? 'alert' : 'status'}>{reactionFeedback === 'failed' ? 'Reaction could not be updated. Try again.' : 'Updating reaction…'}</p> : null}
         <MessageDeliveryStatus message={message} onRetryMessage={onRetryMessage} onCancelMessage={onCancelMessage} />
-        <LinkPreviewCard message={message} onLoad={onLoadLinkPreview} />
+        <LinkPreviewCard key={message.id} message={message} onLoad={onLoadLinkPreview} dataSaver={dataSaver} />
         {message.reactions?.length ? (
           <div className="reaction-row" aria-label="Message reactions">
             {message.reactions.map((reaction) => (
