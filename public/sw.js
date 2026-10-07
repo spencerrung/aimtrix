@@ -97,12 +97,11 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(
+      // The installed shell belongs to this worker's build revision. Keep it
+      // immutable until a replacement worker installs successfully: a resolved
+      // navigation can be an HTTP error, maintenance page, or redirect, and a
+      // newer document may require assets this worker has never cached.
       fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          void caches.open(CACHE).then((cache) => cache.put('/', copy));
-          return response;
-        })
         .catch(() => caches.open(CACHE).then((cache) => cache.match('/'))),
     );
     return;
