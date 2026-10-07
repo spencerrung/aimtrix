@@ -852,7 +852,7 @@
   .composer-context strong { color: var(--blue-deep); font-size: 0.68rem; }
   .composer-context span { overflow: hidden; color: var(--text-soft); font-size: 0.65rem; text-overflow: ellipsis; white-space: nowrap; }
   .composer-context button { display: grid; width: 27px; height: 27px; padding: 0; place-items: center; color: var(--text-soft); border: 1px solid var(--border); border-radius: 6px; background: var(--surface-raised); }
-  .composer-context + :is(.emoji-tray,.sticker-tray,.gif-picker), .composer-context + .gif-popover .gif-picker { bottom: 116px; }
+  .composer-context + .gif-picker, .composer-context + .gif-popover .gif-picker { bottom: 116px; }
   .sticker-tray, .emoji-tray, .gif-picker {
     position: absolute;
     z-index: 12;
@@ -881,13 +881,13 @@
   .sticker-tray header, .emoji-tray header { display: flex; align-items: baseline; justify-content: space-between; padding: 2px 3px 9px; }
   .sticker-tray header strong, .emoji-tray header strong { font-size: 0.76rem; }
   .sticker-tray header span, .emoji-tray header span { color: var(--text-faint); font-size: 0.63rem; }
-  .sticker-tray header select { max-width: 145px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 0.6rem; }
+  .sticker-tray header select { min-width: 0; max-width: 145px; color: var(--text-muted); border: 1px solid var(--border); border-radius: 4px; background: var(--surface); font-size: 0.6rem; }
   .emoji-search { display: flex; align-items: center; gap: 6px; margin-bottom: 7px; padding: 6px 7px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
   .emoji-search input { min-width: 0; flex: 1; color: var(--text); border: 0; outline: 0; background: transparent; font: inherit; font-size: 0.66rem; }
   .emoji-tray > div { display: grid; max-height: 245px; grid-template-columns: repeat(6, 1fr); gap: 4px; overflow-y: auto; }
   .emoji-tray > div button { display: grid; aspect-ratio: 1; place-items: center; padding: 0; border: 1px solid transparent; border-radius: 7px; background: var(--surface-soft); font-size: 1.25rem; }
   .emoji-tray > div button:hover { border-color: var(--blue); background: var(--blue-soft); transform: translateY(-1px); }
-  .sticker-tray > div { display: grid; grid-template-columns: repeat(2, 1fr); gap: 7px; }
+  .sticker-tray > div { display: grid; max-height: 320px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; overflow-y: auto; }
   .sticker-tray > div button { padding: 6px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--surface-soft); }
   .sticker-tray img { width: 100%; height: 105px; object-fit: contain; }
   .gif-picker { width: min(390px, calc(100% - 24px)); }

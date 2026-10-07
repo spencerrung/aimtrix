@@ -1,6 +1,9 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState, useSyncExternalStore, type FormEvent, type KeyboardEvent } from 'react';
+import { createPortal } from 'react-dom';
 import { BarChart3, BellRing, Film, MapPin, Mic, Paperclip, Plus, Search, Send, Smile, Sticker, X } from 'lucide-react';
+import './composerPickers.css';
 import { Popover } from '../../components/Popover';
+import { useAnchoredPopover } from '../../components/useAnchoredPopover';
 import { useMediaSource } from '../../matrix/useMediaSource';
 import type { MemberSummary } from '../../matrix/viewModels';
 import { readNativeClipboardImage } from '../../platform/clipboardImage';
@@ -70,6 +73,8 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
   const hasAttachments = props.attachments?.queue.list(props.attachments.context).some((item) => item.phase === 'staged') ?? false;
   const composer = useRef<InlineComposerHandle>(null);
   const form = useRef<HTMLFormElement>(null);
+  const emojiSurface = useRef<HTMLDivElement>(null);
+  const stickerSurface = useRef<HTMLDivElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const current = useRef(props);
   const mounted = useRef(true);
@@ -84,6 +89,9 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
     getElement: () => form.current?.querySelector<HTMLElement>('[contenteditable]') ?? null,
   }), []);
   const [picker, setPicker] = useState<'emoji' | 'sticker' | 'gif'>();
+  // Anchor above the whole composer, including its expanded tool row.
+  useAnchoredPopover(active && picker === 'emoji', form, emojiSurface);
+  useAnchoredPopover(active && picker === 'sticker', form, stickerSurface);
   const [more, setMore] = useState(false);
   const [query, setQuery] = useState('');
   const [catalog, setCatalog] = useState<EmojiPackEntry[]>([]);
@@ -237,8 +245,8 @@ export const SharedComposer = forwardRef<SharedComposerHandle, SharedComposerPro
     {value.reply || value.edit ? <div className="composer-context"><div><strong>{value.edit ? 'Editing message' : `Replying to ${value.reply?.senderName}`}</strong><span>{value.edit?.body ?? value.reply?.body}</span></div>{props.onCancelContext ? <button type="button" aria-label="Cancel reply or edit" onClick={props.onCancelContext}><X size={15} /></button> : null}</div> : null}
     {error ? <p role="alert" className="history-feedback">{error}</p> : null}
     {active && picker === 'gif' && gifEndpoint && props.sendGif ? <Popover className="gif-popover" label="GIF picker" onClose={() => setPicker(undefined)}><GifPicker endpoint={gifEndpoint} onSelect={(gif) => { runTool(() => props.sendGif!(gif)); setPicker(undefined); }} /></Popover> : null}
-    {active && picker === 'sticker' ? <Popover className="sticker-tray" label="Sticker picker" onClose={() => setPicker(undefined)}><header><strong>Sticker packs</strong><select aria-label="Sticker pack" value={manifest} onChange={(event) => setManifest(event.target.value)}>{stickerPacks.map((pack) => <option value={pack.manifestUrl} key={pack.manifestUrl}>{pack.name}</option>)}</select></header><div aria-busy={stickerStatus === 'loading'}>{stickerStatus === 'loading' ? <p>Loading stickers…</p> : stickerStatus === 'error' ? <p role="alert">This sticker pack could not be loaded.</p> : stickers.map((sticker) => <button type="button" key={`${sticker.id}:${sticker.src}`} aria-label={`Send ${sticker.name}`} onClick={() => { if (props.sendSticker) runTool(() => props.sendSticker!(sticker)); setPicker(undefined); }}><Asset entry={sticker} /></button>)}</div></Popover> : null}
-    {active && picker === 'emoji' ? <Popover className="emoji-tray" label="Emoji picker" onClose={() => setPicker(undefined)}><header><strong>Emoji</strong><span>{recent.length ? 'Recents first' : 'Search by name'}</span></header><label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input value={query} placeholder="Search emoji" onChange={(event) => setQuery(event.target.value)} /></label><div>{visibleEmoji.map((entry) => <button type="button" key={emojiReactionKey(entry)} aria-label={entry.emoji ? `Insert ${entry.emoji}` : `Insert :${entry.id}:`} title={entry.name} onClick={() => { insertEmoji(entry); setPicker(undefined); setQuery(''); }}><Asset entry={entry} /></button>)}</div></Popover> : null}
+    {active && picker === 'sticker' ? createPortal(<Popover surfaceRef={stickerSurface} className="sticker-tray composer-picker" label="Sticker picker" onClose={() => setPicker(undefined)}><header><strong>Sticker packs</strong><select aria-label="Sticker pack" value={manifest} onChange={(event) => setManifest(event.target.value)}>{stickerPacks.map((pack) => <option value={pack.manifestUrl} key={pack.manifestUrl}>{pack.name}</option>)}</select></header><div aria-busy={stickerStatus === 'loading'}>{stickerStatus === 'loading' ? <p>Loading stickers…</p> : stickerStatus === 'error' ? <p role="alert">This sticker pack could not be loaded.</p> : stickers.map((sticker) => <button type="button" key={`${sticker.id}:${sticker.src}`} aria-label={`Send ${sticker.name}`} onClick={() => { if (props.sendSticker) runTool(() => props.sendSticker!(sticker)); setPicker(undefined); }}><Asset entry={sticker} /></button>)}</div></Popover>, document.body) : null}
+    {active && picker === 'emoji' ? createPortal(<Popover surfaceRef={emojiSurface} className="emoji-tray composer-picker" label="Emoji picker" onClose={() => setPicker(undefined)}><header><strong>Emoji</strong><span>{recent.length ? 'Recents first' : 'Search by name'}</span></header><label className="emoji-search"><Search size={13} /><span className="sr-only">Search emoji</span><input value={query} placeholder="Search emoji" onChange={(event) => setQuery(event.target.value)} /></label><div>{visibleEmoji.map((entry) => <button type="button" key={emojiReactionKey(entry)} aria-label={entry.emoji ? `Insert ${entry.emoji}` : `Insert :${entry.id}:`} title={entry.name} onClick={() => { insertEmoji(entry); setPicker(undefined); setQuery(''); }}><Asset entry={entry} /></button>)}</div></Popover>, document.body) : null}
     {active && colonResults.length ? <div className="colon-complete" role="listbox" aria-label="Emoji and sticker suggestions">{colonResults.map((entry, index) => <button type="button" role="option" aria-selected={index === suggestionIndex % colonResults.length} className={index === suggestionIndex % colonResults.length ? 'is-active' : ''} key={emojiReactionKey(entry)} onMouseDown={(event) => event.preventDefault()} onClick={() => { if (colonMatch) insertEmoji(entry, caret - colonMatch[1].length - 1, caret); }}><span className="colon-complete__emoji"><Asset entry={entry} /></span><span className="colon-complete__name">{entry.name}</span></button>)}</div> : null}
     {active && mentionResults.length ? <div className="mention-complete" role="listbox" aria-label="Mention a room member">{mentionResults.map((member, index) => <button type="button" role="option" aria-selected={index === suggestionIndex % mentionResults.length} className={index === suggestionIndex % mentionResults.length ? 'is-active' : ''} key={member.id} onMouseDown={(event) => event.preventDefault()} onClick={() => insertMention(member)}><span><strong>{member.displayName}</strong><small>{member.id}</small></span></button>)}</div> : null}
     <form ref={form} className="composer" aria-label={thread ? 'Thread message composer' : 'Message composer'} onSubmit={submit} onKeyDown={(event) => { if (event.key === 'Escape' && more) { event.preventDefault(); event.stopPropagation(); closeMore(); } }}>

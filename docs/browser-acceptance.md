@@ -52,6 +52,14 @@ Firefox desktop and WebKit desktop/phone selection now includes shell, compositi
 
 The shared frame owns the top safe-area inset, including notices and login; workspace height subtracts that inset and reserved notices once. Native dialog backdrops use visual viewport dimensions and offset, and anchored popovers track the same visible bounds. Unit tests exercise inset accounting with synthetic frame padding; browser geometry overrides do not prove real notch, browser-toolbar, or OS keyboard behavior.
 
+### Composer picker viewport acceptance — #263
+
+Room and thread emoji/sticker pickers use the shared anchored-popover geometry above the complete composer, including expanded tools. The surface fits within the visual viewport's height, width and offsets with a 12px margin. Both surfaces portal to the document body so conversation stacking contexts and Jump to latest cannot cover their results. Emoji search and sticker-pack selection stay above bounded scrolling result grids; long configured packs no longer grow the whole picker past the screen. Lazy catalog replacement, search, pack changes, viewport resize and viewport scroll retain the existing form focus and Escape return behavior.
+
+`e2e/popover-viewport.spec.ts` covers room and thread composition at 320×320, 390×340 and 430×360 usable sizes. It separately exercises layout resizing and visual-viewport-only height/width/offset changes, checks complete control bounds and center pointer hit targets, scrolls results while keeping header controls reachable, searches and sends an emoji, and selects/sends the last item in a configured 48-sticker pack. These are synthetic public-demo browser checks; they do not establish Matrix sticker interoperability or encrypted media delivery.
+
+Physical iOS and Android software-keyboard acceptance remains separate: repeat room/thread picker opening, focused search, pack selection and result scrolling with the actual keyboard, browser toolbar and safe-area changes on each target device. Emulated viewport overrides and Chromium pointer tests do not satisfy that device gate.
+
 Repeat the keyboard journey with VoiceOver/Safari and NVDA/Firefox before claiming spoken accessibility acceptance. Actual Android/iPhone browser and installed-PWA checks still need software keyboards, selection handles, predictive input, safe areas, orientation, suspend/resume, storage recovery, permission prompts, and notifications. Native Tauri/Capacitor behavior and live encrypted Matrix/provider interoperability retain their existing independent release gates. No new device or live-infrastructure result is implied by these UI regressions. The committed Chromium baselines and keyboard/dialog screenshots have been inspected; the [integrated audit record](usability-audit-2026-10-05.md#integrated-regression-loop) records local gate totals and links final PR CI.
 
 ### Reviewed visual baselines
