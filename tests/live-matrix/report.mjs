@@ -3,6 +3,7 @@ export const checkNames = new Set([
   'setup', 'disposable-stack', 'application-server', 'isolated-accounts',
   'password-login-three-devices', 'encrypted-room-create-and-join', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification', 'element-ui-aimtrix-declines-verification', 'element-ui-withdraws-verification',
   'first-use-encrypted-direct-conversation',
+  'element-ui-encrypted-replies', 'element-ui-plain-replies',
   'encrypted-retry-reconnect-and-cancel', 'encrypted-thread-retry',
   'private-read-tracking-and-reminders', 'encrypted-thread-history-and-links',
   'standard-favorites-and-own-device-sync', 'matrix-links-and-navigation-history',
@@ -56,6 +57,7 @@ failureCategories.push('recovery-key-generated', 'recovery-key-dismissed', 'reco
 failureCategories.push('recovery-open-first-settings', 'recovery-setup-control', 'recovery-setup-result', 'recovery-setup-unsupported', 'recovery-setup-failed', 'recovery-setup-pending', 'recovery-server-backup', 'recovery-server-secret-storage', 'recovery-new-device-history', 'recovery-open-second-settings', 'recovery-restore-result', 'recovery-restore-cross-signing', 'recovery-restore-backup', 'recovery-restore-room-keys', 'recovery-restore-key-mismatch', 'recovery-restore-no-backup', 'recovery-restore-failed', 'recovery-restore-zero-import', 'recovery-restore-unmatched-count', 'recovery-restore-unmatched-success', 'recovery-restore-unmatched-error', 'recovery-restore-pending', 'recovery-restore-pending-identity', 'recovery-restore-pending-backup-key', 'recovery-restore-pending-backup-trust', 'recovery-restore-pending-import', 'recovery-restore-dialog-gone', 'recovery-restore-idle', 'recovery-old-event-restored');
 failureCategories.push('verification-new-device', 'verification-distinct-device', 'verification-open-initiator', 'verification-device-row', 'verification-device-refresh', 'verification-button', 'verification-incoming-request', 'verification-emoji', 'verification-matching-emoji', 'verification-completion');
 failureCategories.push('sso-recovery-outcome', 'sso-recovery-passphrase-retained', 'sso-recovery-no-key-export', 'sso-recovery-key-generated', 'sso-recovery-distinct-device', 'sso-recovery-key-cleared');
+failureCategories.push('reply-peer-room', 'reply-peer-original', 'reply-sender-original', 'reply-sender-compose', 'reply-sender-send', 'reply-wire-content', 'reply-peer-preview', 'reply-peer-body');
 failureCategories.push('cache-reload-timeout');
 failureCategories.push('sustained-sync-room', 'sustained-sync-bounded-timeline', 'sustained-sync-duration');
 failureCategories.push('encrypted-sync-room', 'encrypted-sync-wire', 'encrypted-sync-bounded-timeline', 'encrypted-sync-duration');

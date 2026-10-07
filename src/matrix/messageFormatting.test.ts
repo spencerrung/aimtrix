@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
   matrixFormattedMessage,
-  matrixReplyFormattedBody,
   type MatrixMessageMention,
 } from './messageFormatting';
 
@@ -94,13 +93,4 @@ describe('matrixFormattedMessage', () => {
       .toBe('<p><code>:bufo:</code></p>');
   });
 
-  it('builds a standard rich reply fallback before formatted reply content', () => {
-    expect(matrixReplyFormattedBody('!room:example.org', {
-      id: '$event:example.org',
-      senderId: '@alice:example.org',
-      body: 'Original <message>',
-    }, '<p>Reply</p>')).toBe(
-      '<mx-reply><blockquote><a href="https://matrix.to/#/!room%3Aexample.org/%24event%3Aexample.org">In reply to</a> <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a><br>Original &lt;message&gt;</blockquote></mx-reply><p>Reply</p>',
-    );
-  });
 });

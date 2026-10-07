@@ -65,7 +65,6 @@ import { createGeoUri } from './locations';
 import { aggregatePoll, createPollStart, parsePollStart, POLL_END, POLL_RESPONSE, POLL_TEXT, type PollDefinition, type PollRelation, type PollResults } from './polls';
 import {
   matrixFormattedMessage,
-  matrixReplyFormattedBody,
   type MatrixInlineEmote,
   type MatrixMessageMention,
 } from './messageFormatting';
@@ -3372,7 +3371,6 @@ export class MatrixController {
     if (!message) return;
     if (!client || !sdk) throw new MessageSendError(false);
     const room = this.messageRoom(client, roomId);
-    const quoted = target.body.split('\n').map((line) => `> <${target.senderId}> ${line}`).join('\n');
     const uploadedEmotes = await this.uploadInlineEmotes(inlineEmotes);
     const formatted = matrixFormattedMessage(message, mentions, uploadedEmotes);
     const mentionUserIds = [...new Set([...formatted.usedMentionUserIds, target.senderId])];
@@ -3382,7 +3380,7 @@ export class MatrixController {
     const richContent = formatted.formattedBody
       ? {
           format: 'org.matrix.custom.html',
-          formatted_body: matrixReplyFormattedBody(roomId, target, formatted.formattedBody),
+          formatted_body: formatted.formattedBody,
         }
       : {};
 
@@ -3407,7 +3405,7 @@ export class MatrixController {
         sdk.EventType.RoomMessage,
         {
           msgtype: sdk.MsgType.Text,
-          body: `${quoted}\n\n${message}`,
+          body: formatted.body,
           ...mentionContent,
           ...richContent,
           'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },
@@ -3418,7 +3416,7 @@ export class MatrixController {
       // Standard reply (no thread): use the 4-argument sendEvent overload.
       await this.sendTrackedMessage(client, room, (txnId) => client.sendEvent(roomId, sdk.EventType.RoomMessage, {
         msgtype: sdk.MsgType.Text,
-        body: `${quoted}\n\n${message}`,
+        body: formatted.body,
         ...mentionContent,
         ...richContent,
         'm.relates_to': { 'm.in_reply_to': { event_id: target.id } },

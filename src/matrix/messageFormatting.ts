@@ -25,16 +25,6 @@ const escapeAttribute = (value: string) => escapeHtml(value).replaceAll("'", '&#
 
 const mentionHref = (userId: string) => `https://matrix.to/#/${encodeURIComponent(userId)}`;
 
-export function matrixReplyFormattedBody(
-  roomId: string,
-  target: { id: string; senderId: string; body: string },
-  replyBody: string,
-): string {
-  const eventHref = `https://matrix.to/#/${encodeURIComponent(roomId)}/${encodeURIComponent(target.id)}`;
-  const quotedBody = escapeHtml(target.body).replaceAll('\n', '<br>');
-  return `<mx-reply><blockquote><a href="${escapeAttribute(eventHref)}">In reply to</a> <a href="${escapeAttribute(mentionHref(target.senderId))}">${escapeHtml(target.senderId)}</a><br>${quotedBody}</blockquote></mx-reply>${replyBody}`;
-}
-
 const formatText = (
   value: string,
   mentions: MatrixMessageMention[],

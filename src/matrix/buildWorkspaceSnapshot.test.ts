@@ -752,6 +752,21 @@ describe('buildWorkspaceSnapshot threads', () => {
     expect(summary.latestReply).toBeUndefined();
   });
 
+  it.each([
+    { name: 'relation-only', body: 'Synthetic reply' },
+    { name: 'legacy fallback', body: '> <@mara:test> Synthetic original\n> Second original line\n\nSynthetic reply' },
+  ])('renders $name replies with the original navigation target', ({ body }) => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic original\nSecond original line' }, '$source');
+    const reply = fakeEvent('m.room.message', {
+      msgtype: 'm.text', body, 'm.relates_to': { 'm.in_reply_to': { event_id: '$source' } },
+    }, '$reply');
+    const snapshot = buildWorkspaceSnapshot(fakeClient([original, reply]), 'online');
+    expect(snapshot.messagesByRoom['!room:test'][1]).toMatchObject({
+      id: '$reply', body: 'Synthetic reply',
+      replyTo: { eventId: '$source', body: 'Synthetic original\nSecond original line' },
+    });
+  });
+
   it('keeps thread replies out of the main timeline and exposes a root summary', () => {
     const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Ship it?' }, '$root:test');
     const reply = fakeEvent('m.room.message', {

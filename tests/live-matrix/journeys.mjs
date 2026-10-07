@@ -2,6 +2,7 @@
 import { expect } from '@playwright/test';
 import { expectedJourneyChecks, assertJourneyCoverage } from './journey-profiles.mjs';
 import { reactionArtwork } from './reaction-fixture.mjs';
+import { verifyElementReplies } from './replies.mjs';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { URL } from 'node:url';
@@ -1058,6 +1059,10 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         return elementPeer.locator('.mx_EventTile').filter({ hasText: marker }).last().isVisible();
       }, 'element-encrypted-message', 60000);
     });
+    if (elementPeer) await check('element-ui-encrypted-replies', () => verifyElementReplies({
+      sender: alice, peer: elementPeer, origin: stack.origins.element, roomId, roomName,
+      encrypted: true, peerUserId: accounts.bob.user_id,
+    }));
     await check('encrypted-retry-reconnect-and-cancel', async () => {
       const marker = `Retry round trip ${randomBytes(12).toString('hex')}`;
       const newer = 'Newer synthetic draft';
@@ -2719,8 +2724,14 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         stage = 'element-return-code';
         await received.locator('code').filter({ hasText: /^peer code$/ }).waitFor();
         await openRoom(alice, roomName);
-        await peer.close();
       } catch { throw new Error(stage); }
+    });
+    if (elementPeer) await check('element-ui-plain-replies', async () => {
+      await openRoom(alice, 'Disposable formatted API peer');
+      await verifyElementReplies({ sender: alice, peer: elementPeer, origin: stack.origins.element,
+        roomId: formattedPeer.roomId, roomName: 'Disposable formatted API peer', encrypted: false, peerUserId: accounts.bob.user_id });
+      await openRoom(alice, roomName);
+      await elementPeer.close();
     });
     await check('shared-backdrop-and-permissions', async () => {
       const start = Date.now();
