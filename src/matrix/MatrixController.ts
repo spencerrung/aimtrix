@@ -78,7 +78,8 @@ import {
 } from './sessionStore';
 import { getAimtrixPlatform } from '../platform/aimtrixPlatform';
 import type { AimtrixPlatform } from '../platform/platform';
-import type { EncryptedMediaInfo } from './mediaContext';
+import type { EncryptedMediaInfo, MediaRequest } from './mediaContext';
+import { MediaRequests } from './MediaRequests';
 import type { SpaceHierarchyRoomData } from './spaceHierarchy';
 import type { PushRoute } from '../pwa/pushRouting';
 import {
@@ -291,8 +292,7 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   });
   public readonly activity = new ActivityStore(() => this.client, () => this.scheduleWorkspacePublish());
-  private readonly mediaRequests = new Map<string, Promise<string | undefined>>();
-  private readonly mediaObjectUrls = new Set<string>();
+  private readonly mediaRequests = new MediaRequests();
   private readonly pendingDeviceAuth = new Map<string, string>();
   private readonly incomingVerificationRequests = new Map<string, { request: VerificationRequest; onChange: () => void }>();
   private readonly stickerUploads = new Map<string, Promise<{
@@ -1017,21 +1017,11 @@ export class MatrixController {
     encryptedFile?: EncryptedMediaInfo,
     mimeType?: string,
     original = false,
-  ): Promise<string | undefined> => {
-    if (!source.startsWith('mxc://')) return Promise.resolve(source);
+  ): MediaRequest & { release: () => void } => {
+    if (!source.startsWith('mxc://')) return Object.assign(Promise.resolve(source), { release: () => {} });
     const size = Math.min(1024, Math.max(32, Math.round(requestedSize)));
-    const key = `${source}|${original ? 'original' : size}|${encryptedFile?.hashes?.sha256 ?? ''}`;
-    const existing = this.mediaRequests.get(key);
-    if (existing) return existing;
-
-    const request = this.fetchMatrixMedia(source, size, encryptedFile, mimeType, original)
-      .catch(() => undefined)
-      .then((url) => {
-        if (!url && this.mediaRequests.get(key) === request) this.mediaRequests.delete(key);
-        return url;
-      });
-    this.mediaRequests.set(key, request);
-    return request;
+    const key = JSON.stringify([source, original ? 'original' : size, encryptedFile, mimeType]);
+    return this.mediaRequests.acquire(key, (signal) => this.fetchMatrixMedia(source, size, encryptedFile, mimeType, original, signal));
   };
 
   public async getLinkPreview(url: string): Promise<{
@@ -1070,13 +1060,14 @@ export class MatrixController {
   private async fetchMatrixMedia(
     source: string,
     size: number,
-    encryptedFile?: EncryptedMediaInfo,
-    mimeType?: string,
-    original = false,
-  ): Promise<string | undefined> {
+    encryptedFile: EncryptedMediaInfo | undefined,
+    mimeType: string | undefined,
+    original: boolean,
+    signal: AbortSignal,
+  ): Promise<Blob | undefined> {
     const client = this.client;
     const accessToken = client?.getAccessToken();
-    if (!client || !accessToken) return undefined;
+    if (!client || !accessToken || signal.aborted) return undefined;
     const useOriginal = Boolean(
       original || encryptedFile ||
       mimeType === 'image/svg+xml' ||
@@ -1088,34 +1079,33 @@ export class MatrixController {
     if (!url) return undefined;
 
     const response = await fetch(url, {
+      signal,
       headers: {
         Accept: mimeType || 'image/*',
         Authorization: `Bearer ${accessToken}`,
       },
     });
-    if (!response.ok) return undefined;
+    if (!response.ok || signal.aborted) return undefined;
     const maxBytes = this.config.media.maxUploadBytes;
     const contentLength = Number(response.headers.get('content-length') ?? 0);
     if (contentLength > maxBytes) return undefined;
     let blob: Blob;
     if (encryptedFile) {
       const encrypted = await response.arrayBuffer();
-      if (!encrypted.byteLength || encrypted.byteLength > maxBytes) return undefined;
+      if (!encrypted.byteLength || encrypted.byteLength > maxBytes || signal.aborted) return undefined;
       const { decryptAttachment } = await import('matrix-encrypt-attachment');
+      if (signal.aborted) return undefined;
       const decrypted = await decryptAttachment(encrypted, encryptedFile);
+      if (signal.aborted || this.client !== client) return undefined;
       blob = new Blob([decrypted], { type: mimeType || 'application/octet-stream' });
     } else {
       blob = await response.blob();
     }
-    if (!blob.size || blob.size > maxBytes || this.client !== client) return undefined;
-    const objectUrl = URL.createObjectURL(blob);
-    this.mediaObjectUrls.add(objectUrl);
-    return objectUrl;
+    if (!blob.size || blob.size > maxBytes || this.client !== client || signal.aborted) return undefined;
+    return blob;
   }
 
   private clearMediaCache(): void {
-    for (const objectUrl of this.mediaObjectUrls) URL.revokeObjectURL(objectUrl);
-    this.mediaObjectUrls.clear();
     this.mediaRequests.clear();
     this.stickerUploads.clear();
     this.inlineEmoteUploads.clear();
