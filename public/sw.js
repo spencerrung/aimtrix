@@ -56,19 +56,21 @@ self.addEventListener('push', (event) => {
     let owner;
     try {
       owner = await globalThis.aimtrixNotificationPolicy.transaction((state) => {
-        if (!state?.owner || globalThis.aimtrixNotificationPolicy.paused(state.policy)) return { state: state ?? {}, result: undefined };
+        if (typeof state?.owner !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(state.owner) || globalThis.aimtrixNotificationPolicy.paused(state.policy)) return { state: state ?? {}, result: undefined };
         const claimed = globalThis.aimtrixNotificationPolicy.claim(state.seen ?? [], route.eventId ? `${state.owner}:${route.eventId}` : undefined);
         return { state: { ...state, seen: claimed.seen }, result: claimed.accepted ? state.owner : undefined };
       });
-    } catch { return; } // Unknown policy/account: do not bypass local silence.
-    if (!owner) return;
+    } catch { /* Unknown account/policy gets an unaddressed, quiet visible update. */ }
+    // userVisibleOnly applies to every push, including duplicates and quiet time.
+    // One stable tag replaces the existing notice without another audible alert.
     await self.registration.showNotification('Aimtrix', {
-      body: 'New Matrix activity',
-      tag: `aimtrix-${owner}`,
+      body: owner ? 'New Matrix activity' : 'Open Aimtrix to check for updates.',
+      tag: 'aimtrix-background-update',
       renotify: false,
+      silent: owner ? undefined : true,
       // Provider identifiers cannot prove which signed-in account they belong to.
       // A provider push can open Aimtrix, never choose a conversation/account.
-      data: { owner, url: '/' },
+      data: owner ? { owner, url: '/' } : { generic: true, url: '/' },
       actions: [{ action: 'open', title: 'Open Aimtrix' }],
     });
   })());
@@ -78,6 +80,11 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const owner = event.notification.data?.owner;
   event.waitUntil((async () => {
+    if (event.notification.data?.generic === true) {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const existing = clients.find((client) => 'focus' in client);
+      return existing ? existing.focus() : self.clients.openWindow('/');
+    }
     let current;
     try { current = await globalThis.aimtrixNotificationPolicy.transaction((state) => ({ state: state ?? {}, result: typeof owner === 'string' && state?.owner === owner })); }
     catch { return; }
