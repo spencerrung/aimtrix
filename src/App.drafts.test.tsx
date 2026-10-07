@@ -42,13 +42,15 @@ describe('App draft lifecycle', () => {
     expect(before.write(context, { body: 'Stale callback' }, undefined)).toMatchObject({ ok: false, reason: 'stale-session' });
   });
 
-  it('deletes account drafts and revokes callbacks before waiting for logout', async () => {
+  it('revokes callbacks immediately and deletes drafts after protected logout completes', async () => {
     harness.logout.mockReturnValue(new Promise(() => undefined));
     render(<App />); await screen.findByText('Draft workspace');
     const session = harness.session!; session.write(context, { body: 'Synthetic private draft' }, undefined);
     act(() => harness.signOut?.());
     expect(harness.logout).toHaveBeenCalledOnce();
     expect(session.isActive()).toBe(false);
+    expect(localStorage.getItem(draftStorageKey(scope))).toContain('Synthetic private draft');
+    await act(async () => { harness.scope = undefined; publish({ status: 'signed-out' }); });
     expect(localStorage.getItem(draftStorageKey(scope))).toBeNull();
   });
 

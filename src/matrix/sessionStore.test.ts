@@ -51,6 +51,8 @@ describe('sessionStore', () => {
     await credentials.select(null);
     expect(await credentials.load()).toBeUndefined();
     await credentials.save(other);
+    expect(await credentials.get(accountId(session))).toEqual(session);
+    expect(await credentials.load()).toEqual(other);
     await credentials.save({ ...other, accessToken: 'synthetic-rotated-token' });
     expect(await credentials.list()).toHaveLength(2);
     expect(await credentials.select(accountId(session))).toEqual(session);
@@ -90,6 +92,15 @@ describe('sessionStore', () => {
     await expect(credentials.load()).rejects.toThrow('newer Aimtrix version');
     await expect(credentials.save(session)).rejects.toThrow('newer Aimtrix version');
     expect(localStorage.getItem('aimtrix.matrix-session.v1')).toBe(future);
+  });
+
+  it('refuses removal when the device set changes after cleanup locks were selected', async () => {
+    const credentials = createBrowserCredentialStore();
+    await credentials.save(session);
+    await credentials.save({ ...session, deviceId: 'NEW', retainedDeviceIds: [session.deviceId] });
+    await expect(credentials.remove(accountId(session), session)).rejects.toThrow('saved account changed');
+    expect(await credentials.get(accountId(session))).toMatchObject({ deviceId: 'NEW' });
+    await expect(credentials.remove(accountId(session), { ...session, deviceId: 'NEW', retainedDeviceIds: [session.deviceId] })).resolves.toBeDefined();
   });
 
   it('accepts complete delegated credentials and strips both tokens for recovery', () => {
