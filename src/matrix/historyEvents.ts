@@ -8,7 +8,7 @@ export const supportedMessageTypes = new Set(['m.text', 'm.notice', 'm.emote', '
 export function stripReplyFallback(body: string): string {
   const lines = body.split('\n');
   let index = 0;
-  while (index < lines.length && lines[index].startsWith('>')) index += 1;
+  while (index < lines.length && lines[index].startsWith('> ')) index += 1;
   if (index > 0 && lines[index] === '') index += 1;
   return lines.slice(index).join('\n') || body;
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { MatrixEvent } from 'matrix-js-sdk';
-import { boundedTimelineEvents, isVisibleTimelineEvent } from './historyEvents';
+import { boundedTimelineEvents, isVisibleTimelineEvent, stripReplyFallback } from './historyEvents';
 
 function message(index: number) {
   return new MatrixEvent({ type: 'm.room.message', event_id: `$message-${index}`, sender: '@synthetic:test', content: { msgtype: 'm.text', body: `Synthetic ${index}` } });
@@ -34,5 +34,16 @@ describe('visible history capacity', () => {
     const state = new MatrixEvent({ ...future.event, event_id: '$state', state_key: '' });
     const technical = new MatrixEvent({ ...future.event, event_id: '$technical', type: 'org.example.technical' });
     expect(boundedTimelineEvents([message(0), future, empty, state, technical], 2)).toEqual([future, empty]);
+  });
+});
+
+
+describe('legacy reply fallback prefix', () => {
+  it.each(['>42 is the threshold\nKeep this line', '>>output\nKeep this line', '>\nKeep this line', '>\tcomparison\nKeep this line'])('preserves literal greater-than content: %s', (body) => {
+    expect(stripReplyFallback(body)).toBe(body);
+  });
+  it('removes genuine quoted lines and only their separator', () => {
+    expect(stripReplyFallback('> <@buddy:test> Earlier line\n> Next quoted line\n\n>42 is the threshold\nKeep this line'))
+      .toBe('>42 is the threshold\nKeep this line');
   });
 });

@@ -351,7 +351,7 @@ export class ActivityStore {
       const content = event.getContent<{ body?: unknown; format?: unknown; formatted_body?: unknown }>();
       const senderId = event.getSender();
       const body = typeof content.body === 'string'
-        ? (historyRelation(event)?.['m.in_reply_to'] ? stripReplyFallback(content.body) : content.body).slice(0, 1000)
+        ? (!event.replacingEvent?.() && historyRelation(event)?.['m.in_reply_to'] ? stripReplyFallback(content.body) : content.body).slice(0, 1000)
         : 'Matrix activity';
       const formatted = !encrypted && !unavailable && content.format === 'org.matrix.custom.html'
         ? this.formattedPreview(event, content.formatted_body) : undefined;
