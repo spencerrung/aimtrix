@@ -811,6 +811,28 @@ describe('MatrixController protocol integration', () => {
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   });
 
+  it('reports a failed local test and allows a failed message notification to be retried', async () => {
+    const platform = pushPlatform();
+    const show = vi.fn().mockRejectedValueOnce(new Error('The local notification could not be shown.')).mockResolvedValue(undefined);
+    platform.notifications.show = show;
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    inject(controller, { getPushActionsForEvent: vi.fn().mockReturnValue({ notify: true }) });
+    await expect(controller.testNotification()).rejects.toThrow('could not be shown');
+    const internals = controller as unknown as ControllerInternals & { notificationPreferences: { desktopNotifications: boolean; notificationSounds: boolean; soundVolume: number } };
+    internals.connection = 'online';
+    internals.notificationPreferences = { desktopNotifications: true, notificationSounds: false, soundVolume: 0 };
+    const event = { getType: () => 'm.room.message', getId: () => '$retry:test', getContent: () => ({ body: 'Synthetic message' }) };
+    const room = { roomId: '!room:test', name: 'Synthetic room' };
+    show.mockRejectedValueOnce(new Error('The local notification could not be shown.'));
+    internals.notifyForMessage(event, room);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    internals.notifyForMessage(event, room);
+    expect(show).toHaveBeenCalledTimes(3);
+    expect(show).toHaveBeenLastCalledWith(expect.objectContaining({ route: { roomId: '!room:test', eventId: '$retry:test' } }));
+    internals.notifyForMessage(event, room);
+    expect(show).toHaveBeenCalledTimes(3);
+  });
+
   it('sends a readable Matrix notice with the Aimtrix nudge marker', async () => {
     const sendEvent = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));

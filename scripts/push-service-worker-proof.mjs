@@ -9,10 +9,12 @@ let metadata = { owner: 'synthetic-owner-001', policy: { pauseUntil: 0, quietHou
 let storageDenied = false;
 let ledger = Promise.resolve();
 const client = { focus: async () => { focused++; }, postMessage: (message) => messages.push(message) };
+let availableClients = [client];
+const opened = [];
 const self = {
   location: { origin: 'https://aimtrix.example' },
   addEventListener: (type, listener) => listeners.set(type, listener),
-  clients: { matchAll: async () => [client], openWindow: async () => undefined },
+  clients: { matchAll: async () => availableClients, openWindow: async (url) => opened.push(url) },
   registration: { showNotification: async (title, options) => notifications.push({ title, options }) },
   skipWaiting: async () => undefined,
 };
@@ -62,4 +64,23 @@ assert.equal(notifications.length, 2);
 storageDenied = true;
 await emit('push', { data: { json: () => payload } });
 assert.equal(notifications.length, 2, 'Unknown account/policy cannot bypass local silence');
-console.log('Service-worker push proof passed: shared policy, atomic dedup, generic private display, stale-owner rejection, malformed-route rejection.');
+storageDenied = false;
+metadata = { owner: 'synthetic-owner-003', policy: { pauseUntil: 0 }, seen: [] };
+const localData = { owner: metadata.owner, local: true, route: { roomId: '!room:example.test', eventId: '$local', accountId: '["https://matrix.example.test","@synthetic:example.test"]' } };
+await emit('notificationclick', { notification: { data: localData, close: () => undefined } });
+assert.equal(focused, 2);
+assert.equal(JSON.stringify(messages[0]), JSON.stringify({ type: 'AIMTRIX_PUSH_ROUTE', ...localData.route }));
+availableClients = [];
+await emit('notificationclick', { notification: { data: localData, close: () => undefined } });
+const coldRoute = new URL(opened[0], self.location.origin);
+assert.equal(coldRoute.searchParams.get('room'), localData.route.roomId);
+assert.equal(coldRoute.searchParams.get('event'), localData.route.eventId);
+assert.equal(coldRoute.searchParams.get('account'), localData.route.accountId);
+metadata.owner = 'synthetic-owner-004';
+await emit('notificationclick', { notification: { data: localData, close: () => undefined } });
+assert.equal(opened.length, 1, 'A stale local alert cannot open a cold-start destination');
+await emit('notificationclick', { notification: { data: { ...localData, owner: metadata.owner, route: { ...localData.route, eventId: 'malformed' } }, close: () => undefined } });
+assert.equal(opened[1], '/', 'Malformed local routes degrade to the application');
+await emit('push', { data: { json: () => ({ ...payload, ...localData, event_id: '$forged-local' }) } });
+assert.equal(JSON.stringify(notifications.at(-1).options.data), JSON.stringify({ owner: metadata.owner, url: '/' }), 'Provider data cannot forge a trusted local route');
+console.log('Service-worker push proof passed: shared policy, atomic dedup, generic private display, stale-owner rejection, validated local warm/cold routes and provider isolation.');

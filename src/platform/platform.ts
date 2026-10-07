@@ -97,6 +97,8 @@ export interface NotificationRequest {
   tag?: string;
   eventId?: string;
   silent?: boolean;
+  /** Trusted local destination; provider push payloads cannot supply it. */
+  route?: PushRoute;
   onClick?: () => void;
 }
 
@@ -104,7 +106,7 @@ export interface NotificationService {
   readonly supported: boolean;
   readonly permission: NotificationPermission | 'unsupported';
   requestPermission(): Promise<NotificationPermission | 'unsupported'>;
-  show(request: NotificationRequest): void;
+  show(request: NotificationRequest): void | Promise<void>;
   setContext?(context: NotificationContext): void | Promise<void>;
   clearContext?(owner: string): void | Promise<void>;
 }

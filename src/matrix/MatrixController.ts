@@ -406,7 +406,7 @@ export class MatrixController {
   public async testNotification(): Promise<void> {
     if (!this.client || this.platform.notifications.permission !== 'granted') throw new Error('Grant notification permission before testing.');
     if (notificationsPaused(this.localNotificationPolicy)) throw new Error('Resume local alerts before testing.');
-    this.platform.notifications.show({ title: 'Aimtrix notification test', body: 'Local notifications are working. This does not test background delivery.', silent: true });
+    await this.platform.notifications.show({ title: 'Aimtrix notification test', body: 'Local notifications are working. This does not test background delivery.', silent: true });
   }
 
   public setRoomNotificationMode(roomId: string, mode: Exclude<RoomNotificationMode, 'custom'>): Promise<void> {
@@ -602,11 +602,14 @@ export class MatrixController {
     if (cleanupError) throw cleanupError;
   }
 
+  private notificationRoute(roomId: string, eventId?: string): PushRoute {
+    return { roomId, ...(eventId ? { eventId } : {}),
+      ...(this.activeSession ? { accountId: accountId(this.activeSession) } : {}) };
+  }
+
   private focusNotification(roomId?: string, eventId?: string): void {
     if (roomId) {
-      const route: PushRoute = { roomId, ...(eventId ? { eventId } : {}),
-        ...(this.activeSession ? { accountId: accountId(this.activeSession) } : {}) };
-      this.platform.deepLinks.openRoute(route);
+      this.platform.deepLinks.openRoute(this.notificationRoute(roomId, eventId));
     }
     this.platform.deepLinks.focus();
   }
@@ -4139,13 +4142,14 @@ export class MatrixController {
       this.platform.lifecycle.isHidden() &&
       this.platform.notifications.permission === 'granted'
     ) {
-      this.platform.notifications.show({
+      void Promise.resolve(this.platform.notifications.show({
         title: 'Incoming Aimtrix call',
         body: 'A Matrix contact is calling. Open Aimtrix to answer.',
         tag: `call-${call.callId}`,
         silent: !this.notificationPreferences.notificationSounds,
+        route: this.notificationRoute(call.roomId),
         onClick: () => { if (owner === this.notificationOwner) this.focusNotification(call.roomId); },
-      });
+      })).catch(() => undefined);
     }
     if (this.notificationPreferences.notificationSounds) this.playMessageTone();
   };
@@ -4332,14 +4336,15 @@ export class MatrixController {
       const body = this.platform.capabilities.platform === 'browser' && typeof content.body === 'string'
         ? content.body.slice(0, 240)
         : 'New Matrix activity';
-      this.platform.notifications.show({
+      void Promise.resolve(this.platform.notifications.show({
         title: room.name || 'Aimtrix',
         body,
         tag: room.roomId,
         eventId,
         silent: !this.notificationPreferences.notificationSounds,
+        route: this.notificationRoute(room.roomId, eventId),
         onClick: () => { if (owner === this.notificationOwner) this.focusNotification(room.roomId, eventId); },
-      });
+      })).catch(() => { if (owner === this.notificationOwner && eventId) this.notifiedEvents.delete(eventId); });
     }
   }
 
