@@ -292,3 +292,37 @@ test('journey profile diagnostics retain only fixed supported identities', () =>
   for (const journeyProfile of ['full', 'core', 'history']) assert.equal(makeReport({ ...base, journeyProfile }).journeyProfile, journeyProfile);
   assert.equal(makeReport({ ...base, journeyProfile: 'private-room-canary' }).journeyProfile, undefined);
 });
+
+
+test('large-account sync diagnostics retain numeric milestones and fixed budget failures only', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const metrics = { largeAccountFirstSyncHeadersMs: 81000, largeAccountFirstSyncBodyCompleteMs: 81025 };
+  for (const category of ['large-account-full-room-budget', 'large-account-navigation-budget', 'large-account-cold-memory-budget']) {
+    const result = makeReport({ ...base, failureStage: 'large-account-initial-sync',
+      checks: [{ name: 'large-account-initial-sync', passed: false, category, durationMs: 364000,
+        responseBody: privateValue, session: privateValue, roomId: privateValue }],
+      metrics: { ...metrics, responseHeaders: privateValue, responseBody: privateValue, session: privateValue, roomId: privateValue },
+    });
+    assert.deepEqual(result.metrics, metrics);
+    assert.deepEqual(result.checks, [{ name: 'large-account-initial-sync', passed: false, category, durationMs: 364000 }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+  for (const invalid of [privateValue, NaN, Infinity, -Infinity, { body: privateValue }]) {
+    const result = makeReport({ ...base, metrics: { largeAccountFirstSyncHeadersMs: invalid, largeAccountFirstSyncBodyCompleteMs: invalid } });
+    assert.deepEqual(result.metrics, {});
+  }
+});
+
+
+test('failed sync request diagnostics expose only numeric counts and elapsed times', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  const metrics = { largeAccountSyncFailedRequests: 2, largeAccountLastSyncFailureMs: 80014 };
+  const result = makeReport({ ...base, metrics: { ...metrics, requestUrl: privateValue, accessToken: privateValue,
+    requestBody: privateValue, failureText: privateValue, request: { url: privateValue } } });
+  assert.deepEqual(result.metrics, metrics);
+  assert.equal(JSON.stringify(result).includes(privateValue), false);
+  assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: 0 } }).metrics, { largeAccountSyncFailedRequests: 0 });
+  for (const invalid of [privateValue, NaN, Infinity, -Infinity, { failureText: privateValue }]) {
+    assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: invalid, largeAccountLastSyncFailureMs: invalid } }).metrics, {});
+  }
+});

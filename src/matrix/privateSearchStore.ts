@@ -269,13 +269,39 @@ export async function markPrivateSearchEdit(scope: PrivateSearchScope, roomId: s
   } finally { db.close(); }
 }
 
+const roomRestoreBatches = new Map<string, { roomIds: Set<string>; promise: Promise<void> }>();
+
 /** A verified rejoin may start a fresh room index after membership-loss cleanup. */
 export async function allowPrivateSearchRoom(scope: PrivateSearchScope, roomId: string): Promise<void> {
-  const db = await openDatabase(scope);
-  try {
-    const tx = db.transaction('rooms', 'readwrite');
-    const current = tx.objectStore('rooms').get(roomId);
-    current.onsuccess = () => { if ((current.result as IndexedRoom | undefined)?.blocked) tx.objectStore('rooms').delete(roomId); };
-    await transactionDone(tx);
-  } finally { db.close(); }
+  const key = privateSearchDatabaseName(scope);
+  const pending = roomRestoreBatches.get(key);
+  if (pending) { pending.roomIds.add(roomId); return pending.promise; }
+  const batch = { roomIds: new Set([roomId]), promise: Promise.resolve() };
+  // Initial sync emits thousands of joins, including when search is locked.
+  // Share an open/transaction across the burst without skipping persisted
+  // membership blocks. Every caller still awaits commit, so the controller's
+  // per-room leave/index/rejoin queues retain their ordering guarantees.
+  // Enqueue the open synchronously so a same-turn clear cannot overtake it.
+  batch.promise = (async () => {
+    let db: IDBDatabase | undefined;
+    try {
+      db = await openDatabase(scope);
+      // Let an immediately queued clear wait for this transaction to finish
+      // rather than treating our short-lived connection as another open tab.
+      db.onversionchange = () => db?.close();
+      roomRestoreBatches.delete(key);
+      const tx = db.transaction('rooms', 'readwrite');
+      const rooms = tx.objectStore('rooms');
+      for (const id of batch.roomIds) {
+        const current = rooms.get(id);
+        current.onsuccess = () => { if ((current.result as IndexedRoom | undefined)?.blocked) rooms.delete(id); };
+      }
+      await transactionDone(tx);
+    } finally {
+      if (roomRestoreBatches.get(key) === batch) roomRestoreBatches.delete(key);
+      db?.close();
+    }
+  })();
+  roomRestoreBatches.set(key, batch);
+  return batch.promise;
 }

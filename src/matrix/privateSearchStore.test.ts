@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { webcrypto } from 'node:crypto';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { PrivateSearchStore, deletePrivateSearchDatabase, markPrivateSearchEdit, privateSearchDatabaseName, prunePrivateSearchEvent, prunePrivateSearchRoom } from './privateSearchStore';
+import { PrivateSearchStore, allowPrivateSearchRoom, deletePrivateSearchDatabase, markPrivateSearchEdit, privateSearchDatabaseName, prunePrivateSearchEvent, prunePrivateSearchRoom } from './privateSearchStore';
 
 beforeAll(() => { vi.stubGlobal('crypto', webcrypto); });
 const scope = { userId: '@one:test', homeserver: 'https://matrix.test/base/' };
@@ -46,6 +46,93 @@ describe('private encrypted search store', () => {
     const empty = await PrivateSearchStore.unlock(scope, passphrase);
     expect((await empty.status()).total).toBe(0);
     empty.close(); await deletePrivateSearchDatabase(scope);
+  });
+
+  it('restores 1000 joined rooms in one transaction while preserving unrelated indexed data', async () => {
+    const store = await PrivateSearchStore.unlock(scope, passphrase);
+    await store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 });
+    const blockedIds = Array.from({ length: 1000 }, (_, index) => `!blocked-${index}:test`);
+    const db = await new Promise<IDBDatabase>((resolve) => { const request = indexedDB.open(privateSearchDatabaseName(scope)); request.onsuccess = () => resolve(request.result); });
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction('rooms', 'readwrite');
+      for (const roomId of blockedIds) tx.objectStore('rooms').put({ roomId, blocked: true, indexed: 0, skipped: 0, complete: false });
+      tx.oncomplete = () => resolve();
+    });
+    db.close();
+    const opened = vi.spyOn(indexedDB, 'open');
+    const transactions = vi.spyOn(IDBDatabase.prototype, 'transaction');
+    try {
+      await Promise.all([...blockedIds, blockedIds[0], hit.roomId].map((roomId) => allowPrivateSearchRoom(scope, roomId)));
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(transactions).toHaveBeenCalledTimes(1);
+      expect(transactions).toHaveBeenCalledWith('rooms', 'readwrite');
+    } finally { opened.mockRestore(); transactions.mockRestore(); }
+    expect((await store.status()).rooms).toEqual([expect.objectContaining({ roomId: hit.roomId, indexed: 1 })]);
+    expect((await store.search({ term: 'telescope' })).hits).toEqual([hit]);
+    store.close(); await deletePrivateSearchDatabase(scope);
+  });
+
+  it('keeps accounts isolated and preserves leave then rejoin ordering after each batch commits', async () => {
+    const store = await PrivateSearchStore.unlock(scope, passphrase);
+    const isolated = await PrivateSearchStore.unlock(other, passphrase);
+    await Promise.all([prunePrivateSearchRoom(scope, hit.roomId), prunePrivateSearchRoom(other, hit.roomId)]);
+    await Promise.all([allowPrivateSearchRoom(scope, hit.roomId), allowPrivateSearchRoom(other, '!different:test')]);
+    expect((await store.status()).rooms).toEqual([]);
+    await expect(isolated.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 })).rejects.toThrow();
+    await store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 });
+    await prunePrivateSearchRoom(scope, hit.roomId);
+    await expect(store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 })).rejects.toThrow();
+    await allowPrivateSearchRoom(scope, hit.roomId);
+    await store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 });
+    expect((await store.search({ term: 'telescope' })).hits).toEqual([hit]);
+    store.close(); isolated.close();
+    await Promise.all([deletePrivateSearchDatabase(scope), deletePrivateSearchDatabase(other)]);
+  });
+
+  it('rejects every waiter on batch failure and permits a fresh attempt', async () => {
+    const failure = new DOMException('Denied', 'SecurityError');
+    const opened = vi.spyOn(indexedDB, 'open').mockImplementation(() => { throw failure; });
+    try {
+      const results = await Promise.allSettled(Array.from({ length: 20 }, (_, index) => allowPrivateSearchRoom(scope, `!room-${index}:test`)));
+      expect(opened).toHaveBeenCalledTimes(1);
+      expect(results.every((result) => result.status === 'rejected' && result.reason === failure)).toBe(true);
+    } finally { opened.mockRestore(); }
+    await expect(allowPrivateSearchRoom(scope, hit.roomId)).resolves.toBeUndefined();
+    await deletePrivateSearchDatabase(scope);
+  });
+
+  it('rejects all callers when a restore transaction aborts without clearing membership blocks', async () => {
+    const store = await PrivateSearchStore.unlock(scope, passphrase);
+    await prunePrivateSearchRoom(scope, hit.roomId);
+    const original = IDBDatabase.prototype.transaction;
+    const transaction = vi.spyOn(IDBDatabase.prototype, 'transaction').mockImplementation(function (this: IDBDatabase, ...args: Parameters<IDBDatabase['transaction']>) {
+      const tx = original.apply(this, args);
+      queueMicrotask(() => tx.abort());
+      return tx;
+    });
+    try {
+      const results = await Promise.allSettled([allowPrivateSearchRoom(scope, hit.roomId), allowPrivateSearchRoom(scope, '!second:test')]);
+      expect(transaction).toHaveBeenCalledTimes(1);
+      expect(results.every((result) => result.status === 'rejected')).toBe(true);
+    } finally { transaction.mockRestore(); }
+    await expect(store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 })).rejects.toThrow();
+    await allowPrivateSearchRoom(scope, hit.roomId);
+    await store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 });
+    store.close(); await deletePrivateSearchDatabase(scope);
+  });
+
+  it.each([false, true])('does not recreate private search storage when clear follows a restore in the same turn (existing=%s)', async (existing) => {
+    const clearing = { userId: '@restore-clear:test', homeserver: 'https://matrix.test' };
+    if (existing) {
+      const store = await PrivateSearchStore.unlock(clearing, passphrase);
+      await store.putPage(hit.roomId, [hit], { roomId: hit.roomId, complete: true, indexed: 0, skipped: 0 });
+      store.close();
+    }
+    await Promise.all([
+      allowPrivateSearchRoom(clearing, '!restore:test'),
+      deletePrivateSearchDatabase(clearing),
+    ]);
+    expect((await indexedDB.databases()).some((entry) => entry.name === privateSearchDatabaseName(clearing))).toBe(false);
   });
 
   it('rejects a future database schema without overwriting it', async () => {
