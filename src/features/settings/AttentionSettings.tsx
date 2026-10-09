@@ -46,7 +46,7 @@ export function AttentionSettings({ actions }: { actions: AttentionSettingsActio
     });
     return () => { active = false; generation.current = current + 1; };
   }, [actions]);
-  const update = (operation?: () => Promise<void>, message = 'Notification settings refreshed.') => run(async () => {
+  const update = (operation?: () => Promise<void>, message = 'Notification settings refreshed.', failureMessage = 'Notification settings could not be updated completely. The latest available server state is shown; refresh and retry.') => run(async () => {
     const current = generation.current;
     setError(''); setNotice('');
     let failed = false;
@@ -61,7 +61,7 @@ export function AttentionSettings({ actions }: { actions: AttentionSettingsActio
     } catch { failed = true; }
     if (current !== generation.current) return;
     setLoading(false);
-    if (failed) setError('Notification settings could not be updated completely. The latest available server state is shown; refresh and retry.');
+    if (failed) setError(failureMessage);
   });
   return <section className="attention-settings" aria-label="Notification rules and delivery">
     <div className="attention-settings-heading"><h4>Notification rules and delivery</h4><button className="aqua-button" type="button" disabled={busy || loading} onClick={() => void update()}>Refresh notification settings</button></div>
@@ -91,7 +91,7 @@ export function AttentionSettings({ actions }: { actions: AttentionSettingsActio
       <h4>Delivery checks</h4>
       <dl className="settings-definition-list"><div><dt>Permission</dt><dd>{snapshot.health.permission}</dd></div><div><dt>Background delivery</dt><dd>{snapshot.health.background}</dd></div><div><dt>Device subscription</dt><dd>{snapshot.health.subscription}</dd></div><div><dt>Homeserver registration</dt><dd>{snapshot.health.pusher}</dd></div></dl>
       <p>A present subscription or registration does not prove delivery. Enable Background notifications above to request permission and register this installation. If alerts still fail, check browser or operating system notification permissions and the configured gateway with your administrator.</p>
-      <button className="aqua-button" type="button" disabled={snapshot.health.permission !== 'granted'} onClick={() => void update(() => actions.testNotification(), 'Local test requested. Look for an Aimtrix notification; this does not verify background gateway delivery.')}>Test local notification</button>
+      <button className="aqua-button" type="button" disabled={snapshot.health.permission !== 'granted'} onClick={() => void update(() => actions.testNotification(), 'Local test requested. Look for an Aimtrix notification; this does not verify background gateway delivery.', 'The local notification could not be shown. Check permission, wait for the app to finish starting, and retry.')}>Test local notification</button>
       <p>The test contains no room content, account identity, or access token. Resume local alerts and leave quiet hours before testing.</p>
     </fieldset> : null}
   </section>;

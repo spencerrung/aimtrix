@@ -60,6 +60,20 @@ export class NotificationGuard {
   };
   canDeliver = async (owner: string): Promise<boolean> =>
     await this.isCurrent(owner) && !notificationsPaused(this.context?.policy);
+  /** Roll back only this account generation's failed presentation claim. */
+  release = async (owner: string, eventId?: string): Promise<void> => {
+    if (!eventId) return;
+    const id = `${owner}:${eventId}`;
+    if (this.context?.owner === owner) this.seen = this.seen.filter((item) => item.id !== id);
+    if (!this.persistent) return;
+    await this.pending;
+    try {
+      await globalThis.aimtrixNotificationPolicy.transaction((state) => ({
+        state: state?.owner === owner ? { ...state, seen: (state.seen ?? []).filter((item) => item.id !== id) } : state ?? {},
+        result: undefined,
+      }));
+    } catch { /* Foreground fallback claims were already released above. */ }
+  };
   accept = async (eventId?: string): Promise<string | undefined> => {
     const context = this.context;
     if (!context || notificationsPaused(context.policy)) return undefined;

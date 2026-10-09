@@ -87,6 +87,24 @@ self.addEventListener('push', (event) => {
   })());
 });
 
+// This route is set only by the foreground adapter after account ownership is
+// established. Provider push data is never copied into notification data.
+function localNotificationRoute(data) {
+  if (data?.local !== true || !data.route || typeof data.route !== 'object') return undefined;
+  const route = pushRouteFromPayload(data.route);
+  if (!route.roomId) return undefined;
+  const accountId = data.route.accountId;
+  if (accountId !== undefined) {
+    if (typeof accountId !== 'string' || accountId.length > 1024) return undefined;
+    try {
+      const parts = JSON.parse(accountId);
+      if (!Array.isArray(parts) || parts.length !== 2 || !parts.every((part) => typeof part === 'string' && part.length > 0 && part.length <= 512)) return undefined;
+    } catch { return undefined; }
+    route.accountId = accountId;
+  }
+  return route;
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const owner = event.notification.data?.owner;
@@ -95,10 +113,20 @@ self.addEventListener('notificationclick', (event) => {
     try { current = await globalThis.aimtrixNotificationPolicy.transaction((state) => ({ state: state ?? {}, result: typeof owner === 'string' && state?.owner === owner })); }
     catch { return; }
     if (!current) return;
+    const route = localNotificationRoute(event.notification.data);
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = clients.find((client) => 'focus' in client);
-    if (existing) return existing.focus();
-    return self.clients.openWindow('/');
+    if (existing) {
+      if (route) existing.postMessage({ type: 'AIMTRIX_PUSH_ROUTE', ...route });
+      return existing.focus();
+    }
+    const target = new URL('/', self.location.origin);
+    if (route) {
+      target.searchParams.set('room', route.roomId);
+      if (route.eventId) target.searchParams.set('event', route.eventId);
+      if (route.accountId) target.searchParams.set('account', route.accountId);
+    }
+    return self.clients.openWindow(`${target.pathname}${target.search}`);
   })());
 });
 

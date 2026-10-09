@@ -2,7 +2,7 @@ import { NotificationGuard } from '../pwa/notificationPolicy';
 import {
   createBrowserCredentialStore,
 } from '../matrix/sessionStore';
-import { routeUrl } from '../pwa/pushRouting';
+import { pushRouteFromMessage, routeUrl } from '../pwa/pushRouting';
 import type { PushRoute } from '../pwa/pushRouting';
 import { parseSsoPendingState } from './platform';
 import type {
@@ -42,13 +42,26 @@ function createBrowserNotifications(): NotificationService {
       if (!supported) return 'unsupported';
       return Notification.requestPermission();
     },
-    show(request: NotificationRequest) {
-      if (!supported || Notification.permission !== 'granted') return;
-      void guard.accept(request.eventId).then((owner) => {
-        if (!owner) return;
-        const notification = new Notification(request.title, { body: request.body, tag: request.tag ? `${owner}:${request.tag}` : undefined, silent: request.silent });
-        if (request.onClick) notification.onclick = () => { void guard.isCurrent(owner).then((current) => { if (current) request.onClick?.(); }); };
-      }).catch(() => undefined);
+    async show(request: NotificationRequest) {
+      if (!supported || Notification.permission !== 'granted') throw new Error('Grant notification permission before testing.');
+      const owner = await guard.accept(request.eventId);
+      if (!owner) return;
+      try {
+        // ready can remain pending forever before the first worker registration.
+        const registration = 'serviceWorker' in navigator ? await navigator.serviceWorker.getRegistration() : undefined;
+        if (!(await guard.canDeliver(owner))) { await guard.release(owner, request.eventId); return; }
+        const options: NotificationOptions = { body: request.body, tag: request.tag ? `${owner}:${request.tag}` : undefined, silent: request.silent };
+        if (registration?.active && typeof registration.showNotification === 'function') {
+          const route = pushRouteFromMessage(request.route);
+          await registration.showNotification(request.title, { ...options, data: { owner, local: true, ...(route ? { route } : {}) } });
+        } else {
+          const notification = new Notification(request.title, options);
+          if (request.onClick) notification.onclick = () => { void guard.isCurrent(owner).then((current) => { if (current) request.onClick?.(); }); };
+        }
+      } catch {
+        await guard.release(owner, request.eventId);
+        throw new Error('The local notification could not be shown. Try again after the app finishes starting.');
+      }
     },
   };
 }
