@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+## 0.3.0-rc.8 — 2026-10-09
+
+Homelab PWA candidate integrating the reviewed contributor fixes.
+
+- Keep Send and room/thread pickers reachable on short mobile viewports, including WebKit keyboard layouts.
+- Preserve the executable offline shell across failed navigation and service-worker updates.
+- Correct reply and thread fallback rendering while preserving authored quote text.
+- Enforce exclusive crypto-store ownership across tabs without weakening encrypted-room behavior.
+- Authenticate link-preview media and reference-count downloads, cancellation and object-URL cleanup.
+- Route local notifications through the service worker and keep generic push delivery visible.
+- Decode binary Matrix QR verification payloads with the camera fallback.
+- Include the merged large-account scheduling improvements; full endurance acceptance remains a separately recorded gate.
+- Patch the container TIFF package and reduce compatibility CI setup time with a pinned browser image and complete sharded coverage.
+
+Retain RC7 as the rollback candidate. Physical-device, native packaging and provider-specific acceptance remain open; desktop artifacts remain drafts. Exact image digests and endurance results belong in the release evidence.
+
 ## 0.3.0-rc.7 — 2026-10-06
 
 Phone PWA feedback candidate replacing RC6.
