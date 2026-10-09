@@ -1065,7 +1065,7 @@ describe('MatrixController protocol integration', () => {
     await expect(controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true)).resolves.toBeUndefined();
     await expect(controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true)).resolves.toBe('blob:original');
     expect(fetchMedia).toHaveBeenCalledTimes(2);
-    expect(fetchMedia).toHaveBeenNthCalledWith(2, 'https://matrix.test/media/original', { headers: { Accept: 'image/png', Authorization: 'Bearer synthetic-token' } });
+    expect(fetchMedia).toHaveBeenNthCalledWith(2, 'https://matrix.test/media/original', { signal: expect.any(AbortSignal), headers: { Accept: 'image/png', Authorization: 'Bearer synthetic-token' } });
     expect(mxcUrlToHttp).toHaveBeenCalledWith('mxc://test/photo', undefined, undefined, undefined, false, true, true);
     vi.unstubAllGlobals();
   });
