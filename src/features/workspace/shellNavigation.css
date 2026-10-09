@@ -37,7 +37,10 @@
   }
 
   @media (max-width: 767px) {
-    :root[data-compact-viewport="true"] .app-stage .composer { grid-template-rows: minmax(44px,1fr) auto; }
+    /* Flex allocation must include the complete touch rows, gap, padding and
+       borders; otherwise WebKit lets the tools overlap the Send hit target. */
+    :root[data-compact-viewport="true"] .app-stage .composer { min-height: 56px; grid-template-rows: minmax(44px,1fr) auto; }
+    :root[data-compact-viewport="true"] .app-stage .composer:has(.composer__actions.is-open) { min-height: 104px; }
     :root[data-compact-viewport="true"] .composer__actions { flex-wrap: nowrap; overflow-x: auto; }
     :root[data-compact-viewport="true"] .composer__actions > * { flex-shrink: 0; }
     :root[data-compact-viewport="true"] .composer__actions :focus-visible { outline-offset: -3px; }
