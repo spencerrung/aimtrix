@@ -70,6 +70,7 @@ import {
 
 interface RelationContent {
   rel_type?: string;
+  is_falling_back?: boolean;
   event_id?: string;
   key?: string;
   'm.in_reply_to'?: { event_id?: string };
@@ -516,7 +517,10 @@ function messagesForEvents(
     const rendered = eventBody(event, eventId ? replacements.get(eventId) : undefined);
     if (!rendered || !senderId || !eventId) return [];
     const sender = room.getMember(senderId);
-    const replyEventId = content['m.relates_to']?.['m.in_reply_to']?.event_id;
+    const relation = content['m.relates_to'];
+    // Ordinary thread messages carry a fallback reply for clients without thread support.
+    const threadFallback = relation?.rel_type === 'm.thread' && relation.is_falling_back === true;
+    const replyEventId = threadFallback ? undefined : relation?.['m.in_reply_to']?.event_id;
     const replyEvent = replyEventId ? eventById.get(replyEventId) ?? room.findEventById?.(replyEventId) : undefined;
     const replySenderId = replyEvent?.getSender();
     const replyRendered = replyEvent ? eventBody(replyEvent, replacements.get(replyEventId!)) : undefined;
