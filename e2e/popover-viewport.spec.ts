@@ -1,5 +1,10 @@
 import { expect, test, type Locator } from '@playwright/test';
 
+// These geometry journeys route synthetic catalogs. An activated service worker
+// can own fetches before page.route sees them, returning the SPA fallback instead.
+// Service-worker lifecycle behavior has its own production-preview journeys.
+test.use({ serviceWorkers: 'block' });
+
 test('message actions and reaction search stay inside an offset keyboard viewport', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 664 });
   await page.goto('/?demo=1');
