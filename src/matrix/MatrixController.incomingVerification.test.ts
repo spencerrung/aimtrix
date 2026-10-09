@@ -80,6 +80,21 @@ describe('incoming verification', () => {
     expect(request.phase).toBe(VerificationPhase.Ready);
   });
 
+  it('passes decoded bytes unchanged to the SDK and preserves request or secret mismatch rejection', async () => {
+    const { controller, internals, request, verifier, confirm } = fixture();
+    const bytes = new Uint8ClampedArray([77, 65, 84, 82, 73, 88, 2, 0, 0, 1]);
+    request.otherPartySupportsMethod.mockImplementation((method: string) => method === 'm.qr_code.show.v1');
+    const scanQRCode = vi.fn().mockRejectedValue(new Error('Synthetic request or shared-secret mismatch'));
+    Object.assign(request, { scanQRCode });
+    internals.handleIncomingVerification(request as unknown as VerificationRequest);
+    await expect(controller.scanIncomingVerificationQr('verification-1', bytes)).rejects.toThrow(/mismatch/);
+    expect(scanQRCode).toHaveBeenCalledExactlyOnceWith(bytes);
+    expect(scanQRCode.mock.calls[0][0]).toBe(bytes);
+    expect(verifier.verify).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
+    expect(request.phase).toBe(VerificationPhase.Ready);
+  });
+
   it('does not offer emoji after a QR verifier starts', () => {
     const { internals, request } = fixture();
     request.phase = VerificationPhase.Started;

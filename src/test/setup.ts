@@ -1,6 +1,11 @@
 import '@testing-library/jest-dom/vitest';
 import { cleanup } from '@testing-library/react';
-import { afterEach } from 'vitest';
+import { afterEach, beforeEach } from 'vitest';
+import { createTestLockManager } from './webLocks';
+
+beforeEach(() => {
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: createTestLockManager() });
+});
 
 // Node 26 exposes host Web Storage; browser tests must use their JSDOM origin.
 // Vitest exposes the underlying instance even when host globals shadow window.

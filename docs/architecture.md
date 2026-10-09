@@ -32,6 +32,8 @@ The UI should not depend throughout the tree on mutable Matrix SDK objects. The 
 
 For a restored or newly authenticated session:
 
+Acquire exclusive browser ownership of the per-device persistent crypto store first; see [crypto storage ownership](crypto-store-ownership.md) for second-window refusal, cooperative takeover, shutdown and protected deletion. Browsers without safe exclusion cannot open the encrypted session.
+
 1. Create the SDK client with the access token, user ID, and device ID (in-memory sync store; the persistent per-account store belongs to Rust crypto).
 2. Initialize Rust/WASM crypto before starting sync.
 3. Attach lifecycle, room, timeline, receipt, decryption, local-echo, and account-data listeners.
@@ -50,7 +52,9 @@ Configuration is validated and merged with conservative defaults. Invalid URLs, 
 
 ## PWA lifecycle
 
-The production shell is served from `public/sw.js`. Navigations use a network-first strategy and cache only the latest application shell; static assets, icons, and screenshots use a cache-first strategy. `/config.json` is never cached, and an offline banner explicitly says that Matrix history may be unavailable—the shell is not an offline Matrix sync client.
+The production shell is served from `public/sw.js`. The build injects the current entry and core Workspace static import graphs, including their CSS and emitted assets, into the required install cache list. Workspace stays deferred in the online application bundle; optional dynamic imports, catalogs and media remain loaded on demand. Installation succeeds only after every required resource has been fetched and cached. A failed candidate is discarded without activating or deleting the last working version's cache.
+
+Navigations use a network-first strategy; static assets, icons, and screenshots use a cache-first strategy. Precached same-origin build assets ignore response header variance when matching module requests, which may include an Origin header absent from installation requests. `/config.json` stays network-only and is never precached; an unavailable runtime configuration uses the existing safe defaults and startup warning. An offline banner explicitly says that Matrix history may be unavailable—the executable shell is not an offline Matrix sync client.
 
 Service-worker updates remain waiting until the user chooses **Reload**. Aimtrix explains that active drafts should be finished first, then sends `SKIP_WAITING` and reloads after `controllerchange`. The encrypted account store and Matrix credentials are not part of the shell cache. Install guidance uses the browser install event when available and gives iOS/iPadOS users the manual Share → Add to Home Screen path.
 
@@ -75,6 +79,8 @@ Backdrop artwork is rendered at fixed low intensity beneath high-opacity, blurre
 ## Media
 
 Aimtrix itself remains stateless. Sent attachments, stickers, selected GIFs, and custom profile banners are uploaded to the Matrix media repository and referenced by `mxc://` URIs. Encrypted-room attachments—including `m.sticker` uploads—are encrypted before upload and referenced by standard `content.file` encryption metadata; encrypted stickers sent by other clients are decrypted after authenticated media retrieval as well. SVG media (including sticker artwork) is always fetched from the original download endpoint because homeservers cannot thumbnail it. Sticker manifests and heavy catalogs are validated and loaded only when their picker opens. Data saver gates non-local profile artwork and message media retrieval, and animated GIFs require a click when autoplay is disabled.
+
+Resolved media is owned by mounted consumers rather than retained for the signed-in session. The final consumer release revokes its Blob URL, removes the request and aborts pending retrieval; account teardown clears every owner. The unused cache budget is zero. See [media lifetime and acceptance](media-memory.md) for the resolver ownership contract, measured navigation budgets and pending physical-phone evidence.
 
 ## Custom behavior
 

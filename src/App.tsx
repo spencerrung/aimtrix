@@ -9,6 +9,7 @@ import { VolatileDrafts } from './features/workspace/volatileDrafts';
 import { StructuredDraftStore, type DraftScope, type DraftStateSummary } from './features/workspace/structuredDrafts';
 import { ConnectionBanner, SessionRecoveryScreen } from './features/auth/SessionRecovery';
 import { ConnectionError } from './features/auth/ConnectionError';
+import { CryptoOwnershipScreen } from './features/auth/CryptoOwnershipScreen';
 import { LoginWindow } from './features/auth/LoginWindow';
 import { InstallPrompt } from './features/pwa/InstallPrompt';
 import { NetworkStatus } from './features/pwa/NetworkStatus';
@@ -94,7 +95,7 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
     const result = structuredDraftStore.clear(scope ?? currentScope);
     if (!result.cleared) setDraftCleanupFailed(true);
   }, [controller, draftStore, structuredDraftStore, reportDraftState]);
-  const forgetSession = async () => { clearDrafts(); await controller.forgetSession(); };
+  const forgetSession = () => controller.forgetSession();
   const draftCleanupNotice = draftCleanupFailed ? <p role="alert" className="history-feedback">Your browser could not remove saved drafts. Clear this site's data to remove them from this device.</p> : null;
   useEffect(() => {
     const update = () => {
@@ -311,6 +312,13 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
     return <StartupScreen message={snapshot.message} />;
   }
 
+  if (snapshot.status === 'crypto-in-use' || snapshot.status === 'crypto-unavailable') {
+    return <CryptoOwnershipScreen unavailable={snapshot.status === 'crypto-unavailable'}
+      canTakeover={snapshot.status === 'crypto-in-use' && snapshot.canTakeover}
+      error={snapshot.status === 'crypto-in-use' ? snapshot.error : undefined}
+      onRetry={() => controller.retry()} onTakeover={() => controller.retry(true)} />;
+  }
+
   const savedAccountChoices = <section className="saved-accounts" aria-label="Other saved Matrix accounts">
     <strong>Use another account on this device</strong>
     {accounts.filter((account) => !account.active).map((account) =>
@@ -483,7 +491,7 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
         onRemoveRoomMember={(roomId, userId, action) => controller.removeRoomMember(roomId, userId, action)}
         onSetRoomMemberPower={(roomId, userId, level) => controller.setRoomMemberPower(roomId, userId, level)}
         onLeaveRoom={(roomId) => controller.leaveRoom(roomId)}
-        onSignOut={() => { clearDrafts(); void controller.logout(); }}
+        onSignOut={() => { structuredDraftStore.suspend(); draftStore.clear(); reportDraftState(EMPTY_DRAFT_STATE); void controller.logout(); }}
       /></Suspense>
       {pushRoute?.accountId && profileOwner && pushRoute.accountId !== profileOwner ?
         <ConfirmDialog title="Open with another Matrix account?"

@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+// These bounds describe regular chrome. Real worker updates have their own
+// lifecycle suite and can otherwise add an unrelated notice mid-measurement.
+test.use({ serviceWorkers: 'block' });
+
 test.beforeEach(async ({ page, isMobile }) => {
   test.skip(!isMobile, 'Requires a mobile browser context.');
   await page.goto('/?demo=1');
@@ -53,7 +57,7 @@ test('timeline and composer survive a narrow landscape resize', async ({ page })
 for (const width of [320, 390, 430]) {
   test(`phone chrome preserves reading space at ${width}px`, async ({ page }, info) => {
     await page.setViewportSize({ width, height: 844 });
-    const later = page.getByRole('button', { name: 'Later', exact: true });
+    const later = page.getByRole('complementary', { name: 'Install Aimtrix', exact: true }).getByRole('button', { name: 'Later', exact: true });
     if (await later.isVisible()) await later.click();
     const header = page.locator('.conversation-header');
     expect((await header.boundingBox())!.height).toBeLessThanOrEqual(52);

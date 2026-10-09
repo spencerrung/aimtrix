@@ -1,7 +1,8 @@
-import { useContext, useEffect, useState } from 'react';
+import { useContext, useEffect, useMemo, useState } from 'react';
 import {
   MediaResolverContext,
   type EncryptedMediaInfo,
+  type MediaRequest,
 } from './mediaContext';
 
 export function useMediaSourceState(
@@ -15,18 +16,27 @@ export function useMediaSourceState(
   const [resolved, setResolved] = useState<{ key: string; url?: string }>();
   const [attempt, setAttempt] = useState(0);
   const requiresResolution = source?.startsWith('mxc://') ?? false;
-  const key = `${source ?? ''}|${size}|${mimeType ?? ''}|${encryptedFile?.hashes?.sha256 ?? ''}|${original}|${attempt}`;
+  // Equivalent snapshot metadata must not release a still-rendered URL.
+  const encryptedKey = encryptedFile ? JSON.stringify(encryptedFile) : '';
+  const stableEncryptedFile = useMemo(() => encryptedKey ? JSON.parse(encryptedKey) as EncryptedMediaInfo : undefined, [encryptedKey]);
+  const key = JSON.stringify([source, size, mimeType, encryptedKey, original, attempt]);
 
   useEffect(() => {
     if (!source || !requiresResolution || !resolver) return;
     let active = true;
-    void Promise.resolve().then(() => original ? resolver(source, size, encryptedFile, mimeType, true) : resolver(source, size, encryptedFile, mimeType))
+    let request: MediaRequest | undefined;
+    void Promise.resolve().then(() => {
+      if (!active) return undefined;
+      request = original ? resolver(source, size, stableEncryptedFile, mimeType, true) : resolver(source, size, stableEncryptedFile, mimeType);
+      return request;
+    })
       .then((url) => { if (active) setResolved({ key, url }); })
       .catch(() => { if (active) setResolved({ key }); });
     return () => {
       active = false;
+      request?.release?.();
     };
-  }, [encryptedFile, key, mimeType, original, requiresResolution, resolver, size, source]);
+  }, [stableEncryptedFile, key, mimeType, original, requiresResolution, resolver, size, source]);
 
   const retry = () => setAttempt((value) => value + 1);
   if (!source) return { status: 'idle', retry };

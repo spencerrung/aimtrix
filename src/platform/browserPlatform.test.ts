@@ -3,6 +3,80 @@ import { createBrowserPlatform } from './browserPlatform';
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
+describe('persistent browser notification presentation', () => {
+  async function setup(showNotification = vi.fn().mockResolvedValue(undefined)) {
+    const construct = vi.fn(() => { throw new TypeError('Synthetic Android constructor restriction'); });
+    vi.stubGlobal('Notification', class { static permission = 'granted'; constructor() { construct(); } });
+    const registration = { active: {}, showNotification };
+    const getRegistration = vi.fn().mockResolvedValue(registration);
+    vi.stubGlobal('navigator', { serviceWorker: { getRegistration, get ready() { throw new Error('Must not await indefinite registration readiness'); } } });
+    let state: import('../pwa/notificationPolicy').NotificationMetadata | undefined;
+    // The shared implementation is frozen, so install a scoped transaction facade.
+    const implementation = globalThis.aimtrixNotificationPolicy;
+    vi.stubGlobal('aimtrixNotificationPolicy', { ...implementation, transaction: async (change: (value: typeof state) => { state: typeof state; result: unknown }) => {
+      const next = change(state); state = next.state; return next.result;
+    } });
+    const platform = createBrowserPlatform();
+    await platform.notifications.setContext?.({ owner: 'synthetic-owner-001', policy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } } });
+    return { platform, registration, getRegistration, construct, showNotification };
+  }
+
+  it('uses an active service worker when Android rejects Notification construction', async () => {
+    const f = await setup();
+    await f.platform.notifications.show({ title: 'Synthetic local alert', body: 'Synthetic activity', eventId: '$event' });
+    await vi.waitFor(() => expect(f.showNotification).toHaveBeenCalledOnce());
+    expect(f.construct).not.toHaveBeenCalled();
+  });
+
+  it('reports failed presentation and releases the event claim for a same-event retry', async () => {
+    const show = vi.fn().mockRejectedValueOnce(new Error('Synthetic private platform diagnostic')).mockResolvedValue(undefined);
+    const f = await setup(show);
+    const request = { title: 'Synthetic alert', body: 'Synthetic activity', eventId: '$retry' };
+    await expect(Promise.resolve(f.platform.notifications.show(request))).rejects.toThrow('could not be shown');
+    await f.platform.notifications.show(request);
+    expect(show).toHaveBeenCalledTimes(2);
+    await f.platform.notifications.show(request);
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not wait forever when no registration exists and reports an unsupported constructor', async () => {
+    const f = await setup();
+    f.getRegistration.mockResolvedValue(undefined);
+    await expect(Promise.resolve(f.platform.notifications.show({ title: 'Synthetic alert', body: 'Synthetic activity' }))).rejects.toThrow('could not be shown');
+    expect(f.construct).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks the account after registration lookup and keeps only validated local routing data', async () => {
+    const f = await setup();
+    const route = { roomId: '!room:example.test', eventId: '$event', accountId: '["https://matrix.example.test","@synthetic:example.test"]' };
+    await f.platform.notifications.show({ title: 'Synthetic alert', body: 'Synthetic activity', route, onClick: vi.fn() });
+    expect(f.showNotification).toHaveBeenLastCalledWith('Synthetic alert', expect.objectContaining({ data: { owner: 'synthetic-owner-001', local: true, route } }));
+    let resolve!: (value: typeof f.registration) => void;
+    f.getRegistration.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const pending = f.platform.notifications.show({ title: 'Old owner', body: 'Synthetic activity', eventId: '$old' });
+    await vi.waitFor(() => expect(resolve).toBeTypeOf('function'));
+    await f.platform.notifications.setContext?.({ owner: 'synthetic-owner-002', policy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } } });
+    resolve(f.registration);
+    await pending;
+    expect(f.showNotification).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the new owner claim when an old presentation rejects after an account switch', async () => {
+    let reject!: (reason: Error) => void;
+    const show = vi.fn().mockImplementationOnce(() => new Promise<void>((_resolve, fail) => { reject = fail; })).mockResolvedValue(undefined);
+    const f = await setup(show);
+    const request = { title: 'Synthetic alert', body: 'Synthetic activity', eventId: '$same' };
+    const old = Promise.resolve(f.platform.notifications.show(request));
+    const rejected = expect(old).rejects.toThrow('could not be shown');
+    await vi.waitFor(() => expect(reject).toBeTypeOf('function'));
+    await f.platform.notifications.setContext?.({ owner: 'synthetic-owner-002', policy: { pauseUntil: 0, quietHours: { enabled: false, startMinute: 0, endMinute: 0 } } });
+    await f.platform.notifications.show(request);
+    reject(new Error('Synthetic old failure')); await rejected;
+    await f.platform.notifications.show(request);
+    expect(show).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('browser platform', () => {
   it('treats unavailable browser capabilities as unsupported', () => {
     const platform = createBrowserPlatform();

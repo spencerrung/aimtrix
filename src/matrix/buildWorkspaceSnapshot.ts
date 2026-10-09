@@ -70,6 +70,7 @@ import {
 
 interface RelationContent {
   rel_type?: string;
+  is_falling_back?: boolean;
   event_id?: string;
   key?: string;
   'm.in_reply_to'?: { event_id?: string };
@@ -342,7 +343,8 @@ function eventBody(
       : { body: 'This location has invalid coordinates.', kind: 'unsupported', fallbackType: 'm.location' };
   }
   if (typeof content.body !== 'string') return undefined;
-  const body = originalContent['m.relates_to']?.['m.in_reply_to']
+  // Replacement bodies contain new authored content, not the original reply quotation.
+  const body = !replacementContent && originalContent['m.relates_to']?.['m.in_reply_to']
     ? stripReplyFallback(content.body)
     : content.body;
   const richText = {
@@ -516,7 +518,10 @@ function messagesForEvents(
     const rendered = eventBody(event, eventId ? replacements.get(eventId) : undefined);
     if (!rendered || !senderId || !eventId) return [];
     const sender = room.getMember(senderId);
-    const replyEventId = content['m.relates_to']?.['m.in_reply_to']?.event_id;
+    const relation = content['m.relates_to'];
+    // Ordinary thread messages carry a fallback reply for clients without thread support.
+    const threadFallback = relation?.rel_type === 'm.thread' && relation.is_falling_back === true;
+    const replyEventId = threadFallback ? undefined : relation?.['m.in_reply_to']?.event_id;
     const replyEvent = replyEventId ? eventById.get(replyEventId) ?? room.findEventById?.(replyEventId) : undefined;
     const replySenderId = replyEvent?.getSender();
     const replyRendered = replyEvent ? eventBody(replyEvent, replacements.get(replyEventId!)) : undefined;

@@ -19,9 +19,9 @@ function QrScanner({ onScan, onError }: { onScan: (bytes: Uint8ClampedArray) => 
     let controls: { stop: () => void } | undefined;
     void (async () => {
       try {
-        const [{ BrowserQRCodeReader }, { ResultMetadataType }] = await Promise.all([import('@zxing/browser'), import('@zxing/library')]);
+        const [{ MatrixQrReader }, { ResultMetadataType }] = await Promise.all([import('./MatrixQrReader'), import('@zxing/library')]);
         if (stopped || !video.current) return;
-        controls = await new BrowserQRCodeReader().decodeFromVideoDevice(undefined, video.current, (result) => {
+        controls = await new MatrixQrReader().decodeFromVideoDevice(undefined, video.current, (result) => {
           if (!result || stopped) return;
           const segments = result.getResultMetadata()?.get(ResultMetadataType.BYTE_SEGMENTS) as Uint8Array[] | undefined;
           if (!segments?.length) return;

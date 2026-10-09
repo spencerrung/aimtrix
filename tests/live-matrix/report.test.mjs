@@ -96,13 +96,26 @@ test('messaging evidence discards filenames, captions, drafts, bytes and formatt
 
 test('optional Element evidence records the pinned client without session or rendered content', () => {
   const privateValue = randomBytes(24).toString('hex');
-  for (const name of ['element-ui-formatted-interoperability', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification', 'element-ui-aimtrix-declines-verification', 'element-ui-withdraws-verification', 'element-ui-encrypted-poll', 'element-ui-poll-vote', 'element-ui-poll-vote-replaced', 'element-ui-poll-ended', 'element-ui-unencrypted-poll-roundtrip', 'element-ui-encrypted-location', 'element-ui-location-to-aimtrix', 'element-ui-encrypted-voice', 'element-ui-encrypted-voice-playback']) {
+  for (const name of ['element-ui-encrypted-replies', 'element-ui-plain-replies', 'element-ui-formatted-interoperability', 'element-ui-encrypted-room', 'element-ui-encrypted-message', 'element-ui-incoming-sas-verification', 'element-ui-incoming-qr-verification', 'element-ui-aimtrix-declines-verification', 'element-ui-withdraws-verification', 'element-ui-encrypted-poll', 'element-ui-poll-vote', 'element-ui-poll-vote-replaced', 'element-ui-poll-ended', 'element-ui-unencrypted-poll-roundtrip', 'element-ui-encrypted-location', 'element-ui-location-to-aimtrix', 'element-ui-encrypted-voice', 'element-ui-encrypted-voice-playback']) {
     const result = makeReport({ ...base, elementUi: true, failureStage: name, checks: [{ name, passed: true,
       storage: privateValue, renderedContent: privateValue, screenshot: privateValue, accessToken: privateValue }],
     });
     assert.match(result.images.element, /^vectorim\/element-web:v[0-9.]+@sha256:[a-f0-9]{64}$/);
     assert.equal('element' in makeReport(base).images, false);
     assert.deepEqual(result.checks, [{ name, passed: true }]);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
+
+test('Element reply failures retain fixed stages without original or reply content', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const category of ['reply-peer-room', 'reply-peer-original', 'reply-sender-original', 'reply-sender-compose', 'reply-sender-send', 'reply-wire-content', 'reply-peer-preview', 'reply-peer-body']) {
+    assert.equal(failureCategories.find((entry) => category.includes(entry)), category);
+    const result = makeReport({ ...base, elementUi: true, failureStage: 'element-ui-plain-replies',
+      checks: [{ name: 'element-ui-plain-replies', passed: false, category,
+        original: privateValue, reply: privateValue, senderId: privateValue, eventId: privateValue }],
+    });
+    assert.equal(result.checks[0].category, category);
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
@@ -324,5 +337,18 @@ test('failed sync request diagnostics expose only numeric counts and elapsed tim
   assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: 0 } }).metrics, { largeAccountSyncFailedRequests: 0 });
   for (const invalid of [privateValue, NaN, Infinity, -Infinity, { failureText: privateValue }]) {
     assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: invalid, largeAccountLastSyncFailureMs: invalid } }).metrics, {});
+  }
+});
+
+test('poll visibility failures identify the client without retaining poll content', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const category of ['poll-sender-visible', 'poll-recipient-visible']) {
+    assert.equal(failureCategories.find((entry) => category.includes(entry)), category);
+    const result = makeReport({ ...base, failureStage: 'encrypted-poll-create',
+      checks: [{ name: 'encrypted-poll-create', passed: false, category,
+        question: privateValue, answers: [privateValue], senderId: privateValue, eventId: privateValue }],
+    });
+    assert.equal(result.checks[0].category, category);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });

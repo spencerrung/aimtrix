@@ -10,6 +10,12 @@ Text, notices and emotes retain their kind through edits. Unknown user-facing `m
 
 Keyboard and touch actions share copy text/link, reply, thread, reactions, pinning, editing and deletion. A room message can also set the existing private unread reminder. Thread unread reminders and saves remain absent until their own backing contracts land. Room power levels determine message/state-event permissions; deletion uses the SDK's redaction permission check. Operations resolve messages from live or detached history and recheck the active session and permissions after asynchronous work. Failures stay beside the affected message or inside the deletion confirmation.
 
+## Outgoing replies
+
+Replies carry only the new message in `body` and, when formatting is used, `formatted_body`. Plain replies do not require HTML. The standard `m.in_reply_to` relation identifies the original event; explicit replies inside a thread retain `m.thread` and `is_falling_back: false` through the SDK thread send path. Reply-target and selected mentions retain their existing `m.mentions` behavior. Encrypted rooms use the same guarded SDK encryption path.
+
+Aimtrix no longer generates plaintext quotes or `<mx-reply>` fallbacks, following [Matrix rich replies](https://spec.matrix.org/v1.19/client-server-api/#rich-replies), which removed fallback generation in v1.13 and mandatory HTML in v1.3. Incoming legacy plaintext/HTML fallbacks remain supported and stripped before rendering, and the original reply navigation target is preserved.
+
 ## Drafts
 
 See [the private local draft contract](draft-storage.md) for the account/homeserver scope, schema, limits, storage failure, sequential-tab conflict and logout behavior. Draft bodies and quoted context are plaintext in this browser profile. They are never uploaded as Matrix account data. Room and thread drafts retain mention identities, reply/edit context, inline emoji occurrences and code mode. Cancelling or completing an edit restores the preceding composition. Completing an older send cannot clear a newer composition.

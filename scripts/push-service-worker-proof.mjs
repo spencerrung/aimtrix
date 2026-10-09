@@ -9,10 +9,12 @@ let metadata = { owner: 'synthetic-owner-001', policy: { pauseUntil: 0, quietHou
 let storageDenied = false;
 let ledger = Promise.resolve();
 const client = { focus: async () => { focused++; }, postMessage: (message) => messages.push(message) };
+let availableClients = [client];
+const opened = [];
 const self = {
   location: { origin: 'https://aimtrix.example' },
   addEventListener: (type, listener) => listeners.set(type, listener),
-  clients: { matchAll: async () => [client], openWindow: async () => undefined },
+  clients: { matchAll: async () => availableClients, openWindow: async (url) => opened.push(url) },
   registration: { showNotification: async (title, options) => notifications.push({ title, options }) },
   skipWaiting: async () => undefined,
 };
@@ -35,10 +37,13 @@ async function emit(type, event) {
 }
 const payload = { room_id: '!room:example.org', event_id: '$event/1', content: { body: 'Synthetic private content must not be displayed' } };
 await Promise.all([emit('push', { data: { json: () => payload } }), emit('push', { data: { json: () => payload } })]);
-assert.equal(notifications.length, 1, 'Concurrent deliveries share bounded atomic dedup');
+assert.equal(notifications.length, 2, 'Every concurrent delivery fulfills visible-push requirements');
 assert.equal(notifications[0].title, 'Aimtrix');
 assert.equal(notifications[0].options.body, 'New Matrix activity');
 assert.equal(JSON.stringify(notifications[0].options.data), JSON.stringify({ owner: 'synthetic-owner-001', url: '/' }));
+assert.equal(JSON.stringify(notifications[1].options.data), JSON.stringify({ generic: true, url: '/' }));
+assert.equal(notifications[0].options.tag, notifications[1].options.tag, 'Duplicate deliveries replace one coalesced notice');
+assert.equal(notifications[1].options.silent, true);
 assert.equal(JSON.stringify(notifications).includes('private content'), false);
 await emit('notificationclick', { notification: { data: notifications[0].options.data, close: () => undefined } });
 assert.equal(focused, 1);
@@ -48,18 +53,41 @@ await emit('notificationclick', { notification: { data: notifications[0].options
 assert.equal(focused, 1, 'Prior-account notifications cannot reopen an account destination');
 metadata.policy.pauseUntil = Date.now() + 60000;
 await emit('push', { data: { json: () => ({ ...payload, event_id: '$paused' }) } });
-assert.equal(notifications.length, 1);
+assert.equal(notifications.length, 3);
+assert.equal(JSON.stringify(notifications.at(-1).options.data), JSON.stringify({ generic: true, url: '/' }));
 metadata.policy.pauseUntil = 0;
 await emit('push', { data: { json: () => ({ ...payload, event_id: '$paused' }) } });
-assert.equal(notifications.length, 2, 'A paused event did not consume its dedup slot');
+assert.equal(notifications.length, 4, 'A paused event did not consume its dedup slot');
+assert.equal(notifications.at(-1).options.data.owner, metadata.owner);
 for (const invalidEvent of ['broken', '', null, 42, '$bad\u0000event']) {
   const route = sandbox.pushRouteFromPayload({ room_id: '!room:example.org', event_id: invalidEvent });
   assert.equal(route.roomId, undefined); assert.equal(route.eventId, undefined);
 }
 metadata = {};
 await emit('push', { data: { json: () => ({ ...payload, event_id: '$logged-out' }) } });
-assert.equal(notifications.length, 2);
+assert.equal(notifications.length, 5);
 storageDenied = true;
 await emit('push', { data: { json: () => payload } });
-assert.equal(notifications.length, 2, 'Unknown account/policy cannot bypass local silence');
-console.log('Service-worker push proof passed: shared policy, atomic dedup, generic private display, stale-owner rejection, malformed-route rejection.');
+assert.equal(notifications.length, 6, 'Unknown account/policy still fulfills visible push without an account destination');
+assert.equal(notifications.at(-1).options.silent, true);
+assert.equal(JSON.stringify(notifications.at(-1).options.data), JSON.stringify({ generic: true, url: '/' }));
+storageDenied = false;
+metadata = { owner: 'synthetic-owner-003', policy: { pauseUntil: 0 }, seen: [] };
+const localData = { owner: metadata.owner, local: true, route: { roomId: '!room:example.test', eventId: '$local', accountId: '["https://matrix.example.test","@synthetic:example.test"]' } };
+await emit('notificationclick', { notification: { data: localData, close: () => undefined } });
+assert.equal(focused, 2);
+assert.equal(JSON.stringify(messages[0]), JSON.stringify({ type: 'AIMTRIX_PUSH_ROUTE', ...localData.route }));
+availableClients = [];
+await emit('notificationclick', { notification: { data: localData, close: () => undefined } });
+const coldRoute = new URL(opened[0], self.location.origin);
+assert.equal(coldRoute.searchParams.get('room'), localData.route.roomId);
+assert.equal(coldRoute.searchParams.get('event'), localData.route.eventId);
+assert.equal(coldRoute.searchParams.get('account'), localData.route.accountId);
+metadata.owner = 'synthetic-owner-004';
+await emit('notificationclick', { notification: { data: localData, close: () => undefined } });
+assert.equal(opened.length, 1, 'A stale local alert cannot open a cold-start destination');
+await emit('notificationclick', { notification: { data: { ...localData, owner: metadata.owner, route: { ...localData.route, eventId: 'malformed' } }, close: () => undefined } });
+assert.equal(opened[1], '/', 'Malformed local routes degrade to the application');
+await emit('push', { data: { json: () => ({ ...payload, ...localData, event_id: '$forged-local' }) } });
+assert.equal(JSON.stringify(notifications.at(-1).options.data), JSON.stringify({ owner: metadata.owner, url: '/' }), 'Provider data cannot forge a trusted local route');
+console.log('Service-worker push proof passed: shared policy, atomic dedup, generic private display, stale-owner rejection, validated local warm/cold routes and provider isolation.');

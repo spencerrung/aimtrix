@@ -80,7 +80,7 @@ test('active conversation remains legible and reachable across themes', async ({
   }
 });
 
-test('error feedback and shared media viewer remain accessible across themes', async ({ page }, info) => {
+test('invalid Matrix link feedback remains accessible', async ({ page }, info) => {
   await page.goto('/?demo=1');
   const settings = page.getByRole('button', { name: 'Open settings' });
   await expect(settings).toBeVisible({ timeout: 15_000 });
@@ -94,23 +94,31 @@ test('error feedback and shared media viewer remain accessible across themes', a
   await page.screenshot({ path: info.outputPath('link-error.png') });
   await page.keyboard.press('Escape');
 
-  if (info.project.name.includes('mobile')) {
-    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
-    await page.getByRole('button', { name: 'Back to previous view' }).click();
-    const directs = page.getByRole('button', { name: 'Direct Messages', exact: true });
-    await directs.focus();
-    await directs.press('Enter');
-  }
-  await page.getByRole('button', { name: /Mara Chen/ }).click();
-  await page.getByRole('button', { name: 'View aimtrix-mark.svg full size' }).click();
-  const viewer = page.getByRole('dialog', { name: 'Viewing aimtrix-mark.svg' });
-  await expect(viewer).toBeVisible();
-  for (const theme of ['aqua', 'graphite', 'midnight']) {
+  await expect(linkDialog).toBeHidden();
+});
+
+// Each independent theme gets the normal test budget, including its own load
+// and screenshot, rather than sharing one deadline with error-dialog auditing.
+for (const theme of ['aqua', 'graphite', 'midnight']) {
+  test(`shared media viewer remains reachable in ${theme}`, async ({ page }, info) => {
+    await page.goto('/?demo=1');
+    await expect(page.getByRole('button', { name: 'Open settings' })).toBeVisible({ timeout: 15_000 });
+    if (info.project.name.includes('mobile')) {
+      await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+      await page.getByRole('button', { name: 'Back to previous view' }).click();
+      const directs = page.getByRole('button', { name: 'Direct Messages', exact: true });
+      await directs.focus();
+      await directs.press('Enter');
+    }
+    await page.getByRole('button', { name: /Mara Chen/ }).click();
+    await page.getByRole('button', { name: 'View aimtrix-mark.svg full size' }).click();
+    const viewer = page.getByRole('dialog', { name: 'Viewing aimtrix-mark.svg' });
+    await expect(viewer).toBeVisible();
     await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
     await expect(page.locator('html')).toHaveAttribute('data-theme', theme);
     await expect(viewer).toBeInViewport();
     await page.screenshot({ path: info.outputPath(`media-${theme}.png`) });
-  }
-  await page.keyboard.press('Escape');
-  await expect(viewer).toBeHidden();
-});
+    await page.keyboard.press('Escape');
+    await expect(viewer).toBeHidden();
+  });
+}

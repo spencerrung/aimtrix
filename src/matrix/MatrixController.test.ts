@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Blob as NodeBlob } from 'node:buffer';
 import type { MatrixClient, Room } from 'matrix-js-sdk';
+import { createClient } from 'matrix-js-sdk';
 import { MatrixEvent } from 'matrix-js-sdk/lib/models/event.js';
 import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
@@ -36,6 +37,14 @@ function inject(
   internals.client = client as MatrixClient;
   internals.sdk = sdk as typeof import('matrix-js-sdk');
 }
+
+it('keeps link-preview MXC references for authenticated account-owned retrieval', async () => {
+  const controller = new MatrixController(defaultRuntimeConfig);
+  const mxcUrlToHttp = vi.fn().mockReturnValue('https://matrix.test/protected-thumbnail');
+  inject(controller, { getUrlPreview: vi.fn().mockResolvedValue({ 'og:title': 'Synthetic preview', 'og:image': 'mxc://test/preview' }), mxcUrlToHttp });
+  expect(await controller.getLinkPreview('https://example.test/article')).toMatchObject({ title: 'Synthetic preview', imageUrl: 'mxc://test/preview' });
+  expect(mxcUrlToHttp).not.toHaveBeenCalled();
+});
 
 function pushPlatform(subscription?: {
   endpoint: string;
@@ -118,6 +127,34 @@ describe('MatrixController protocol integration', () => {
     };
     return { controller, room, client, events, transactions, add, publish };
   }
+
+  describe.each([false, true])('relation-based replies (encrypted=%s)', (encrypted) => {
+    describe.each([undefined, '$root:test'])('thread=%s', (threadRootId) => {
+      it.each([
+        { name: 'plain', body: 'Synthetic reply', original: 'Synthetic original' },
+        { name: 'formatted', body: '**Synthetic reply**', original: 'Synthetic original', html: '<p><strong>Synthetic reply</strong></p>' },
+        { name: 'multiline', body: 'Synthetic first line\n\nSynthetic second line', original: 'Synthetic original\nSecond original line' },
+        { name: 'reply to a legacy reply', body: 'Synthetic newest reply', original: '> <@earlier:test> Synthetic earlier original\n\nSynthetic prior reply' },
+      ])('sends only new content for $name', async ({ body, original, html }) => {
+        const fixture = deliveryFixture(encrypted);
+        await fixture.controller.sendReply('!room:test', `  ${body}  `, {
+          id: '$reply-to:test', senderId: '@peer:test', body: original, threadRootId,
+        });
+        const content = {
+          msgtype: 'm.text', body,
+          'm.mentions': { user_ids: ['@peer:test'] },
+          'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
+          ...(html ? { format: 'org.matrix.custom.html', formatted_body: html } : {}),
+        };
+        expect(fixture.client.sendEvent).toHaveBeenCalledExactlyOnceWith(
+          '!room:test',
+          ...(threadRootId ? [threadRootId] : []),
+          'm.room.message', content, 'delivery-transaction',
+        );
+        expect(fixture.client.sendMessage).not.toHaveBeenCalled();
+      });
+    });
+  });
 
   it.each(['message', 'reply', 'edit'] as const)('tracks a retained %s local echo when a non-Matrix error rejects the initial send', async (kind) => {
     const fixture = deliveryFixture();
@@ -811,6 +848,28 @@ describe('MatrixController protocol integration', () => {
     Object.defineProperty(document, 'hidden', { configurable: true, value: false });
   });
 
+  it('reports a failed local test and allows a failed message notification to be retried', async () => {
+    const platform = pushPlatform();
+    const show = vi.fn().mockRejectedValueOnce(new Error('The local notification could not be shown.')).mockResolvedValue(undefined);
+    platform.notifications.show = show;
+    const controller = new MatrixController(structuredClone(defaultRuntimeConfig), platform);
+    inject(controller, { getPushActionsForEvent: vi.fn().mockReturnValue({ notify: true }) });
+    await expect(controller.testNotification()).rejects.toThrow('could not be shown');
+    const internals = controller as unknown as ControllerInternals & { notificationPreferences: { desktopNotifications: boolean; notificationSounds: boolean; soundVolume: number } };
+    internals.connection = 'online';
+    internals.notificationPreferences = { desktopNotifications: true, notificationSounds: false, soundVolume: 0 };
+    const event = { getType: () => 'm.room.message', getId: () => '$retry:test', getContent: () => ({ body: 'Synthetic message' }) };
+    const room = { roomId: '!room:test', name: 'Synthetic room' };
+    show.mockRejectedValueOnce(new Error('The local notification could not be shown.'));
+    internals.notifyForMessage(event, room);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    internals.notifyForMessage(event, room);
+    expect(show).toHaveBeenCalledTimes(3);
+    expect(show).toHaveBeenLastCalledWith(expect.objectContaining({ route: { roomId: '!room:test', eventId: '$retry:test' } }));
+    internals.notifyForMessage(event, room);
+    expect(show).toHaveBeenCalledTimes(3);
+  });
+
   it('sends a readable Matrix notice with the Aimtrix nudge marker', async () => {
     const sendEvent = vi.fn().mockResolvedValue({});
     const controller = new MatrixController(structuredClone(defaultRuntimeConfig));
@@ -905,11 +964,32 @@ describe('MatrixController protocol integration', () => {
       expect.objectContaining({
         msgtype: 'm.text',
         'm.mentions': { user_ids: ['@mara:test'] },
-        formatted_body: expect.stringMatching(/^<mx-reply>.*<\/mx-reply><p>Absolutely, <a href="https:\/\/matrix\.to\/#\/%40mara%3Atest">@Mara<\/a>\.<\/p>$/),
+        body: 'Absolutely, @Mara.',
+        format: 'org.matrix.custom.html',
+        formatted_body: '<p>Absolutely, <a href="https://matrix.to/#/%40mara%3Atest">@Mara</a>.</p>',
         'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
       }),
       'synthetic-transaction',
     );
+  });
+
+  it('preserves the explicit reply target when the real SDK adds a thread relation', async () => {
+    const fixture = deliveryFixture();
+    const client = createClient({ baseUrl: 'https://matrix.example.test', userId: '@self:test' });
+    vi.spyOn(client, 'getRoom').mockReturnValue(Object.assign(fixture.room, { getThread: () => undefined }));
+    const complete = vi.spyOn(client as unknown as { sendCompleteEvent: (params: unknown) => Promise<object> }, 'sendCompleteEvent').mockResolvedValue({});
+    inject(fixture.controller, client, deliverySdk);
+    await fixture.controller.sendReply('!room:test', 'Synthetic explicit thread reply', {
+      id: '$thread-reply:test', senderId: '@peer:test', body: 'Synthetic previous reply', threadRootId: '$root:test',
+    });
+    expect(complete).toHaveBeenCalledExactlyOnceWith({
+      roomId: '!room:test', threadId: '$root:test', txnId: expect.any(String),
+      eventObject: { type: 'm.room.message', content: {
+        msgtype: 'm.text', body: 'Synthetic explicit thread reply', 'm.mentions': { user_ids: ['@peer:test'] },
+        'm.relates_to': { rel_type: 'm.thread', event_id: '$root:test', is_falling_back: false,
+          'm.in_reply_to': { event_id: '$thread-reply:test' } },
+      } },
+    });
   });
 
   it('marks the latest thread event read without advancing the main timeline', async () => {
@@ -1007,7 +1087,7 @@ describe('MatrixController protocol integration', () => {
     await expect(controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true)).resolves.toBeUndefined();
     await expect(controller.resolveMedia('mxc://test/photo', 2400, undefined, 'image/png', true)).resolves.toBe('blob:original');
     expect(fetchMedia).toHaveBeenCalledTimes(2);
-    expect(fetchMedia).toHaveBeenNthCalledWith(2, 'https://matrix.test/media/original', { headers: { Accept: 'image/png', Authorization: 'Bearer synthetic-token' } });
+    expect(fetchMedia).toHaveBeenNthCalledWith(2, 'https://matrix.test/media/original', { signal: expect.any(AbortSignal), headers: { Accept: 'image/png', Authorization: 'Bearer synthetic-token' } });
     expect(mxcUrlToHttp).toHaveBeenCalledWith('mxc://test/photo', undefined, undefined, undefined, false, true, true);
     vi.unstubAllGlobals();
   });

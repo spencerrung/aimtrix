@@ -39,7 +39,7 @@ function fakeClient() {
     getAccountData: () => undefined,
     getAccessToken: () => session.accessToken,
     mxcUrlToHttp: () => 'https://matrix.example.test/_matrix/client/v1/media/download/example.test/synthetic',
-    initRustCrypto: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+    initRustCrypto: vi.fn<(options: { useIndexedDB: boolean; cryptoDatabasePrefix: string }) => Promise<void>>().mockResolvedValue(undefined),
     startClient: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     stopClient: vi.fn(),
     clearStores: vi.fn(),
@@ -71,6 +71,7 @@ type Internals = {
   inMemoryRecoveryKey?: Uint8Array<ArrayBuffer>;
   snapshotCache: { messages: Map<string, unknown>; members: Map<string, unknown> };
   lifecycleRevision: number;
+  cryptoOwnership?: unknown;
   connection: string;
   currentIssue?: string;
   connect: (session: StoredMatrixSession, revision?: number) => Promise<void>;
@@ -97,6 +98,131 @@ afterEach(() => {
 });
 
 describe('MatrixController session lifecycle', () => {
+  it('refuses concurrent restoration of the same persistent crypto store', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const owner = controllerFixture(); const contender = controllerFixture();
+    await Promise.all([owner.controller.initialize(), contender.controller.initialize()]);
+    expect(first.initRustCrypto.mock.calls.length + second.initRustCrypto.mock.calls.length).toBe(1);
+    expect(first.startClient.mock.calls.length + second.startClient.mock.calls.length).toBe(1);
+    expect([owner.controller.getSnapshot().status, contender.controller.getSnapshot().status]).toContain('crypto-in-use');
+    expect(contender.platform.notifications.clearContext).not.toHaveBeenCalled();
+    expect(contender.credentials.clear).not.toHaveBeenCalled();
+    expect(contender.controller.getDraftScope()).toEqual({ userId: session.userId, homeserver: session.baseUrl });
+  });
+
+  it('lets different accounts and devices own independent crypto stores', async () => {
+    const clients = [fakeClient(), fakeClient(), fakeClient()];
+    clients.forEach((client) => createClient.mockReturnValueOnce(client));
+    const fixtures = [controllerFixture(), controllerFixture({ ...session, userId: '@other:example.test' }),
+      controllerFixture({ ...session, deviceId: 'OTHER' })];
+    await Promise.all(fixtures.map(({ controller }) => controller.initialize()));
+    clients.forEach((client) => expect(client.startClient).toHaveBeenCalledOnce());
+    expect(new Set(clients.map((client) => client.initRustCrypto.mock.calls[0][0].cryptoDatabasePrefix)).size).toBe(3);
+  });
+
+  it('fails closed without Web Locks and never initializes crypto or clears keys', async () => {
+    Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined });
+    const { controller, credentials } = controllerFixture();
+    await controller.initialize();
+    expect(controller.getSnapshot()).toEqual({ status: 'crypto-unavailable' });
+    expect(createClient).not.toHaveBeenCalled();
+    expect(credentials.clear).not.toHaveBeenCalled();
+  });
+
+  it('keeps ownership through delayed shutdown and opens only after a safe takeover', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const owner = controllerFixture(); const contender = controllerFixture();
+    await owner.controller.initialize(); await contender.controller.initialize();
+    const leaving = deferred<void>(); owner.internals.groupCallEngine = { leave: () => leaving.promise };
+    const takeover = contender.controller.retry(true);
+    await vi.waitFor(() => expect(first.stopClient).toHaveBeenCalled());
+    expect(second.initRustCrypto).not.toHaveBeenCalled();
+    expect(owner.controller.getSnapshot().status).toBe('crypto-in-use');
+    leaving.resolve(); await takeover;
+    expect(second.startClient).toHaveBeenCalledOnce();
+    expect(first.clearStores).not.toHaveBeenCalled();
+    expect(owner.credentials.clear).not.toHaveBeenCalled();
+    expect(contender.credentials.clear).not.toHaveBeenCalled();
+  });
+
+  it('holds the lock when shutdown interrupts Rust initialization', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    const initialization = deferred<void>(); first.initRustCrypto.mockReturnValue(initialization.promise);
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const owner = controllerFixture(); const contender = controllerFixture();
+    const restoring = owner.controller.initialize();
+    await vi.waitFor(() => expect(first.initRustCrypto).toHaveBeenCalled());
+    owner.controller.shutdown();
+    await contender.controller.initialize();
+    expect(second.initRustCrypto).not.toHaveBeenCalled();
+    initialization.resolve(); await restoring;
+    await contender.controller.retry();
+    expect(first.startClient).not.toHaveBeenCalled();
+    expect(first.stopClient).toHaveBeenCalledTimes(2);
+    expect(second.startClient).toHaveBeenCalledOnce();
+  });
+
+  it('retains exclusive ownership throughout credential invalidation and database deletion', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const owner = controllerFixture(); const contender = controllerFixture();
+    await owner.controller.initialize();
+    const requests: { onsuccess?: () => void }[] = [];
+    const deletion = vi.fn(() => { const request = {}; requests.push(request); return request; });
+    vi.stubGlobal('indexedDB', { deleteDatabase: deletion });
+    const forgetting = owner.controller.forgetSession();
+    await vi.waitFor(() => expect(deletion).toHaveBeenCalledTimes(3));
+    await contender.controller.initialize();
+    expect(second.initRustCrypto).not.toHaveBeenCalled();
+    expect(owner.credentials.clear).not.toHaveBeenCalled();
+    requests.forEach((request) => request.onsuccess?.());
+    await vi.waitFor(() => expect(deletion).toHaveBeenCalledTimes(4));
+    requests[3].onsuccess?.(); await forgetting;
+    expect(owner.credentials.clear).toHaveBeenCalledOnce();
+    await contender.controller.retry();
+    expect(second.startClient).toHaveBeenCalledOnce();
+  });
+
+  it('refuses forgetting a dormant account owned by another controller before changing the vault', async () => {
+    let serialized: string | undefined;
+    const vault = createAccountCredentialStore({ load: async () => serialized,
+      save: async (value) => { serialized = value; }, clear: async () => { serialized = undefined; } });
+    await vault.save(session);
+    const first = fakeClient(); createClient.mockReturnValueOnce(first);
+    const owner = controllerFixture(); await owner.controller.initialize();
+    const dormant = controllerFixture(undefined); dormant.platform.accounts = vault;
+    const deletion = vi.fn(); vi.stubGlobal('indexedDB', { deleteDatabase: deletion });
+    await expect(dormant.controller.forgetDormantAccount(accountId(session))).rejects.toThrow('another Aimtrix window');
+    expect(await vault.get(accountId(session))).toEqual(session);
+    expect(deletion).not.toHaveBeenCalled();
+  });
+
+  it('does not release a replacement owner when an obsolete vault lookup finishes', async () => {
+    let serialized: string | undefined;
+    const vault = createAccountCredentialStore({ load: async () => serialized,
+      save: async (value) => { serialized = value; }, clear: async () => { serialized = undefined; } });
+    const other = { ...session, userId: '@other:example.test', deviceId: 'OTHER' };
+    await vault.save(other); await vault.save(session);
+    const loading = deferred<StoredMatrixSession | undefined>();
+    vi.spyOn(vault, 'get').mockImplementationOnce(() => loading.promise);
+    const owner = controllerFixture(); owner.platform.accounts = vault;
+    const next = fakeClient(); const collision = fakeClient();
+    createClient.mockReturnValueOnce(next).mockReturnValueOnce(collision);
+    const restoring = owner.controller.initialize();
+    await vi.waitFor(() => expect(vault.get).toHaveBeenCalledOnce());
+    const oldOwnership = owner.internals.cryptoOwnership;
+    const connecting = owner.internals.connect(other, ++owner.internals.lifecycleRevision);
+    await vi.waitFor(() => { expect(owner.internals.cryptoOwnership).toBeDefined(); expect(owner.internals.cryptoOwnership).not.toBe(oldOwnership); });
+    loading.resolve(session);
+    await Promise.all([restoring, connecting]);
+    expect(next.startClient).toHaveBeenCalledOnce();
+    const contender = controllerFixture(other); await contender.controller.initialize();
+    expect(contender.controller.getSnapshot().status).toBe('crypto-in-use');
+    expect(collision.initRustCrypto).not.toHaveBeenCalled();
+  });
+
   it('switches identities only after private teardown and preserves the dormant credential', async () => {
     let serialized: string | undefined;
     const vault = createAccountCredentialStore({
@@ -415,10 +541,12 @@ describe('MatrixController session lifecycle', () => {
     const restoring = controller.initialize();
     await vi.waitFor(() => expect(oldClient.initRustCrypto).toHaveBeenCalled());
     const revision = ++internals.lifecycleRevision;
-    await internals.connect({ ...session, accessToken: 'new-synthetic-token', deviceId: 'NEXT' }, revision);
+    const connecting = internals.connect({ ...session, accessToken: 'new-synthetic-token', deviceId: 'NEXT' }, revision);
+    await Promise.resolve();
+    expect(nextClient.initRustCrypto).not.toHaveBeenCalled();
     if (outcome === 'resolve') initialization.resolve();
     else initialization.reject(new Error('Old crypto failed'));
-    await restoring;
+    await Promise.all([restoring, connecting]);
     expect(internals.client).toBe(nextClient);
     expect(oldClient.startClient).not.toHaveBeenCalled();
     expect(nextClient.stopClient).not.toHaveBeenCalled();
@@ -432,8 +560,9 @@ describe('MatrixController session lifecycle', () => {
     const { controller, internals } = controllerFixture();
     const restoring = controller.initialize();
     await vi.waitFor(() => expect(oldClient.startClient).toHaveBeenCalled());
-    await internals.connect({ ...session, accessToken: 'new-synthetic-token', deviceId: 'NEXT' }, ++internals.lifecycleRevision);
-    starting.resolve(); await restoring;
+    const connecting = internals.connect({ ...session, accessToken: 'new-synthetic-token', deviceId: 'NEXT' }, ++internals.lifecycleRevision);
+    await Promise.resolve(); expect(nextClient.initRustCrypto).not.toHaveBeenCalled();
+    starting.resolve(); await Promise.all([restoring, connecting]);
     expect(internals.client).toBe(nextClient);
     expect(nextClient.stopClient).not.toHaveBeenCalled();
     expect(oldClient.doesServerSupportThread).not.toHaveBeenCalled();
@@ -456,8 +585,10 @@ describe('MatrixController session lifecycle', () => {
   it('keeps cleanup retryable when an account database is blocked and then deletes retained device stores', async () => {
     const { controller, credentials } = controllerFixture({ ...session, accessToken: '', recovery: 'hard', retainedDeviceIds: ['OLDER'] });
     let blocked = true;
+    const pending: { onsuccess?: () => void }[] = [];
     const deleteDatabase = vi.fn(() => {
       const request = { onsuccess: undefined as (() => void) | undefined, onblocked: undefined as (() => void) | undefined };
+      pending.push(request);
       queueMicrotask(() => { if (blocked) request.onblocked?.(); else request.onsuccess?.(); });
       return request;
     });
@@ -466,6 +597,10 @@ describe('MatrixController session lifecycle', () => {
     await controller.forgetSession();
     expect(controller.getSnapshot()).toMatchObject({ status: 'error', issue: 'storage' });
     expect(credentials.clear).not.toHaveBeenCalled();
+    const contender = controllerFixture();
+    await contender.controller.initialize();
+    expect(contender.controller.getSnapshot().status).toBe('crypto-in-use');
+    pending.forEach((request) => request.onsuccess?.());
     blocked = false; deleteDatabase.mockClear();
     await controller.retry();
     for (const deviceId of [session.deviceId, 'OLDER']) {

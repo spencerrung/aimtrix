@@ -1,0 +1,6 @@
+@layer layout {
+  /* Match the base picker layer; the hook bounds the surface and results shrink below its header. */
+  .emoji-tray.composer-picker, .sticker-tray.composer-picker { position: fixed; z-index: 1000; right: auto; bottom: auto; display: flex; flex-direction: column; max-height: calc(100vh - 24px); overflow-y: auto; }
+  .composer-picker > header, .composer-picker > label { flex-shrink: 0; }
+  .composer-picker > div { min-height: 0; overscroll-behavior: contain; }
+}

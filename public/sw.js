@@ -1,6 +1,8 @@
 /* global self, caches, fetch, URL, Response, importScripts */
 importScripts('/notification-policy.js');
 const CACHE = 'aimtrix-shell-v3';
+// Replaced from the production entry + core Workspace static import graphs.
+const BUILD_SHELL = [];
 const SHELL = [
   '/',
   '/aimtrix-mark.svg',
@@ -11,10 +13,21 @@ const SHELL = [
   '/icons/aimtrix-512-maskable.png',
   '/icons/apple-touch-icon.png',
   '/screenshots/aimtrix-desktop.png',
+  ...BUILD_SHELL,
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    try {
+      await cache.addAll(SHELL);
+    } catch (error) {
+      // A failed candidate must not activate or leave an incomplete shell cache.
+      // The last working version is deleted only by a successful activation.
+      await caches.delete(CACHE);
+      throw error;
+    }
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -56,36 +69,71 @@ self.addEventListener('push', (event) => {
     let owner;
     try {
       owner = await globalThis.aimtrixNotificationPolicy.transaction((state) => {
-        if (!state?.owner || globalThis.aimtrixNotificationPolicy.paused(state.policy)) return { state: state ?? {}, result: undefined };
+        if (typeof state?.owner !== 'string' || !/^[A-Za-z0-9_-]{16,128}$/.test(state.owner) || globalThis.aimtrixNotificationPolicy.paused(state.policy)) return { state: state ?? {}, result: undefined };
         const claimed = globalThis.aimtrixNotificationPolicy.claim(state.seen ?? [], route.eventId ? `${state.owner}:${route.eventId}` : undefined);
         return { state: { ...state, seen: claimed.seen }, result: claimed.accepted ? state.owner : undefined };
       });
-    } catch { return; } // Unknown policy/account: do not bypass local silence.
-    if (!owner) return;
+    } catch { /* Unknown account/policy gets an unaddressed, quiet visible update. */ }
+    // userVisibleOnly applies to every push, including duplicates and quiet time.
+    // One stable tag replaces the existing notice without another audible alert.
     await self.registration.showNotification('Aimtrix', {
-      body: 'New Matrix activity',
-      tag: `aimtrix-${owner}`,
+      body: owner ? 'New Matrix activity' : 'Open Aimtrix to check for updates.',
+      tag: 'aimtrix-background-update',
       renotify: false,
+      silent: owner ? undefined : true,
       // Provider identifiers cannot prove which signed-in account they belong to.
       // A provider push can open Aimtrix, never choose a conversation/account.
-      data: { owner, url: '/' },
+      data: owner ? { owner, url: '/' } : { generic: true, url: '/' },
       actions: [{ action: 'open', title: 'Open Aimtrix' }],
     });
   })());
 });
 
+// This route is set only by the foreground adapter after account ownership is
+// established. Provider push data is never copied into notification data.
+function localNotificationRoute(data) {
+  if (data?.local !== true || !data.route || typeof data.route !== 'object') return undefined;
+  const route = pushRouteFromPayload(data.route);
+  if (!route.roomId) return undefined;
+  const accountId = data.route.accountId;
+  if (accountId !== undefined) {
+    if (typeof accountId !== 'string' || accountId.length > 1024) return undefined;
+    try {
+      const parts = JSON.parse(accountId);
+      if (!Array.isArray(parts) || parts.length !== 2 || !parts.every((part) => typeof part === 'string' && part.length > 0 && part.length <= 512)) return undefined;
+    } catch { return undefined; }
+    route.accountId = accountId;
+  }
+  return route;
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const owner = event.notification.data?.owner;
   event.waitUntil((async () => {
+    if (event.notification.data?.generic === true) {
+      const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+      const existing = clients.find((client) => 'focus' in client);
+      return existing ? existing.focus() : self.clients.openWindow('/');
+    }
     let current;
     try { current = await globalThis.aimtrixNotificationPolicy.transaction((state) => ({ state: state ?? {}, result: typeof owner === 'string' && state?.owner === owner })); }
     catch { return; }
     if (!current) return;
+    const route = localNotificationRoute(event.notification.data);
     const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
     const existing = clients.find((client) => 'focus' in client);
-    if (existing) return existing.focus();
-    return self.clients.openWindow('/');
+    if (existing) {
+      if (route) existing.postMessage({ type: 'AIMTRIX_PUSH_ROUTE', ...route });
+      return existing.focus();
+    }
+    const target = new URL('/', self.location.origin);
+    if (route) {
+      target.searchParams.set('room', route.roomId);
+      if (route.eventId) target.searchParams.set('event', route.eventId);
+      if (route.accountId) target.searchParams.set('account', route.accountId);
+    }
+    return self.clients.openWindow(`${target.pathname}${target.search}`);
   })());
 });
 
@@ -97,12 +145,11 @@ self.addEventListener('fetch', (event) => {
 
   if (request.mode === 'navigate') {
     event.respondWith(
+      // The installed shell belongs to this worker's build revision. Keep it
+      // immutable until a replacement worker installs successfully: a resolved
+      // navigation can be an HTTP error, maintenance page, or redirect, and a
+      // newer document may require assets this worker has never cached.
       fetch(request)
-        .then((response) => {
-          const copy = response.clone();
-          void caches.open(CACHE).then((cache) => cache.put('/', copy));
-          return response;
-        })
         .catch(() => caches.open(CACHE).then((cache) => cache.match('/'))),
     );
     return;
@@ -116,7 +163,9 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/screenshots/')
   ) {
     event.respondWith(
-      caches.open(CACHE).then((cache) => cache.match(request)).then(
+      // Module requests can carry Origin while install fetches do not. These
+      // same-origin build outputs are identical across request header variants.
+      caches.open(CACHE).then((cache) => cache.match(request, { ignoreVary: BUILD_SHELL.includes(url.pathname) })).then(
         (cached) =>
           cached ||
           fetch(request).then((response) => {

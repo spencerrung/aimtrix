@@ -91,6 +91,75 @@ function fakeClient(
   } as unknown as MatrixClient;
 }
 
+describe('thread fallback reply previews', () => {
+  it.each(['live', 'history', 'rehydrated'] as const)('distinguishes ordinary thread participation from explicit replies in %s snapshots', (source) => {
+    const event = (id: string, body: string, relation?: Record<string, unknown>) => new SDKEvent({
+      event_id: id, room_id: '!room:test', sender: '@mara:test', origin_server_ts: 1000,
+      type: 'm.room.message', content: { msgtype: 'm.text', body, ...(relation ? { 'm.relates_to': relation } : {}) },
+    });
+    const root = event('$root:test', 'Thread root');
+    const ordinary = event('$ordinary:test', 'First ordinary thread message', {
+      rel_type: 'm.thread', event_id: '$root:test', is_falling_back: true,
+      'm.in_reply_to': { event_id: '$root:test' },
+    });
+    const next = event('$next:test', 'Second ordinary thread message', {
+      rel_type: 'm.thread', event_id: '$root:test', is_falling_back: true,
+      'm.in_reply_to': { event_id: '$ordinary:test' },
+    });
+    const explicit = event('$explicit:test', 'Intentional thread reply', {
+      rel_type: 'm.thread', event_id: '$root:test', is_falling_back: false,
+      'm.in_reply_to': { event_id: '$ordinary:test' },
+    });
+    const roomReply = event('$room-reply:test', 'Intentional room reply', { 'm.in_reply_to': { event_id: '$root:test' } });
+    const messages = [ordinary, next, explicit].map((item) => source === 'rehydrated' ? new SDKEvent(JSON.parse(JSON.stringify(item.event))) : item);
+    const cache = createWorkspaceSnapshotCache();
+    const client = fakeClient(source === 'live' ? [root, ...messages, roomReply] : [root, roomReply], source === 'live'
+      ? { threads: [{ id: '$root:test', length: 3, rootEvent: root, events: [root, ...messages] }] } : {});
+    if (source !== 'live') cache.threadHistory.set('$root:test', {
+      roomId: '!room:test', rootId: '$root:test', root, rootStatus: 'found', events: messages,
+      state: { mode: 'history', revision: 1, canLoadOlder: false, canLoadNewer: false },
+    });
+    const snapshot = buildWorkspaceSnapshot(client, 'online', [], [], cache);
+    const thread = snapshot.threadsByRoot['$root:test'];
+    expect(thread.replyCount).toBe(3);
+    expect(thread.messages.map((message) => message.body)).toEqual(['First ordinary thread message', 'Second ordinary thread message', 'Intentional thread reply']);
+    expect(thread.messages[0].replyTo).toBeUndefined();
+    expect(thread.messages[1].replyTo).toBeUndefined();
+    expect(thread.messages[2].replyTo).toMatchObject({ eventId: '$ordinary:test', body: 'First ordinary thread message' });
+    expect(snapshot.messagesByRoom['!room:test'].find((message) => message.id === '$room-reply:test')?.replyTo)
+      .toMatchObject({ eventId: '$root:test', body: 'Thread root' });
+  });
+
+  it.each([undefined, false])('keeps legacy explicit thread replies with is_falling_back=%s', (fallingBack) => {
+    const root = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Root' }, '$root');
+    const reply = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Reply', 'm.relates_to': {
+      rel_type: 'm.thread', event_id: '$root', is_falling_back: fallingBack, 'm.in_reply_to': { event_id: '$root' },
+    } }, '$reply');
+    const snapshot = buildWorkspaceSnapshot(fakeClient([root, reply], { threads: [{ id: '$root', length: 1, rootEvent: root, events: [root, reply] }] }), 'online');
+    expect(snapshot.threadsByRoot.$root.messages[0].replyTo).toMatchObject({ eventId: '$root', body: 'Root' });
+  });
+});
+
+describe('reply content preservation', () => {
+  it.each(['room reply', 'thread fallback', 'edited room reply', 'edited thread reply'])('preserves literal greater-than lines in %s', (kind) => {
+    const body = '>42 is the threshold\n>>output\nKeep this line';
+    const threaded = kind.includes('thread');
+    const edited = kind.startsWith('edited');
+    const relation = { 'm.in_reply_to': { event_id: '$root' }, ...(threaded ? { rel_type: 'm.thread', event_id: '$root', is_falling_back: true } : {}) };
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: edited ? '> <@buddy:test> Quoted\n\nBefore' : body, 'm.relates_to': relation }, '$original');
+    const replacement = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* ' + body,
+      'm.new_content': { msgtype: 'm.text', body }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' } }, '$edit');
+    const snapshot = buildWorkspaceSnapshot(fakeClient(edited ? [original, replacement] : [original]), 'online');
+    expect(snapshot.messagesByRoom['!room:test'][0]).toMatchObject({ body, edited });
+  });
+  it.each(['> authored quotation\nKeep this line', '> <@buddy:test> authored example\n\nKeep this line'])('does not treat replacement content as the original reply fallback: %s', (body) => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: '> <@buddy:test> Quoted\n\nBefore', 'm.relates_to': { 'm.in_reply_to': { event_id: '$root' } } }, '$original');
+    const replacement = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* ' + body,
+      'm.new_content': { msgtype: 'm.text', body }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' } }, '$edit');
+    expect(buildWorkspaceSnapshot(fakeClient([original, replacement]), 'online').messagesByRoom['!room:test'][0].body).toBe(body);
+  });
+});
+
 describe('favorite and navigation room summaries', () => {
   it('uses only the standard favorite tag, independently of unread badges', () => {
     const favorite = fakeClient([], { tags: { 'm.favourite': { order: 0.5 }, 'org.example.custom': {} } });
@@ -750,6 +819,21 @@ describe('buildWorkspaceSnapshot threads', () => {
     const summary = buildWorkspaceSnapshot(fakeClient([]), 'online', [], [], cache).threadsByRoot['$root:test'];
     expect(summary.latestReplyEventId).toBeUndefined();
     expect(summary.latestReply).toBeUndefined();
+  });
+
+  it.each([
+    { name: 'relation-only', body: 'Synthetic reply' },
+    { name: 'legacy fallback', body: '> <@mara:test> Synthetic original\n> Second original line\n\nSynthetic reply' },
+  ])('renders $name replies with the original navigation target', ({ body }) => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: 'Synthetic original\nSecond original line' }, '$source');
+    const reply = fakeEvent('m.room.message', {
+      msgtype: 'm.text', body, 'm.relates_to': { 'm.in_reply_to': { event_id: '$source' } },
+    }, '$reply');
+    const snapshot = buildWorkspaceSnapshot(fakeClient([original, reply]), 'online');
+    expect(snapshot.messagesByRoom['!room:test'][1]).toMatchObject({
+      id: '$reply', body: 'Synthetic reply',
+      replyTo: { eventId: '$source', body: 'Synthetic original\nSecond original line' },
+    });
   });
 
   it('keeps thread replies out of the main timeline and exposes a root summary', () => {
