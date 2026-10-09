@@ -1126,9 +1126,8 @@ export class MatrixController {
         title: string('og:title'),
         description: string('og:description'),
         siteName: string('og:site_name'),
-        imageUrl: image?.startsWith('mxc://')
-          ? client.mxcUrlToHttp(image, 640, 360, 'scale', false, true, true) ?? undefined
-          : undefined,
+        // Keep MXC ownership in the authenticated resolver; an img cannot attach a bearer token.
+        imageUrl: image?.startsWith('mxc://') ? image : undefined,
       };
     } catch {
       return undefined;

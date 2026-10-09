@@ -287,23 +287,33 @@ export function MessageContent({ message, dataSaver = false, autoplayMedia = tru
     </Dialog> : null}
   </>;
 }
-export function LinkPreviewCard({ message, onLoad }: { message: MessageSummary; onLoad?: (url: string) => Promise<LinkPreview | undefined> }) {
+function LinkPreviewImage({ source, dataSaver }: { source: string; dataSaver: boolean }) {
+  const [revealed, setRevealed] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const deferred = dataSaver && !revealed;
+  const media = useMediaSourceState(deferred ? undefined : source, 640);
+  if (deferred) return <button type="button" onClick={() => setRevealed(true)}>Load preview image</button>;
+  return media.url && !failed ? <img src={media.url} alt="" loading="lazy" onError={() => setFailed(true)} /> : null;
+}
+
+export function LinkPreviewCard({ message, onLoad, dataSaver = false }: { message: MessageSummary; onLoad?: (url: string) => Promise<LinkPreview | undefined>; dataSaver?: boolean }) {
   const url = firstSharedUrl(message.body);
-  const [preview, setPreview] = useState<LinkPreview>();
+  const [loaded, setLoaded] = useState<{ id: string; url: string; loader: typeof onLoad; preview?: LinkPreview }>();
+  const preview = loaded?.id === message.id && loaded.url === url && loaded.loader === onLoad ? loaded.preview : undefined;
   const [dismissed, setDismissed] = useState(() => { try { return localStorage.getItem(`aimtrix.dismissed-link-preview.v1:${message.id}`) === '1'; } catch { return false; } });
 
   useEffect(() => {
     if (!url || !onLoad || dismissed) return;
     let active = true;
     const request = onLoad(url);
-    void request.then((result) => { if (active) setPreview(result); }).catch(() => { /* The original link remains available. */ });
+    void request.then((result) => { if (active) setLoaded({ id: message.id, url, loader: onLoad, preview: result }); }).catch(() => { /* The original link remains available. */ });
     return () => { active = false; };
-  }, [dismissed, onLoad, url]);
+  }, [dismissed, message.id, onLoad, url]);
 
   if (!url || dismissed || !preview || (!preview.title && !preview.description && !preview.imageUrl)) return null;
   return (
     <article className="link-preview">
-      {preview.imageUrl ? <img src={preview.imageUrl} alt="" loading="lazy" /> : null}
+      {preview.imageUrl?.startsWith('mxc://') ? <LinkPreviewImage key={preview.imageUrl} source={preview.imageUrl} dataSaver={dataSaver} /> : null}
       <div>
         <small>{preview.siteName || new URL(url).hostname}</small>
         {preview.title ? <a href={url} target="_blank" rel="noreferrer">{preview.title}</a> : null}

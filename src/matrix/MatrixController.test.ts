@@ -38,6 +38,14 @@ function inject(
   internals.sdk = sdk as typeof import('matrix-js-sdk');
 }
 
+it('keeps link-preview MXC references for authenticated account-owned retrieval', async () => {
+  const controller = new MatrixController(defaultRuntimeConfig);
+  const mxcUrlToHttp = vi.fn().mockReturnValue('https://matrix.test/protected-thumbnail');
+  inject(controller, { getUrlPreview: vi.fn().mockResolvedValue({ 'og:title': 'Synthetic preview', 'og:image': 'mxc://test/preview' }), mxcUrlToHttp });
+  expect(await controller.getLinkPreview('https://example.test/article')).toMatchObject({ title: 'Synthetic preview', imageUrl: 'mxc://test/preview' });
+  expect(mxcUrlToHttp).not.toHaveBeenCalled();
+});
+
 function pushPlatform(subscription?: {
   endpoint: string;
   provider?: 'web' | 'native';
