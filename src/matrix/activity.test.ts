@@ -26,7 +26,7 @@ function setup() {
     owner: (next?: MatrixClient) => { current = next; }, receipt: (value: typeof receipt, order: number | null = null) => { receipt = value; ordering = order; },
     membership: (value: string) => { membership = value; }, follows: (threads: Record<string, boolean>) => { accountData = new MatrixEvent({ type: THREAD_FOLLOW_EVENT, content: { version: 1, threads } }); } };
 }
-const notification = (event: ReturnType<typeof raw>, read = false) => ({ room_id: '!room:test', event, ts: event.origin_server_ts, read, actions: [] });
+const notification = (event: NonNullable<ConstructorParameters<typeof MatrixEvent>[0]>, read = false) => ({ room_id: '!room:test', event, ts: event.origin_server_ts, read, actions: [] });
 
 describe('ActivityStore', () => {
   it('provides a safe formatted preview without reply fallback or active HTML', async () => {
@@ -46,6 +46,19 @@ describe('ActivityStore', () => {
     expect(JSON.stringify(f.store.snapshot().items[0].formatted)).toContain('Updated reply');
     vi.spyOn(mapped, 'getContent').mockReturnValue({ ...event.content, formatted_body: `<p>${'x'.repeat(8193)}</p>` });
     expect(f.store.snapshot().items[0].formatted).toBeUndefined();
+  });
+  it('preserves literal comparisons and authored replacement quotes in activity previews', async () => {
+    const f = setup();
+    const event = { ...raw('$reply'), content: { msgtype: 'm.text', body: '>42 is the threshold\nKeep this line',
+      'm.relates_to': { 'm.in_reply_to': { event_id: '$root' } } } };
+    f.http.mockResolvedValueOnce({ notifications: [notification(event)] });
+    await f.store.loadOlder();
+    expect(f.store.snapshot().items[0].body).toBe(event.content.body);
+    const mapped = f.mapper.mock.results[0].value as MatrixEvent;
+    const body = '> authored quotation\nKeep this line';
+    mapped.makeReplaced(new MatrixEvent({ ...raw('$edit'), content: { msgtype: 'm.text', body: '* ' + body,
+      'm.new_content': { msgtype: 'm.text', body }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$reply' } } }));
+    expect(f.store.snapshot().items[0].body).toBe(body);
   });
   it('keeps separate thread notification events and paginates without timeline writes', async () => {
     const f = setup();

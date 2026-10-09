@@ -343,7 +343,8 @@ function eventBody(
       : { body: 'This location has invalid coordinates.', kind: 'unsupported', fallbackType: 'm.location' };
   }
   if (typeof content.body !== 'string') return undefined;
-  const body = originalContent['m.relates_to']?.['m.in_reply_to']
+  // Replacement bodies contain new authored content, not the original reply quotation.
+  const body = !replacementContent && originalContent['m.relates_to']?.['m.in_reply_to']
     ? stripReplyFallback(content.body)
     : content.body;
   const richText = {

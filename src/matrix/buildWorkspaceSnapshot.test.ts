@@ -140,6 +140,26 @@ describe('thread fallback reply previews', () => {
   });
 });
 
+describe('reply content preservation', () => {
+  it.each(['room reply', 'thread fallback', 'edited room reply', 'edited thread reply'])('preserves literal greater-than lines in %s', (kind) => {
+    const body = '>42 is the threshold\n>>output\nKeep this line';
+    const threaded = kind.includes('thread');
+    const edited = kind.startsWith('edited');
+    const relation = { 'm.in_reply_to': { event_id: '$root' }, ...(threaded ? { rel_type: 'm.thread', event_id: '$root', is_falling_back: true } : {}) };
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: edited ? '> <@buddy:test> Quoted\n\nBefore' : body, 'm.relates_to': relation }, '$original');
+    const replacement = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* ' + body,
+      'm.new_content': { msgtype: 'm.text', body }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' } }, '$edit');
+    const snapshot = buildWorkspaceSnapshot(fakeClient(edited ? [original, replacement] : [original]), 'online');
+    expect(snapshot.messagesByRoom['!room:test'][0]).toMatchObject({ body, edited });
+  });
+  it.each(['> authored quotation\nKeep this line', '> <@buddy:test> authored example\n\nKeep this line'])('does not treat replacement content as the original reply fallback: %s', (body) => {
+    const original = fakeEvent('m.room.message', { msgtype: 'm.text', body: '> <@buddy:test> Quoted\n\nBefore', 'm.relates_to': { 'm.in_reply_to': { event_id: '$root' } } }, '$original');
+    const replacement = fakeEvent('m.room.message', { msgtype: 'm.text', body: '* ' + body,
+      'm.new_content': { msgtype: 'm.text', body }, 'm.relates_to': { rel_type: 'm.replace', event_id: '$original' } }, '$edit');
+    expect(buildWorkspaceSnapshot(fakeClient([original, replacement]), 'online').messagesByRoom['!room:test'][0].body).toBe(body);
+  });
+});
+
 describe('favorite and navigation room summaries', () => {
   it('uses only the standard favorite tag, independently of unread badges', () => {
     const favorite = fakeClient([], { tags: { 'm.favourite': { order: 0.5 }, 'org.example.custom': {} } });
