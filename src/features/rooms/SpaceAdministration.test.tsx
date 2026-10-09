@@ -24,7 +24,9 @@ it('adds a recommended child and confirms explicit removal', async () => {
   fireEvent.click(screen.getByRole('checkbox', { name: 'Recommend to new members' }));
   fireEvent.click(screen.getByRole('button', { name: 'Add to space' }));
   await waitFor(() => expect(addChild).toHaveBeenCalledWith('!space:example.test', '!new:example.test', true));
-  fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
+  const removeButton = screen.getByRole('button', { name: 'Remove' });
+  await waitFor(() => expect(removeButton).toBeEnabled());
+  fireEvent.click(removeButton);
   expect(removeChild).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'Remove from space' }));
   await waitFor(() => expect(removeChild).toHaveBeenCalledWith('!space:example.test', '!existing:example.test'));
