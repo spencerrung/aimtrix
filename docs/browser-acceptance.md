@@ -35,6 +35,8 @@ The lifecycle suite verifies a real registered worker serving a previously warme
 
 The offline check does not promise first-visit offline availability, cached Matrix history, or recovery of uncached optional assets. The replacement check does not validate a homelab reverse proxy, installed-app lifecycle, or native-shell updater. Record real iPhone and Android keyboard, pinch, safe-area, suspend/resume, storage, and installed-PWA results separately. When running independent Playwright jobs locally, give each a separate `--output` directory so one job does not delete another's screenshots and traces.
 
+The installed document remains tied to its service-worker build revision. Network navigations do not overwrite it; a successfully installed replacement worker supplies the next offline document. `e2e/pwa-shell-cache.spec.ts` exercises real production responses for 404/503, JSON, maintenance HTML, redirects, and non-root documents, then requires the existing application to reopen offline and recover online. A newer navigation document cannot silently replace the current build's offline document. Runtime configuration remains outside Cache Storage.
+
 ### Integrated shell regression matrix
 
 The October 5 shell moves global navigation to labeled Activity, Search, Saved, and You controls, plus Chats on phones. Phone navigation sits below the active surface, while the space rail appears above the room list. Conversation actions and touch message actions use named overflow controls. Review the [current shell behavior](conversation-shell.md) alongside browser results; earlier dated evidence above remains unchanged.
