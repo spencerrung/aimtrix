@@ -113,6 +113,10 @@ jobs:
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       PLAYWRIGHT_IMAGE_VERSION: 1.61.1
     steps:
+      - name: Align mounted home ownership for Firefox
+        # GitHub mounts this directory with the host runner's UID. Firefox checks
+        # that its existing HOME belongs to the user launching the browser.
+        run: chown "$(id -u):$(id -g)" "$HOME"
       - name: Checkout
         uses: actions/checkout@v7
       - name: Set up Node.js
