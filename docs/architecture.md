@@ -32,6 +32,8 @@ The UI should not depend throughout the tree on mutable Matrix SDK objects. The 
 
 For a restored or newly authenticated session:
 
+Acquire exclusive browser ownership of the per-device persistent crypto store first; see [crypto storage ownership](crypto-store-ownership.md) for second-window refusal, cooperative takeover, shutdown and protected deletion. Browsers without safe exclusion cannot open the encrypted session.
+
 1. Create the SDK client with the access token, user ID, and device ID (in-memory sync store; the persistent per-account store belongs to Rust crypto).
 2. Initialize Rust/WASM crypto before starting sync.
 3. Attach lifecycle, room, timeline, receipt, decryption, local-echo, and account-data listeners.

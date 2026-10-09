@@ -71,6 +71,7 @@ import {
 import {
   accountId,
   databaseNames,
+  sameStoredDevices,
   tokenFreeRecoverySession,
   type StoredAccountSummary,
   type StoredMatrixSession,
@@ -113,6 +114,7 @@ import type {
 import type { GroupCallEngine } from './GroupCallEngine';
 import { clearRtcMembershipPolicy } from './rtcMembershipEncryption';
 import type { GroupCallActivity } from './GroupCallActivity';
+import { acquireCryptoOwnership, CryptoOwnershipUnavailable, cryptoTakeoverSupported, type CryptoOwnership } from './cryptoOwnership';
 
 export interface LoginCredentials {
   userId: string;
@@ -132,6 +134,8 @@ export type MatrixControllerSnapshot =
   | { status: 'connecting'; message: string; error?: string }
   | { status: 'ready'; workspace: WorkspaceSnapshot; issue?: ConnectionIssue; incomingVerification?: IncomingVerificationSummary[] }
   | { status: 'error'; error: string; canRetry: boolean; issue?: ConnectionIssue }
+  | { status: 'crypto-in-use'; canTakeover: boolean; error?: string }
+  | { status: 'crypto-unavailable' }
   | { status: 'reauthentication-required'; recovery: SessionRecovery; error?: string };
 
 type Subscriber = () => void;
@@ -183,19 +187,22 @@ function friendlyError(error: unknown): string {
   return 'Aimtrix could not connect to that homeserver. Check the address and try again.';
 }
 
-function deleteDatabase(name: string): Promise<void> {
+function deleteDatabase(name: string, pending: Promise<void>[] = []): Promise<void> {
   return new Promise((resolve, reject) => {
     const request = indexedDB.deleteDatabase(name);
-    request.onsuccess = () => resolve();
-    request.onerror = () => reject(new Error('IndexedDB cleanup failed'));
+    let finished!: () => void;
+    pending.push(new Promise<void>((resolve) => { finished = resolve; }));
+    request.onsuccess = () => { finished(); resolve(); };
+    request.onerror = () => { finished(); reject(new Error('IndexedDB cleanup failed')); };
+    // onblocked does not cancel deletion. Its lock must outlive this user-facing rejection.
     request.onblocked = () => reject(new Error('IndexedDB cleanup blocked; close other Aimtrix tabs'));
   });
 }
 
-async function deleteAccountDatabases(session: StoredMatrixSession): Promise<void> {
+async function deleteAccountDatabases(session: StoredMatrixSession, pending: Promise<void>[]): Promise<void> {
   await Promise.all([session.deviceId, ...(session.retainedDeviceIds ?? [])].map(async (deviceId) => {
     const names = databaseNames({ ...session, deviceId });
-    await Promise.all([deleteDatabase(names.sync), deleteDatabase(`${names.crypto}::matrix-sdk-crypto`), deleteDatabase(`${names.crypto}::matrix-sdk-crypto-meta`)]);
+    await Promise.all([deleteDatabase(names.sync, pending), deleteDatabase(`${names.crypto}::matrix-sdk-crypto`, pending), deleteDatabase(`${names.crypto}::matrix-sdk-crypto-meta`, pending)]);
   }));
 }
 
@@ -223,6 +230,11 @@ export class MatrixController {
   private recoverySession?: StoredMatrixSession;
   private credentialWork: Promise<unknown> = Promise.resolve();
   private stopWork?: Promise<void>;
+  private cryptoOwnership?: CryptoOwnership;
+  private cryptoStartup?: Promise<void>;
+  private ownershipRequest?: AbortController;
+  private blockedSession?: StoredMatrixSession;
+  private pendingCleanupRelease?: Promise<void>;
   private currentIssue?: ConnectionIssue;
   private cleanupPending = false;
   private clientListenerCleanup?: () => void;
@@ -241,6 +253,7 @@ export class MatrixController {
   }
 
   private showConnectionError(error: unknown): void {
+    if (error instanceof CryptoOwnershipUnavailable) { this.setSnapshot({ status: 'crypto-unavailable' }); return; }
     const issue = connectionIssue(error);
     this.setSnapshot({ status: 'error', error: connectionIssueMessage(issue), canRetry: true, issue });
   }
@@ -433,7 +446,7 @@ export class MatrixController {
 
   /** Public account identity for local drafts; never exposes credentials. */
   public getDraftScope = (): { userId: string; homeserver: string } | undefined => {
-    const session = this.activeSession ?? this.recoverySession;
+    const session = this.activeSession ?? this.recoverySession ?? this.blockedSession;
     return session ? { userId: session.userId, homeserver: session.baseUrl } : undefined;
   };
 
@@ -869,8 +882,12 @@ export class MatrixController {
     await this.connect(session, revision);
   }
 
-  public async retry(): Promise<void> {
-    if (this.cleanupPending) return this.endSession(false);
+  public async retry(takeover = false): Promise<void> {
+    if (this.cleanupPending) {
+      // Retrying does not cancel a blocked IndexedDB delete or steal its ownership.
+      await this.pendingCleanupRelease;
+      return this.endSession(false);
+    }
     if (this.recoverySession) return this.reauthenticate();
     if (this.client && this.snapshot.status === 'ready') {
       this.client.retryImmediately();
@@ -878,7 +895,9 @@ export class MatrixController {
     }
     const revision = ++this.lifecycleRevision;
     try {
-      const session = await this.credentialOperation(() => this.platform.credentials.load());
+      const blocked = this.blockedSession;
+      const session = await this.credentialOperation(() => blocked && this.platform.accounts
+        ? this.platform.accounts.get(accountId(blocked)) : this.platform.credentials.load());
       if (revision !== this.lifecycleRevision) return;
       if (!session) { this.setSnapshot({ status: 'signed-out' }); return; }
       if (session.recovery) {
@@ -887,7 +906,7 @@ export class MatrixController {
         return;
       }
       this.setSnapshot({ status: 'connecting', message: 'Trying your homeserver again…' });
-      await this.connect(session, revision);
+      await this.connect(session, revision, takeover);
     } catch (error) {
       if (revision !== this.lifecycleRevision) return;
       if (isSessionRejected(error)) this.expireSession(error);
@@ -917,6 +936,7 @@ export class MatrixController {
     this.setSnapshot({ status: 'connecting', message: 'Switching Matrix accounts…' });
     await this.stopCurrentClient();
     if (revision !== this.lifecycleRevision) return;
+    this.blockedSession = undefined;
     this.recoverySession = undefined;
     if (client && session) await this.removePushersForDevice(client, session.deviceId).catch(() => undefined);
     if (revision !== this.lifecycleRevision) return;
@@ -944,19 +964,50 @@ export class MatrixController {
     if (!accounts) throw new Error('Multiple accounts are unavailable on this platform.');
     const current = this.activeSession ?? this.recoverySession;
     if (current && accountId(current) === id) throw new Error('Sign out of the active account first.');
-    const removed = await this.credentialOperation(() => accounts.remove(id));
-    if (!removed) return { cleaned: true };
-    const cleanup = await Promise.allSettled([
-      deleteAccountDatabases(removed),
-      deletePrivateSearchDatabase({ userId: removed.userId, homeserver: removed.baseUrl }),
-    ]);
-    return { cleaned: cleanup.every((result) => result.status === 'fulfilled') };
+    const session = await this.credentialOperation(() => accounts.get(id));
+    if (!session) return { cleaned: true };
+    const ownership = await this.acquireCleanupOwnership(session);
+    if (!ownership) throw new Error('This account is open in another Aimtrix window. Close it before forgetting the account.');
+    const pending: Promise<void>[] = [];
+    try {
+      const removed = await this.credentialOperation(() => accounts.remove(id, session));
+      if (!removed) return { cleaned: true };
+      const cleanup = await Promise.allSettled([
+        deleteAccountDatabases(removed, pending),
+        deletePrivateSearchDatabase({ userId: removed.userId, homeserver: removed.baseUrl }),
+      ]);
+      return { cleaned: cleanup.every((result) => result.status === 'fulfilled') };
+    } finally { this.releaseCleanupOwnership(ownership, pending); }
+  }
+
+  private releaseCleanupOwnership(ownership: CryptoOwnership[], pending: Promise<void>[]): void {
+    const release = Promise.allSettled(pending).then(async () => { await Promise.all(ownership.map((owner) => owner.release())); });
+    this.pendingCleanupRelease = release;
+    void release.finally(() => { if (this.pendingCleanupRelease === release) this.pendingCleanupRelease = undefined; }).catch(() => undefined);
+  }
+
+  private async acquireCleanupOwnership(session: StoredMatrixSession, existing?: CryptoOwnership): Promise<CryptoOwnership[] | undefined> {
+    const owners: CryptoOwnership[] = existing ? [existing] : [];
+    try {
+      for (const deviceId of new Set([session.deviceId, ...(session.retainedDeviceIds ?? [])])) {
+        if (existing && deviceId === session.deviceId) continue;
+        const owner = await acquireCryptoOwnership(databaseNames({ ...session, deviceId }).crypto);
+        if (!owner) { await Promise.all(owners.map((held) => held.release())); return undefined; }
+        owners.push(owner);
+      }
+      return owners;
+    } catch (error) { await Promise.all(owners.map((owner) => owner.release())); throw error; }
   }
 
   private async endSession(remoteLogout: boolean): Promise<void> {
     const revision = ++this.lifecycleRevision;
     const client = this.client;
-    const session = this.activeSession ?? this.recoverySession;
+    const session = this.activeSession ?? this.recoverySession ?? this.blockedSession;
+    // Detach the lease from client teardown: deletion and vault invalidation also need exclusion.
+    const existingOwnership = this.cryptoOwnership;
+    this.cryptoOwnership = undefined;
+    let ownership = existingOwnership ? [existingOwnership] : [];
+    const pending: Promise<void>[] = [];
     this.cleanupPending = true;
     this.setSnapshot({ status: 'connecting', message: 'Signing off and clearing this account…' });
     // Stop account callbacks and remove plaintext view state before any network/storage wait.
@@ -964,6 +1015,20 @@ export class MatrixController {
     try {
       const stored = session ?? await this.credentialOperation(() => this.platform.credentials.load());
       if (revision !== this.lifecycleRevision) return;
+      if (stored) {
+        const acquired = await this.acquireCleanupOwnership(stored, existingOwnership);
+        if (!acquired) {
+          this.cleanupPending = false;
+          this.blockedSession = stored;
+          this.setSnapshot({ status: 'crypto-in-use', canTakeover: cryptoTakeoverSupported(), error: 'Close the other Aimtrix window before removing this account and its keys.' });
+          return;
+        }
+        ownership = acquired;
+        if (this.platform.accounts) {
+          const current = await this.credentialOperation(() => this.platform.accounts!.get(accountId(stored)));
+          if (current && !sameStoredDevices(current, stored)) throw new Error('The saved account changed. Retry signing out.');
+        }
+      }
       if (stored) {
         const recovery = tokenFreeRecoverySession(stored, 'hard');
         await this.credentialOperation(async () => {
@@ -992,22 +1057,26 @@ export class MatrixController {
       await cleanup;
       if (revision !== this.lifecycleRevision) return;
       this.pushRegistration = undefined;
-      if (stored) await deleteAccountDatabases(stored);
+      if (stored) await deleteAccountDatabases(stored, pending);
       let privateSearchDeletionFailed = false;
       if (stored) {
         try { await deletePrivateSearchDatabase({ userId: stored.userId, homeserver: stored.baseUrl }); }
         catch { privateSearchDeletionFailed = true; }
       }
       await this.credentialOperation(async () => {
-        if (revision === this.lifecycleRevision) await this.platform.credentials.clear();
+        if (revision === this.lifecycleRevision) {
+          if (stored && this.platform.accounts) await this.platform.accounts.remove(accountId(stored), stored);
+          else await this.platform.credentials.clear();
+        }
       });
       if (revision !== this.lifecycleRevision) return;
       this.recoverySession = undefined;
+      this.blockedSession = undefined;
       this.cleanupPending = false;
       this.setSnapshot({ status: 'signed-out', ...(privateSearchDeletionFailed ? { error: 'Private search data could not be removed from this browser. Clear this site’s data to remove it.' } : {}) });
     } catch (error) {
       if (revision === this.lifecycleRevision) this.showConnectionError(error);
-    }
+    } finally { this.releaseCleanupOwnership(ownership, pending); }
   }
 
   public resolveMedia = (
@@ -3906,142 +3975,182 @@ export class MatrixController {
     this.scheduleWorkspacePublish();
   }
 
-  private async connect(session: StoredMatrixSession, revision = this.lifecycleRevision): Promise<void> {
+  private async connect(session: StoredMatrixSession, revision = this.lifecycleRevision, takeover = false): Promise<void> {
     if (session.recovery || !session.accessToken || revision !== this.lifecycleRevision) return;
     await this.stopCurrentClient();
     if (revision !== this.lifecycleRevision) return;
     const names = databaseNames(session);
-    const sdk = await loadMatrixSdk();
-    if (revision !== this.lifecycleRevision) return;
-    const client = sdk.createClient({
-      baseUrl: session.baseUrl,
-      accessToken: session.accessToken,
-      userId: session.userId,
-      deviceId: session.deviceId,
-      ...(session.oauth ? {
-        refreshToken: session.oauth.refreshToken,
-        tokenRefreshFunction: async (refreshToken: string) => {
-          if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('Matrix session changed.');
-          try {
-            const current = this.activeSession;
-            if (!current?.oauth) throw new Error('Delegated session is unavailable.');
-            const metadata = await sdkAuthMetadata(current.baseUrl);
-            const renewed = await refreshDelegatedAuth({ ...current.oauth,
-              redirectUri: this.platform.deepLinks.ssoRedirectUrl(), deviceId: current.deviceId }, metadata, refreshToken);
-            const updated: StoredMatrixSession = { ...current, accessToken: renewed.accessToken,
-              oauth: { ...current.oauth, refreshToken: renewed.refreshToken } };
-            await this.credentialOperation(async () => {
-              if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('Matrix session changed.');
-              await this.platform.credentials.save(updated);
-            });
-            this.activeSession = updated;
-            return renewed;
-          } catch (error) {
-            if (error instanceof TokenRefreshLogoutError) throw error;
-            // The provider error may contain credentials and the SDK logs refresh failures.
-            // eslint-disable-next-line preserve-caught-error
-            throw new Error('Delegated sign-in could not be renewed.');
-          }
-        },
-      } : {}),
-      timelineSupport: true,
-      cryptoCallbacks: {
-        getSecretStorageKey: async ({ keys }) => {
-          const recoveryKey = this.inMemoryRecoveryKey;
-          const activeClient = this.client;
-          if (!recoveryKey || activeClient !== client) return null;
-          const defaultKeyId = await activeClient.secretStorage.getDefaultKeyId();
-          const candidates = defaultKeyId && keys[defaultKeyId]
-            ? [defaultKeyId]
-            : Object.keys(keys);
-          for (const keyId of candidates) {
-            try {
-              if (
-                await activeClient.secretStorage.checkKey(
-                  recoveryKey,
-                  keys[keyId] as SecretStorageKeyDescriptionAesV1,
-                )
-              ) {
-                return this.client === client ? [keyId, recoveryKey] : null;
-              }
-            } catch {
-              // Try another active secret-storage key if the account has more than one.
-            }
-          }
-          return null;
-        },
-        cacheSecretStorageKey: (_keyId, _keyInfo, key) => {
-          if (this.client === client) this.inMemoryRecoveryKey = key;
-        },
-      },
-    });
-
-    this.client = client;
-    this.sdk = sdk;
-    this.activeSession = session;
-    this.notificationOwner = crypto.randomUUID();
-    const policyKey = this.notificationPolicyKey();
-    try { this.localNotificationPolicy = normalizeNotificationPolicy(policyKey ? JSON.parse(localStorage.getItem(policyKey) ?? 'null') : undefined); }
-    catch { this.localNotificationPolicy = normalizeNotificationPolicy(undefined); }
-    const notificationOwner = this.notificationOwner;
-    this.notificationPolicyIssue = false;
-    void Promise.resolve(this.platform.notifications.setContext?.({ owner: notificationOwner, policy: this.localNotificationPolicy })).catch(() => { if (notificationOwner === this.notificationOwner) this.notificationPolicyIssue = true; });
-
-    this.connection = 'connecting';
-    this.attachClientListeners();
-
+    const request = new AbortController();
+    this.ownershipRequest = request;
+    let owner: CryptoOwnership | undefined;
     try {
-      await client.initRustCrypto({
-        useIndexedDB: true,
-        cryptoDatabasePrefix: names.crypto,
-      });
-      if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
-      client.on(CryptoEvent.VerificationRequestReceived, this.handleIncomingVerification);
-      for (const request of client.getCrypto?.()?.getVerificationRequestsToDeviceInProgress(session.userId) ?? []) this.handleIncomingVerification(request);
-      await client.startClient({
-        initialSyncLimit: 30,
-        lazyLoadMembers: true,
-        pendingEventOrdering: sdk.PendingEventOrdering.Chronological,
-        threadSupport: true,
-      });
-      if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
-      if (this.config.features.groupCalls) {
-        const activityRevision = this.groupCallStartRevision;
-        void import('./GroupCallActivity').then(({ GroupCallActivity }) => {
-          if (this.client !== client || activityRevision !== this.groupCallStartRevision) return;
-          const activity = new GroupCallActivity(client, () => this.scheduleWorkspacePublish());
-          this.groupCallActivity = activity;
-          void activity.start();
-        }).catch(() => undefined);
+      owner = await acquireCryptoOwnership(names.crypto, { signal: request.signal, takeover,
+        onTakeover: async () => {
+          if (this.cryptoOwnership !== owner) return;
+          ++this.lifecycleRevision;
+          this.blockedSession = session;
+          const stopping = this.stopCurrentClient();
+          this.setSnapshot({ status: 'crypto-in-use', canTakeover: cryptoTakeoverSupported() });
+          await stopping;
+        } });
+    } finally { if (this.ownershipRequest === request) this.ownershipRequest = undefined; }
+    if (revision !== this.lifecycleRevision) { await owner?.release(); return; }
+    if (!owner) {
+      this.blockedSession = session;
+      this.setSnapshot({ status: 'crypto-in-use', canTakeover: cryptoTakeoverSupported(), ...(takeover ? { error: 'The other window has not finished closing encrypted storage. Close it, then retry.' } : {}) });
+      return;
+    }
+    this.cryptoOwnership = owner;
+    this.blockedSession = undefined;
+    try {
+      // A sign-out in another window may have invalidated the record while this one waited.
+      if (this.platform.accounts) {
+        const current = await this.credentialOperation(() => this.platform.accounts!.get(accountId(session)));
+        if (revision !== this.lifecycleRevision) {
+          if (this.cryptoOwnership === owner) await this.stopCurrentClient();
+          return;
+        }
+        if (!current || current.recovery || current.deviceId !== session.deviceId) {
+          await this.stopCurrentClient();
+          if (current?.recovery) { this.recoverySession = current; this.setSnapshot({ status: 'reauthentication-required', recovery: this.recoveryInfo()! }); }
+          else this.setSnapshot({ status: 'signed-out' });
+          return;
+        }
+        session = current;
       }
-      if (this.pushRefreshPending) {
-        this.pushRefreshPending = false;
-        client.retryImmediately();
-      }
+      const sdk = await loadMatrixSdk();
+      if (revision !== this.lifecycleRevision) return;
+      const client = sdk.createClient({
+        baseUrl: session.baseUrl,
+        accessToken: session.accessToken,
+        userId: session.userId,
+        deviceId: session.deviceId,
+        ...(session.oauth ? {
+          refreshToken: session.oauth.refreshToken,
+          tokenRefreshFunction: async (refreshToken: string) => {
+            if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('Matrix session changed.');
+            try {
+              const current = this.activeSession;
+              if (!current?.oauth) throw new Error('Delegated session is unavailable.');
+              const metadata = await sdkAuthMetadata(current.baseUrl);
+              const renewed = await refreshDelegatedAuth({ ...current.oauth,
+                redirectUri: this.platform.deepLinks.ssoRedirectUrl(), deviceId: current.deviceId }, metadata, refreshToken);
+              const updated: StoredMatrixSession = { ...current, accessToken: renewed.accessToken,
+                oauth: { ...current.oauth, refreshToken: renewed.refreshToken } };
+              await this.credentialOperation(async () => {
+                if (this.client !== client || revision !== this.lifecycleRevision) throw new Error('Matrix session changed.');
+                await this.platform.credentials.save(updated);
+              });
+              this.activeSession = updated;
+              return renewed;
+            } catch (error) {
+              if (error instanceof TokenRefreshLogoutError) throw error;
+              // The provider error may contain credentials and the SDK logs refresh failures.
+              // eslint-disable-next-line preserve-caught-error
+              throw new Error('Delegated sign-in could not be renewed.');
+            }
+          },
+        } : {}),
+        timelineSupport: true,
+        cryptoCallbacks: {
+          getSecretStorageKey: async ({ keys }) => {
+            const recoveryKey = this.inMemoryRecoveryKey;
+            const activeClient = this.client;
+            if (!recoveryKey || activeClient !== client) return null;
+            const defaultKeyId = await activeClient.secretStorage.getDefaultKeyId();
+            const candidates = defaultKeyId && keys[defaultKeyId]
+              ? [defaultKeyId]
+              : Object.keys(keys);
+            for (const keyId of candidates) {
+              try {
+                if (
+                  await activeClient.secretStorage.checkKey(
+                    recoveryKey,
+                    keys[keyId] as SecretStorageKeyDescriptionAesV1,
+                  )
+                ) {
+                  return this.client === client ? [keyId, recoveryKey] : null;
+                }
+              } catch {
+                // Try another active secret-storage key if the account has more than one.
+              }
+            }
+            return null;
+          },
+          cacheSecretStorageKey: (_keyId, _keyInfo, key) => {
+            if (this.client === client) this.inMemoryRecoveryKey = key;
+          },
+        },
+      });
 
-      // Log thread support level for diagnostics. The SDK's thread APIs are
-      // safe to call even when the server has no thread support — messages
-      // simply land on the main timeline — but knowing the level helps with
-      // debugging interoperability issues.
+      this.client = client;
+      this.sdk = sdk;
+      this.activeSession = session;
+      this.notificationOwner = crypto.randomUUID();
+      const policyKey = this.notificationPolicyKey();
+      try { this.localNotificationPolicy = normalizeNotificationPolicy(policyKey ? JSON.parse(localStorage.getItem(policyKey) ?? 'null') : undefined); }
+      catch { this.localNotificationPolicy = normalizeNotificationPolicy(undefined); }
+      const notificationOwner = this.notificationOwner;
+      this.notificationPolicyIssue = false;
+      void Promise.resolve(this.platform.notifications.setContext?.({ owner: notificationOwner, policy: this.localNotificationPolicy })).catch(() => { if (notificationOwner === this.notificationOwner) this.notificationPolicyIssue = true; });
+
+      this.connection = 'connecting';
+      this.attachClientListeners();
+
       try {
-        const support = await client.doesServerSupportThread();
-        if (this.client === client) this.threadSupport = support.threads;
-      } catch {
-        // doesServerSupportThread can reject on older servers; default to None.
-        if (this.client === client) this.threadSupport = 0; // FeatureSupport.None
+        const startup = (async () => {
+          await client.initRustCrypto({ useIndexedDB: true, cryptoDatabasePrefix: names.crypto });
+          if (this.client !== client || revision !== this.lifecycleRevision) return;
+          client.on(CryptoEvent.VerificationRequestReceived, this.handleIncomingVerification);
+          for (const request of client.getCrypto?.()?.getVerificationRequestsToDeviceInProgress(session.userId) ?? []) this.handleIncomingVerification(request);
+          await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true,
+            pendingEventOrdering: sdk.PendingEventOrdering.Chronological, threadSupport: true });
+        })();
+        this.cryptoStartup = startup;
+        try { await startup; } finally { if (this.cryptoStartup === startup) this.cryptoStartup = undefined; }
+        if (this.client !== client || revision !== this.lifecycleRevision) return;
+        if (this.config.features.groupCalls) {
+          const activityRevision = this.groupCallStartRevision;
+          void import('./GroupCallActivity').then(({ GroupCallActivity }) => {
+            if (this.client !== client || activityRevision !== this.groupCallStartRevision) return;
+            const activity = new GroupCallActivity(client, () => this.scheduleWorkspacePublish());
+            this.groupCallActivity = activity;
+            void activity.start();
+          }).catch(() => undefined);
+        }
+        if (this.pushRefreshPending) {
+          this.pushRefreshPending = false;
+          client.retryImmediately();
+        }
+
+        // Log thread support level for diagnostics. The SDK's thread APIs are
+        // safe to call even when the server has no thread support — messages
+        // simply land on the main timeline — but knowing the level helps with
+        // debugging interoperability issues.
+        try {
+          const support = await client.doesServerSupportThread();
+          if (this.client === client) this.threadSupport = support.threads;
+        } catch {
+          // doesServerSupportThread can reject on older servers; default to None.
+          if (this.client === client) this.threadSupport = 0; // FeatureSupport.None
+        }
+      } catch (error) {
+        if (this.client !== client || revision !== this.lifecycleRevision) return;
+        if (isSessionRejected(error)) { this.expireSession(error); return; }
+        await this.stopCurrentClient();
+        if (revision !== this.lifecycleRevision) return;
+        // Keep session metadata for retry/explicit forget after local crypto startup failure.
+        this.activeSession = session;
+        throw error;
       }
     } catch (error) {
-      if (this.client !== client || revision !== this.lifecycleRevision) { client.stopClient(); return; }
-      if (isSessionRejected(error)) { this.expireSession(error); return; }
-      await this.stopCurrentClient();
-      if (revision !== this.lifecycleRevision) return;
-      // Keep session metadata for retry/explicit forget after local crypto startup failure.
-      this.activeSession = session;
+      if (this.cryptoOwnership === owner) await this.stopCurrentClient();
       throw error;
     }
   }
 
   private stopCurrentClient(): Promise<void> {
+    this.ownershipRequest?.abort();
     const previous = this.stopWork;
     const work = previous
       ? previous.catch(() => undefined).then(() => this.stopCurrentClientNow())
@@ -4052,13 +4161,17 @@ export class MatrixController {
   }
 
   private async stopCurrentClientNow(): Promise<void> {
+    const ownership = this.cryptoOwnership;
+    this.cryptoOwnership = undefined;
+    const startup = this.cryptoStartup;
+    this.cryptoStartup = undefined;
     this.groupCallStartRevision += 1;
     const privateWrites = [...this.privateSearchRoomWrites.values()];
     this.privateSearch?.close();
     this.privateSearch = undefined;
     this.savedReferencesCache = undefined;
     this.savedReferenceWork = Promise.resolve();
-    void Promise.resolve(this.platform.notifications.clearContext?.(this.notificationOwner)).catch(() => undefined);
+    if (this.client) void Promise.resolve(this.platform.notifications.clearContext?.(this.notificationOwner)).catch(() => undefined);
     this.notificationOwner = crypto.randomUUID();
     this.localNotificationPolicy = normalizeNotificationPolicy(undefined);
     this.notifiedEvents.clear();
@@ -4094,6 +4207,7 @@ export class MatrixController {
     this.snapshotCache.messages.clear();
     this.snapshotCache.members.clear();
     this.clearMediaCache();
+    if (startup) { await startup.catch(() => undefined); client?.stopClient(); }
     if (groupCallLeaving) await groupCallLeaving;
     if (client) clearRtcMembershipPolicy(client);
     await Promise.allSettled(privateWrites);
@@ -4119,6 +4233,7 @@ export class MatrixController {
     this.signOnTonePlayed = false;
     this.currentIssue = undefined;
     this.threadSupport = 0;
+    await ownership?.release();
   }
 
   private readonly handleIncomingCall = (call: MatrixCall): void => {

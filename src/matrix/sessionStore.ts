@@ -25,8 +25,9 @@ export interface StoredAccountSummary {
 
 export interface AccountCredentialStore extends CredentialStore<StoredMatrixSession> {
   list(): Promise<StoredAccountSummary[]>;
+  get(id: string): Promise<StoredMatrixSession | undefined>;
   select(id: string | null): Promise<StoredMatrixSession | undefined>;
-  remove(id: string): Promise<StoredMatrixSession | undefined>;
+  remove(id: string, expected?: StoredMatrixSession): Promise<StoredMatrixSession | undefined>;
 }
 
 export function accountId(session: Pick<StoredMatrixSession, 'baseUrl' | 'userId'>): string {
@@ -142,6 +143,7 @@ export function createAccountCredentialStore(raw: CredentialStore<string>): Acco
     return next;
   };
   return {
+    get: (id) => serialized(async () => (await read()).accounts.find((session) => accountId(session) === id)),
     load: () => serialized(async () => { const vault = await read(); return vault.accounts.find((session) => accountId(session) === vault.active); }),
     list: () => serialized(async () => { const vault = await read(); return vault.accounts.map((session) => ({
       id: accountId(session), userId: session.userId, homeserver: session.baseUrl, serverName: session.serverName,
@@ -173,16 +175,22 @@ export function createAccountCredentialStore(raw: CredentialStore<string>): Acco
       await write(vault);
       return selected;
     }),
-    remove: (id) => serialized(async () => {
+    remove: (id, expected) => serialized(async () => {
       const vault = await read();
       const removed = vault.accounts.find((session) => accountId(session) === id);
       if (!removed) return undefined;
+      if (expected && !sameStoredDevices(removed, expected)) throw new Error('The saved account changed. Retry forgetting it.');
       vault.accounts = vault.accounts.filter((session) => accountId(session) !== id);
       if (vault.active === id) vault.active = null;
       await write(vault);
       return removed;
     }),
   };
+}
+
+export function sameStoredDevices(left: StoredMatrixSession, right: StoredMatrixSession): boolean {
+  const devices = (session: StoredMatrixSession) => JSON.stringify([...new Set([session.deviceId, ...(session.retainedDeviceIds ?? [])])].sort());
+  return accountId(left) === accountId(right) && devices(left) === devices(right);
 }
 
 function stableHash(value: string): string {

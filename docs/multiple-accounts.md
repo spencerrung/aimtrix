@@ -1,5 +1,7 @@
 # Multiple accounts and local isolation
 
+Across tabs and installed apps sharing browser storage, [exclusive per-device crypto ownership](crypto-store-ownership.md) prevents two Matrix clients opening the same keys. Different accounts/devices remain independent; this does not replace the native multi-account validation gate below.
+
 Aimtrix keeps one Matrix client active at a time. Settings → Accounts can switch to another saved account, add an account, or forget a dormant account. The sign-in and recovery screens also offer saved-account switching. An account is identified by its homeserver URL and Matrix user ID; the same user ID on a different homeserver is a separate account.
 
 The browser stores a versioned credential vault under the existing session key, migrating the previous single-session record when another account is added. Native wrappers use their existing secure credential store for the same vault. The vault holds at most 16 accounts and rejects an additional account before changing the saved record. Each account retains its SDK sync and crypto databases, private search index, durable composer drafts, appearance/notification preferences, and last room. Switching stops the foreground client, active call and push subscription before starting the selected account. Only the foreground account registers this device for push. Account-bound notification routes ask before opening under another account.

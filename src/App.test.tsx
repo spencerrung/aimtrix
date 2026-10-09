@@ -26,6 +26,7 @@ const harness = vi.hoisted(() => ({
   chooseAccount: vi.fn<(id: string | null) => Promise<void>>(),
   registerPush: vi.fn<() => Promise<void>>(),
   forgetDormant: vi.fn<(id: string) => Promise<{ cleaned: boolean }>>(),
+  retry: vi.fn<(takeover?: boolean) => Promise<void>>(),
 }));
 vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   constructor() { return new Proxy(this, { get: (target, key) => Reflect.get(target, key) ?? (() => undefined) }); }
@@ -45,12 +46,13 @@ vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   chooseAnotherAccount = (id: string | null) => harness.chooseAccount(id);
   registerPushNotifications = () => harness.registerPush();
   forgetDormantAccount = (id: string) => harness.forgetDormant(id);
+  retry = (takeover?: boolean) => harness.retry(takeover);
 } }));
 vi.mock('./config/runtimeConfig', async (original) => {
   const actual = await original<typeof import('./config/runtimeConfig')>();
   return { ...actual, loadRuntimeConfig: async () => ({ config: actual.defaultRuntimeConfig, warnings: [] }) };
 });
-vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread, onSetRoomFavorite, onResolveNavigationTarget, onForgetAccount, pushRoute }: {
+vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, profilePersonalization, onProfilePersonalizationChange, onMarkRoomRead, onMarkThreadRead, onMarkRoomUnread, onSetRoomFavorite, onResolveNavigationTarget, onForgetAccount, accounts, pushRoute }: {
   workspace: typeof demoWorkspace; profilePersonalization: ProfilePersonalization; onProfilePersonalizationChange: (next: ProfilePersonalization) => Promise<void>;
   onMarkRoomRead: (roomId: string, options: { eventId: string; explicit: boolean }) => Promise<void>;
   onMarkThreadRead: (roomId: string, rootId: string, options: { eventId: string }) => Promise<void>;
@@ -58,13 +60,14 @@ vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, prof
   onSetRoomFavorite: (roomId: string, favorite: boolean) => Promise<void>;
   onResolveNavigationTarget: (target: MatrixNavigationTarget) => Promise<{ roomId: string; eventId?: string }>;
   onForgetAccount?: (id: string) => Promise<void>;
+  accounts?: Array<{ id: string }>;
   pushRoute?: PushRoute;
 }) => <main><span>{workspace.user.id}</span><span data-testid="profile-bio">{profilePersonalization.bio}</span><button onClick={() => void onProfilePersonalizationChange({ ...profilePersonalization, bio: 'Old pending update' })}>Update profile</button>
   <button onClick={() => void onMarkRoomRead('synthetic-room', { eventId: '$viewed', explicit: true })}>Read main</button>
   <button onClick={() => void onMarkThreadRead('synthetic-room', '$root', { eventId: '$reply' })}>Read thread</button>
   <button onClick={() => void onMarkRoomUnread('synthetic-room', '$return')}>Unread reminder</button>
   <button onClick={() => void onSetRoomFavorite('synthetic-room', true)}>Favorite room</button>
-  <button onClick={() => { const id = harness.accounts[0]?.id; if (id) void onForgetAccount?.(id); }}>Forget dormant account</button>
+  {accounts?.length ? <button onClick={() => void onForgetAccount?.(accounts[0].id)}>Forget dormant account</button> : null}
   <button onClick={() => void onResolveNavigationTarget({ roomAlias: '#lounge:test', eventId: '$event', via: ['test'] })}>Resolve destination</button>
   <span data-testid="incoming-route">{JSON.stringify(pushRoute)}</span>
 </main> }));
@@ -80,6 +83,7 @@ beforeEach(() => {
   harness.chooseAccount.mockReset().mockResolvedValue(undefined);
   harness.registerPush.mockReset().mockResolvedValue(undefined);
   harness.forgetDormant.mockReset().mockResolvedValue({ cleaned: true });
+  harness.retry.mockReset().mockResolvedValue(undefined);
   harness.favorite.mockReset().mockResolvedValue(undefined);
   harness.resolveNavigation.mockReset().mockResolvedValue({ roomId: '!lounge:test', eventId: '$event' });
   window.history.replaceState({}, '', '/');
@@ -90,6 +94,22 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('App account privacy', () => {
+  it('hides account content on ownership loss, preserves shared drafts and offers safe takeover', async () => {
+    harness.scope = { userId: '@one:example.test', homeserver: 'https://one.test' };
+    const key = draftStorageKey(harness.scope);
+    localStorage.setItem(key, 'synthetic stored draft');
+    render(<App />);
+    await screen.findByTestId('profile-bio');
+    await act(async () => publish({ status: 'crypto-in-use', canTakeover: true }));
+    expect(await screen.findByRole('heading', { name: 'This account is open in another window' })).toHaveFocus();
+    expect(screen.queryByTestId('profile-bio')).not.toBeInTheDocument();
+    expect(localStorage.getItem(key)).toBe('synthetic stored draft');
+    fireEvent.click(screen.getByRole('button', { name: 'Use this window' }));
+    expect(harness.retry).toHaveBeenCalledWith(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry here' }));
+    expect(harness.retry).toHaveBeenCalledWith(undefined);
+    expect(harness.forget).not.toHaveBeenCalled();
+  });
   it('cleans a forgotten account’s drafts, preferences and last-room state', async () => {
     const dormant = { id: JSON.stringify(['https://other.test', '@two:other.test']), userId: '@two:other.test',
       homeserver: 'https://other.test', serverName: 'other.test', active: false, recovery: false };
