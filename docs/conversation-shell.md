@@ -41,3 +41,9 @@ Search clearly covers loaded messages only. Results occupy the contextual surfac
 ### Short tablet notice combinations
 
 When the visual viewport is short, app notices use a bounded scroll area so simultaneous installation/update messages cannot consume all reading space. At compact tablet widths, message tools sit beside the editor and remain horizontally scrollable when necessary; Send stays outside that scrolling tool group. Regression tests combine notices with volatile-draft feedback and verify actual thread entry, sending, retained drafts, and notice dismissal at 320–1024px.
+
+### Multiline composition on short phones
+
+Room and thread composition share the remaining grid height when the usable viewport is compact. Reply/edit context stays above the form; the attachment tray and multiline editor shrink and scroll internally, while the first form row reserves the full 44px Send target. Expanded phone tools use a horizontal strip so additional tools cannot consume extra rows. Full text and staged file bytes remain in the existing draft and attachment owners; resizing neither removes content nor changes the encrypted send path.
+
+Composition browser regressions combine seven-line replies, staged files, persistent and volatile draft storage, and expanded/collapsed tools at 390×320 and 390×360. They also emulate visualViewport-only shrink with a 40px offset, verify complete Send bounds and pointer hit-testing before raw coordinate sending, and check exact submitted text plus confirmed file cleanup for rooms and threads. Editing tests verify the same Send target and preserve the previous reply/file draft through a successful edit. These synthetic Chromium checks establish browser geometry and interaction; physical iOS/Android software keyboards, native WebView safe areas and live Matrix attachment interoperability remain separate acceptance boundaries.
