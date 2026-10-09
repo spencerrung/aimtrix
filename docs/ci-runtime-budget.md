@@ -4,9 +4,11 @@ The target is for each hosted workflow’s execution critical path to finish wit
 
 ## Routine checks
 
-Quality runs lint, all unit tests, the production build, release-contract validation and privacy/feasibility proofs. Chromium browser coverage runs in two independent shards; Firefox and WebKit each run two shards. Playwright's fully parallel test distribution partitions the existing complete project/test set without changing assertions, retries or intentional platform skips. Every shard builds the static client and keeps separately named failure evidence. The stable `check` status aggregates static checks, every browser shard, mobile-shell checks and dependency review. It fails when a required gate fails, is cancelled or is skipped; dependency review is allowed to skip only on pushes. Require `check` in branch protection.
+Quality runs lint, all unit tests, the production build, release-contract validation and privacy/feasibility proofs. Chromium browser coverage runs in two independent shards; Firefox runs two shards and WebKit runs three shards. Playwright's fully parallel test distribution partitions the existing complete project/test set without changing assertions, retries or intentional platform skips. Every shard builds the static client and keeps separately named failure evidence. The stable `check` status aggregates static checks, every browser shard, mobile-shell checks and dependency review. It fails when a required gate fails, is cancelled or is skipped; dependency review is allowed to skip only on pushes. Require `check` in branch protection.
 
 New pushes cancel obsolete Quality and desktop validation runs. Release publication retains serialization rather than cancelling a partially published release.
+
+The October 8 integration expands the compatibility set to 174 WebKit cases, including 44 composition and 32 popover cases. Three WebKit shards retain all 174 cases (58 each); Firefox retains 87 cases across two shards and Chromium retains 354 across two shards. The job ceiling, test assertions, retries and intentional platform skips remain unchanged.
 
 ### Measured starting point
 
