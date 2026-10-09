@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM nginxinc/nginx-unprivileged:1.31-alpine
 USER root
-RUN apk upgrade --no-cache pcre2
+RUN apk upgrade --no-cache pcre2 tiff
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=web-builder /app/dist /usr/share/nginx/html
 RUN chmod a=r /etc/nginx/conf.d/default.conf \
