@@ -8,7 +8,7 @@ Quality runs lint, all unit tests, the production build, release-contract valida
 
 New pushes cancel obsolete Quality and desktop validation runs. Release publication retains serialization rather than cancelling a partially published release.
 
-The October 8 integration expands the compatibility set to 174 WebKit cases, including 44 composition and 32 popover cases. Three WebKit shards retain all 174 cases (58 each); Firefox retains 87 cases across two shards and Chromium retains 354 across two shards. The job ceiling, test assertions, retries and intentional platform skips remain unchanged.
+The October 8 integration expands the compatibility set to 198 WebKit cases, including 68 composition and 32 popover cases. Three WebKit shards retain all 198 cases (66, 73, and 59 across the three shards, as reported by Playwright discovery); Firefox retains 99 cases across two shards and Chromium retains 378 across two shards. Each multiline-edit combination now has its own test deadline and shard slot; all 16 storage/tool/height/context scenarios and their original assertions remain covered. The job ceiling, test assertions, retries and intentional platform skips remain unchanged.
 
 ### Measured starting point
 

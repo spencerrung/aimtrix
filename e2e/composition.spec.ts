@@ -119,9 +119,14 @@ async function expectCompleteTarget(control: Locator) {
     const b = node.getBoundingClientRect(), v = window.visualViewport!;
     // Edge midpoints are inside the rounded button's actual pointer area.
     const points = [[b.left + 1, b.y + b.height / 2], [b.right - 1, b.y + b.height / 2], [b.x + b.width / 2, b.top + 1], [b.x + b.width / 2, b.bottom - 1], [b.x + b.width / 2, b.y + b.height / 2]];
-    return b.width >= 44 && b.height >= 44 && b.left >= v.offsetLeft && b.right <= v.offsetLeft + v.width && b.top >= v.offsetTop && b.bottom <= v.offsetTop + v.height
-      && points.every(([x, y]) => node.contains(document.elementFromPoint(x, y)));
-  })).toBe(true);
+    return {
+      size: b.width >= 44 && b.height >= 44,
+      inside: b.left >= v.offsetLeft && b.right <= v.offsetLeft + v.width && b.top >= v.offsetTop && b.bottom <= v.offsetTop + v.height,
+      pointer: points.every(([x, y]) => node.contains(document.elementFromPoint(x, y))),
+      bounds: { width: b.width, height: b.height, top: b.top, bottom: b.bottom },
+      hits: points.map(([x, y]) => document.elementFromPoint(x, y)?.outerHTML.slice(0, 160)),
+    };
+  })).toMatchObject({ size: true, inside: true, pointer: true });
 }
 
 for (const volatile of [false, true]) for (const expanded of [false, true]) for (const viewport of ['layout', 'visual'] as const) {
@@ -175,47 +180,47 @@ for (const volatile of [false, true]) for (const expanded of [false, true]) for 
   });
 }
 
-for (const volatile of [false, true]) for (const expanded of [false, true]) {
-  test(`multiline edits keep Send reachable and restore staged replies: ${volatile ? 'volatile' : 'persistent'}, ${expanded ? 'expanded' : 'collapsed'} tools`, async ({ page }, info) => {
+for (const volatile of [false, true]) for (const expanded of [false, true])
+  for (const height of [320, 360]) for (const kind of ['room', 'thread'] as const) {
+  test(`multiline edits keep Send reachable and restore staged replies: ${volatile ? 'volatile' : 'persistent'}, ${expanded ? 'expanded' : 'collapsed'} tools, ${kind} at ${height}px`, async ({ page }, info) => {
     const original = 'A synthetic reply retained during editing';
     const edited = Array.from({ length: 7 }, (_, index) => `Edited line ${index + 1}`).join('\n');
-    for (const height of [320, 360]) for (const kind of ['room', 'thread'] as const) {
-      await page.setViewportSize({ width: 390, height: 844 });
-      await page.goto(`/composition-fixture${volatile ? '?volatile' : ''}`);
-      await page.getByRole('button', { name: /Welcome Lounge/ }).click();
-      if (kind === 'thread') await page.getByRole('button', { name: /2 replies/ }).click();
-      const surface = kind === 'thread' ? page.getByRole('complementary', { name: 'Thread', exact: true }) : page.getByRole('main', { name: 'Conversation with Welcome Lounge' });
-      await surface.getByRole('button', { name: 'More message actions', exact: true }).last().click();
-      await page.getByRole('menuitem', { name: 'Reply', exact: true }).click();
-      const filename = `${kind}-edit-${height}.txt`;
-      await surface.getByLabel(kind === 'thread' ? 'Choose thread attachment' : 'Choose attachment', { exact: true }).setInputFiles({ name: filename, mimeType: 'text/plain', buffer: Buffer.from('synthetic attachment') });
-      const editor = surface.getByRole('textbox', { name: kind === 'thread' ? 'Message thread' : 'Message Welcome Lounge', exact: true });
-      await editor.fill(original);
-      await surface.locator('.timeline-message--own').last().getByRole('button', { name: 'More message actions', exact: true }).click();
-      await page.getByRole('menuitem', { name: 'Edit message', exact: true }).click();
-      await expect(surface.locator('.composer-context')).toContainText('Editing message');
-      await editor.fill(edited);
-      if (expanded) await surface.getByRole('button', { name: 'More message tools', exact: true }).click();
-      await editor.focus();
-      await page.setViewportSize({ width: 390, height });
-      const send = surface.getByRole('button', { name: kind === 'thread' ? 'Send thread reply' : 'Send message', exact: true });
-      await expectCompleteTarget(send);
-      await page.screenshot({ path: info.outputPath(`${kind}-edit-${volatile ? 'volatile' : 'persistent'}-${expanded ? 'expanded' : 'collapsed'}-${height}.png`) });
-      const bounds = (await send.boundingBox())!;
-      if (info.project.use.hasTouch) await page.touchscreen.tap(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      else await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { sends: Array<{ body: string; kind: string }> } }).compositionFixture.sends)).toEqual([expect.objectContaining({ kind: 'edit', body: edited })]);
-      await expect(editor).toHaveText(original);
-      await expect(surface.locator('.composer-context')).toContainText('Replying to');
-      await expect(surface.getByRole('region', { name: kind === 'thread' ? 'Thread attachments' : 'Attachments', exact: true })).toContainText(filename);
-      expect(await page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toEqual([]);
-      await expectCompleteTarget(send);
-      const restoredBounds = (await send.boundingBox())!;
-      if (info.project.use.hasTouch) await page.touchscreen.tap(restoredBounds.x + restoredBounds.width / 2, restoredBounds.y + restoredBounds.height / 2);
-      else await page.mouse.click(restoredBounds.x + restoredBounds.width / 2, restoredBounds.y + restoredBounds.height / 2);
-      await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toEqual([filename]);
-      await expect(editor).toHaveText('');
-    }
+    // Each independent scenario receives its own deadline and shard slot.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto(`/composition-fixture${volatile ? '?volatile' : ''}`);
+    await page.getByRole('button', { name: /Welcome Lounge/ }).click();
+    if (kind === 'thread') await page.getByRole('button', { name: /2 replies/ }).click();
+    const surface = kind === 'thread' ? page.getByRole('complementary', { name: 'Thread', exact: true }) : page.getByRole('main', { name: 'Conversation with Welcome Lounge' });
+    await surface.getByRole('button', { name: 'More message actions', exact: true }).last().click();
+    await page.getByRole('menuitem', { name: 'Reply', exact: true }).click();
+    const filename = `${kind}-edit-${height}.txt`;
+    await surface.getByLabel(kind === 'thread' ? 'Choose thread attachment' : 'Choose attachment', { exact: true }).setInputFiles({ name: filename, mimeType: 'text/plain', buffer: Buffer.from('synthetic attachment') });
+    const editor = surface.getByRole('textbox', { name: kind === 'thread' ? 'Message thread' : 'Message Welcome Lounge', exact: true });
+    await editor.fill(original);
+    await surface.locator('.timeline-message--own').last().getByRole('button', { name: 'More message actions', exact: true }).click();
+    await page.getByRole('menuitem', { name: 'Edit message', exact: true }).click();
+    await expect(surface.locator('.composer-context')).toContainText('Editing message');
+    await editor.fill(edited);
+    if (expanded) await surface.getByRole('button', { name: 'More message tools', exact: true }).click();
+    await editor.focus();
+    await page.setViewportSize({ width: 390, height });
+    const send = surface.getByRole('button', { name: kind === 'thread' ? 'Send thread reply' : 'Send message', exact: true });
+    await expectCompleteTarget(send);
+    await page.screenshot({ path: info.outputPath(`${kind}-edit-${volatile ? 'volatile' : 'persistent'}-${expanded ? 'expanded' : 'collapsed'}-${height}.png`) });
+    const bounds = (await send.boundingBox())!;
+    if (info.project.use.hasTouch) await page.touchscreen.tap(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    else await page.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { sends: Array<{ body: string; kind: string }> } }).compositionFixture.sends)).toEqual([expect.objectContaining({ kind: 'edit', body: edited })]);
+    await expect(editor).toHaveText(original);
+    await expect(surface.locator('.composer-context')).toContainText('Replying to');
+    await expect(surface.getByRole('region', { name: kind === 'thread' ? 'Thread attachments' : 'Attachments', exact: true })).toContainText(filename);
+    expect(await page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toEqual([]);
+    await expectCompleteTarget(send);
+    const restoredBounds = (await send.boundingBox())!;
+    if (info.project.use.hasTouch) await page.touchscreen.tap(restoredBounds.x + restoredBounds.width / 2, restoredBounds.y + restoredBounds.height / 2);
+    else await page.mouse.click(restoredBounds.x + restoredBounds.width / 2, restoredBounds.y + restoredBounds.height / 2);
+    await expect.poll(() => page.evaluate(() => (window as unknown as { compositionFixture: { uploads: string[] } }).compositionFixture.uploads)).toEqual([filename]);
+    await expect(editor).toHaveText('');
   });
 }
 
