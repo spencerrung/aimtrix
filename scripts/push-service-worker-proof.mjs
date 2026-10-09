@@ -91,4 +91,3 @@ assert.equal(opened[1], '/', 'Malformed local routes degrade to the application'
 await emit('push', { data: { json: () => ({ ...payload, ...localData, event_id: '$forged-local' }) } });
 assert.equal(JSON.stringify(notifications.at(-1).options.data), JSON.stringify({ owner: metadata.owner, url: '/' }), 'Provider data cannot forge a trusted local route');
 console.log('Service-worker push proof passed: shared policy, atomic dedup, generic private display, stale-owner rejection, validated local warm/cold routes and provider isolation.');
-
