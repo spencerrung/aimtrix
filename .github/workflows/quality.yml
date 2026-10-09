@@ -107,6 +107,11 @@ jobs:
           - { browser: webkit, shard: 3, shardTotal: 3 }
     timeout-minutes: 10
     runs-on: ubuntu-latest
+    container:
+      image: mcr.microsoft.com/playwright:v1.61.1-noble@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      PLAYWRIGHT_IMAGE_VERSION: 1.61.1
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -117,10 +122,21 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
+      - name: Verify Playwright image matches installed packages
+        run: |
+          node <<'NODE'
+          const expected = process.env.PLAYWRIGHT_IMAGE_VERSION;
+          const lock = require('./package-lock.json');
+          for (const name of ['@playwright/test', 'playwright', 'playwright-core']) {
+            const installed = require(`${name}/package.json`).version;
+            const locked = lock.packages[`node_modules/${name}`].version;
+            if (installed !== expected || locked !== expected) {
+              throw new Error(`Update the pinned Playwright image and PLAYWRIGHT_IMAGE_VERSION together with ${name}: image=${expected}, installed=${installed}, locked=${locked}`);
+            }
+          }
+          NODE
       - name: Build static client
         run: npm run build
-      - name: Install browser
-        run: npx playwright install --with-deps ${{ matrix.browser }}
       - name: Browser compatibility and accessibility
         run: PLAYWRIGHT_PREVIEW=1 PLAYWRIGHT_BROWSER_SET=${{ matrix.browser }} npm run test:e2e -- --shard=${{ matrix.shard }}/${{ matrix.shardTotal }}
       - name: Preserve browser evidence
