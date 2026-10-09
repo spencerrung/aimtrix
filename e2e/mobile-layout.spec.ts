@@ -1,5 +1,9 @@
 import { expect, test } from '@playwright/test';
 
+// These bounds describe regular chrome. Real worker updates have their own
+// lifecycle suite and can otherwise add an unrelated notice mid-measurement.
+test.use({ serviceWorkers: 'block' });
+
 test.beforeEach(async ({ page, isMobile }) => {
   test.skip(!isMobile, 'Requires a mobile browser context.');
   await page.goto('/?demo=1');
