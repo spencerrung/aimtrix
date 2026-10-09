@@ -1,6 +1,8 @@
 /* global self, caches, fetch, URL, Response, importScripts */
 importScripts('/notification-policy.js');
 const CACHE = 'aimtrix-shell-v3';
+// Replaced from the production entry + core Workspace static import graphs.
+const BUILD_SHELL = [];
 const SHELL = [
   '/',
   '/aimtrix-mark.svg',
@@ -11,10 +13,21 @@ const SHELL = [
   '/icons/aimtrix-512-maskable.png',
   '/icons/apple-touch-icon.png',
   '/screenshots/aimtrix-desktop.png',
+  ...BUILD_SHELL,
 ];
 
 self.addEventListener('install', (event) => {
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)));
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE);
+    try {
+      await cache.addAll(SHELL);
+    } catch (error) {
+      // A failed candidate must not activate or leave an incomplete shell cache.
+      // The last working version is deleted only by a successful activation.
+      await caches.delete(CACHE);
+      throw error;
+    }
+  })());
 });
 
 self.addEventListener('activate', (event) => {
@@ -115,7 +128,9 @@ self.addEventListener('fetch', (event) => {
     url.pathname.startsWith('/screenshots/')
   ) {
     event.respondWith(
-      caches.open(CACHE).then((cache) => cache.match(request)).then(
+      // Module requests can carry Origin while install fetches do not. These
+      // same-origin build outputs are identical across request header variants.
+      caches.open(CACHE).then((cache) => cache.match(request, { ignoreVary: BUILD_SHELL.includes(url.pathname) })).then(
         (cached) =>
           cached ||
           fetch(request).then((response) => {
