@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Blob as NodeBlob } from 'node:buffer';
 import type { MatrixClient, Room } from 'matrix-js-sdk';
+import { createClient } from 'matrix-js-sdk';
 import { MatrixEvent } from 'matrix-js-sdk/lib/models/event.js';
 import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { defaultRuntimeConfig } from '../config/runtimeConfig';
@@ -118,6 +119,34 @@ describe('MatrixController protocol integration', () => {
     };
     return { controller, room, client, events, transactions, add, publish };
   }
+
+  describe.each([false, true])('relation-based replies (encrypted=%s)', (encrypted) => {
+    describe.each([undefined, '$root:test'])('thread=%s', (threadRootId) => {
+      it.each([
+        { name: 'plain', body: 'Synthetic reply', original: 'Synthetic original' },
+        { name: 'formatted', body: '**Synthetic reply**', original: 'Synthetic original', html: '<p><strong>Synthetic reply</strong></p>' },
+        { name: 'multiline', body: 'Synthetic first line\n\nSynthetic second line', original: 'Synthetic original\nSecond original line' },
+        { name: 'reply to a legacy reply', body: 'Synthetic newest reply', original: '> <@earlier:test> Synthetic earlier original\n\nSynthetic prior reply' },
+      ])('sends only new content for $name', async ({ body, original, html }) => {
+        const fixture = deliveryFixture(encrypted);
+        await fixture.controller.sendReply('!room:test', `  ${body}  `, {
+          id: '$reply-to:test', senderId: '@peer:test', body: original, threadRootId,
+        });
+        const content = {
+          msgtype: 'm.text', body,
+          'm.mentions': { user_ids: ['@peer:test'] },
+          'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
+          ...(html ? { format: 'org.matrix.custom.html', formatted_body: html } : {}),
+        };
+        expect(fixture.client.sendEvent).toHaveBeenCalledExactlyOnceWith(
+          '!room:test',
+          ...(threadRootId ? [threadRootId] : []),
+          'm.room.message', content, 'delivery-transaction',
+        );
+        expect(fixture.client.sendMessage).not.toHaveBeenCalled();
+      });
+    });
+  });
 
   it.each(['message', 'reply', 'edit'] as const)('tracks a retained %s local echo when a non-Matrix error rejects the initial send', async (kind) => {
     const fixture = deliveryFixture();
@@ -905,11 +934,32 @@ describe('MatrixController protocol integration', () => {
       expect.objectContaining({
         msgtype: 'm.text',
         'm.mentions': { user_ids: ['@mara:test'] },
-        formatted_body: expect.stringMatching(/^<mx-reply>.*<\/mx-reply><p>Absolutely, <a href="https:\/\/matrix\.to\/#\/%40mara%3Atest">@Mara<\/a>\.<\/p>$/),
+        body: 'Absolutely, @Mara.',
+        format: 'org.matrix.custom.html',
+        formatted_body: '<p>Absolutely, <a href="https://matrix.to/#/%40mara%3Atest">@Mara</a>.</p>',
         'm.relates_to': { 'm.in_reply_to': { event_id: '$reply-to:test' } },
       }),
       'synthetic-transaction',
     );
+  });
+
+  it('preserves the explicit reply target when the real SDK adds a thread relation', async () => {
+    const fixture = deliveryFixture();
+    const client = createClient({ baseUrl: 'https://matrix.example.test', userId: '@self:test' });
+    vi.spyOn(client, 'getRoom').mockReturnValue(Object.assign(fixture.room, { getThread: () => undefined }));
+    const complete = vi.spyOn(client as unknown as { sendCompleteEvent: (params: unknown) => Promise<object> }, 'sendCompleteEvent').mockResolvedValue({});
+    inject(fixture.controller, client, deliverySdk);
+    await fixture.controller.sendReply('!room:test', 'Synthetic explicit thread reply', {
+      id: '$thread-reply:test', senderId: '@peer:test', body: 'Synthetic previous reply', threadRootId: '$root:test',
+    });
+    expect(complete).toHaveBeenCalledExactlyOnceWith({
+      roomId: '!room:test', threadId: '$root:test', txnId: expect.any(String),
+      eventObject: { type: 'm.room.message', content: {
+        msgtype: 'm.text', body: 'Synthetic explicit thread reply', 'm.mentions': { user_ids: ['@peer:test'] },
+        'm.relates_to': { rel_type: 'm.thread', event_id: '$root:test', is_falling_back: false,
+          'm.in_reply_to': { event_id: '$thread-reply:test' } },
+      } },
+    });
   });
 
   it('marks the latest thread event read without advancing the main timeline', async () => {
