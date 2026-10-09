@@ -1838,6 +1838,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
     const alicePoll = alice.getByRole('region', { name: `Poll: ${question}` });
     const bobPoll = bob.getByRole('region', { name: `Poll: ${question}` });
     await check('encrypted-poll-create', async () => {
+      await alice.bringToFront();
       const socialWireStart = wire.length;
       await safeAction('poll-open-control', () => openTool('Create a poll'));
       const pollDialog = alice.getByRole('dialog', { name: 'Create a poll' });
@@ -1847,8 +1848,14 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         await pollDialog.getByLabel('Answer 2').fill(second);
       });
       await safeAction('poll-submit', () => pollDialog.getByRole('button', { name: 'Create poll', exact: true }).click());
-      await safeAction('poll-render', async () => {
+      // Workspace snapshots publish on animation frames. Observe each client
+      // in the foreground rather than waiting for a background tab to paint.
+      await safeAction('poll-sender-visible', async () => {
+        await alice.bringToFront();
         await alicePoll.waitFor({ timeout: 45000 });
+      });
+      await safeAction('poll-recipient-visible', async () => {
+        await bob.bringToFront();
         await bobPoll.waitFor({ timeout: 45000 });
       });
       const pollStartWire = wire.slice(socialWireStart);
@@ -1856,9 +1863,11 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
     });
     const elementPoll = elementPeer?.locator('.mx_MPollBody').filter({ hasText: question }).last();
     if (elementPoll) await check('element-ui-encrypted-poll', async () => {
+      await elementPeer.bringToFront();
       await until(() => elementPoll.isVisible(), 'element-poll-render', 60000);
     });
     if (elementPoll) await check('element-ui-poll-vote', async () => {
+      await elementPeer.bringToFront();
       let stage = 'element-poll-vote-radio';
       try {
         const option = elementPoll.locator('.mx_PollOption .mx_StyledRadioButton').filter({ hasText: first });
@@ -1876,6 +1885,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
         const ciphertext = request.postData();
         invariant(ciphertext && !ciphertext.includes(first) && !ciphertext.includes(question), stage);
         stage = 'element-poll-vote-received';
+        await alice.bringToFront();
         await until(async () => {
           await alicePoll.getByRole('button', { name: 'Refresh results' }).click();
           return (await alicePoll.getByRole('button', { name: first }).locator('b').textContent()) === '1';
@@ -1883,6 +1893,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       } catch { throw new Error(stage); }
     });
     await check('encrypted-poll-vote', async () => {
+      await bob.bringToFront();
       const bobVoteStart = bobWire.length;
       await safeAction('poll-vote-control', async () => {
         const choice = bobPoll.getByRole('button', { name: second });
@@ -1897,6 +1908,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       await safeAction('poll-vote-confirm', () => bobPoll.getByText('Vote saved.', { exact: true }).waitFor({ timeout: 45000 }));
       const voteWire = bobWire.slice(bobVoteStart);
       invariant(voteWire.length > 0 && voteWire.every((event) => event.path.includes('/m.room.encrypted/')), 'poll-vote-reconciled');
+      await alice.bringToFront();
       await until(async () => {
         await alicePoll.getByRole('button', { name: 'Refresh results' }).click();
         return (await alicePoll.textContent()).includes('1 vote') &&
@@ -1905,6 +1917,7 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       }, 'poll-vote-reconciled');
     });
     if (elementPoll) await check('element-ui-poll-vote-replaced', async () => {
+      await elementPeer.bringToFront();
       await until(async () =>
         (await elementPoll.locator('.mx_PollOption').filter({ hasText: first }).locator('.mx_PollOption_optionVoteCount').textContent())?.includes('0 votes') &&
         (await elementPoll.locator('.mx_PollOption').filter({ hasText: second }).locator('.mx_PollOption_optionVoteCount').textContent())?.includes('1 vote'),
@@ -1929,8 +1942,10 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       await alice.route(matchRelation, paginate);
       alice.on('response', observePage);
       try {
+        await bob.bringToFront();
         await bobPoll.getByRole('button', { name: first }).click();
         await bobPoll.getByText('Vote saved.', { exact: true }).waitFor({ timeout: 45000 });
+        await alice.bringToFront();
         const refresh = alicePoll.getByRole('button', { name: 'Refresh results' });
         await refresh.click();
         await until(async () => await refresh.isEnabled() && pages >= 2 && sawCursor &&
@@ -1941,18 +1956,21 @@ export async function runJourneys({ browser, stack, check: recordCheck, forceFai
       } finally { alice.off('response', observePage); await alice.unroute(matchRelation, paginate); }
     });
     await check('encrypted-poll-end', async () => {
+      await alice.bringToFront();
       const pollEndWireStart = wire.length;
       await alicePoll.getByRole('button', { name: 'End poll' }).click();
       await alice.getByRole('dialog', { name: 'End this poll?' }).getByRole('button', { name: 'End poll' }).click();
       await alicePoll.getByText('Poll ended', { exact: true }).first().waitFor({ timeout: 45000 });
       const endWire = wire.slice(pollEndWireStart);
       invariant(endWire.length > 0 && endWire.every((event) => event.path.includes('/m.room.encrypted/')), 'poll-end-reconciled');
+      await bob.bringToFront();
       await until(async () => {
         await bobPoll.getByRole('button', { name: 'Refresh results' }).click();
         return (await bobPoll.textContent()).includes('Poll ended');
       }, 'poll-end-reconciled');
     });
     if (elementPoll) await check('element-ui-poll-ended', async () => {
+      await elementPeer.bringToFront();
       await until(() => elementPoll.getByRole('radio', { name: new RegExp(first) }).isDisabled(), 'element-poll-ended', 45000);
     });
     const location = `Synthetic meeting point ${randomBytes(6).toString('hex')}`;

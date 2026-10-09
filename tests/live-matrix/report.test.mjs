@@ -339,3 +339,16 @@ test('failed sync request diagnostics expose only numeric counts and elapsed tim
     assert.deepEqual(makeReport({ ...base, metrics: { largeAccountSyncFailedRequests: invalid, largeAccountLastSyncFailureMs: invalid } }).metrics, {});
   }
 });
+
+test('poll visibility failures identify the client without retaining poll content', () => {
+  const privateValue = randomBytes(24).toString('hex');
+  for (const category of ['poll-sender-visible', 'poll-recipient-visible']) {
+    assert.equal(failureCategories.find((entry) => category.includes(entry)), category);
+    const result = makeReport({ ...base, failureStage: 'encrypted-poll-create',
+      checks: [{ name: 'encrypted-poll-create', passed: false, category,
+        question: privateValue, answers: [privateValue], senderId: privateValue, eventId: privateValue }],
+    });
+    assert.equal(result.checks[0].category, category);
+    assert.equal(JSON.stringify(result).includes(privateValue), false);
+  }
+});
