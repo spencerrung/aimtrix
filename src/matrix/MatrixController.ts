@@ -26,6 +26,7 @@ import { PushProcessor } from 'matrix-js-sdk/lib/pushprocessor.js';
 import type { SecretStorageKeyDescriptionAesV1 } from 'matrix-js-sdk/lib/secret-storage.js';
 import type { UIAuthCallback } from 'matrix-js-sdk/lib/interactive-auth.js';
 import { CryptoEvent } from 'matrix-js-sdk/lib/crypto-api/index.js';
+import { VerificationRecovery } from './VerificationRecovery';
 import {
   VerificationPhase,
   VerificationRequestEvent,
@@ -306,6 +307,7 @@ export class MatrixController {
   public readonly activity = new ActivityStore(() => this.client, () => this.scheduleWorkspacePublish());
   private readonly mediaRequests = new MediaRequests();
   private readonly pendingDeviceAuth = new Map<string, string>();
+  private verificationRecovery?: VerificationRecovery;
   private readonly incomingVerificationRequests = new Map<string, { request: VerificationRequest; onChange: () => void }>();
   private readonly stickerUploads = new Map<string, Promise<{
     url?: string;
@@ -1280,15 +1282,18 @@ export class MatrixController {
   };
 
   private incomingVerificationSummaries(): IncomingVerificationSummary[] {
-    return [...this.incomingVerificationRequests].filter(([, { request }]) => request.pending).map(([id, { request }]) => ({
+    return [...this.incomingVerificationRequests].filter(([, { request }]) => request.pending).map(([id, { request }]): IncomingVerificationSummary => ({
       id, userId: request.otherUserId, deviceId: request.otherDeviceId,
       selfVerification: request.isSelfVerification, timeoutMs: request.timeout ?? undefined,
       sasAvailable: request.phase === VerificationPhase.Requested || request.phase === VerificationPhase.Ready && request.otherPartySupportsMethod('m.sas.v1') || request.phase === VerificationPhase.Started && request.chosenMethod === 'm.sas.v1',
       qrShowAvailable: (request.phase === VerificationPhase.Requested || request.phase === VerificationPhase.Ready) && request.otherPartySupportsMethod('m.qr_code.scan.v1'),
       qrScanAvailable: (request.phase === VerificationPhase.Requested || request.phase === VerificationPhase.Ready) && request.otherPartySupportsMethod('m.qr_code.show.v1'),
       qrConfirmAvailable: Boolean(request.verifier?.getReciprocateQrCodeCallbacks()),
-    }));
+    })).concat(this.verificationRecovery?.summaries() ?? []);
   }
+
+  public async checkVerificationDevice(id: string): Promise<void> { await this.verificationRecovery?.check(id); }
+  public dismissVerificationRecovery(id: string): void { this.verificationRecovery?.dismiss(id); }
 
   public async declineIncomingVerification(id: string): Promise<void> {
     const request = this.incomingVerificationRequests.get(id)?.request;
@@ -4094,6 +4099,7 @@ export class MatrixController {
           await client.initRustCrypto({ useIndexedDB: true, cryptoDatabasePrefix: names.crypto });
           if (this.client !== client || revision !== this.lifecycleRevision) return;
           client.on(CryptoEvent.VerificationRequestReceived, this.handleIncomingVerification);
+          this.verificationRecovery = new VerificationRecovery(client, () => this.scheduleWorkspacePublish());
           for (const request of client.getCrypto?.()?.getVerificationRequestsToDeviceInProgress(session.userId) ?? []) this.handleIncomingVerification(request);
           await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true,
             pendingEventOrdering: sdk.PendingEventOrdering.Chronological, threadSupport: true });
@@ -4190,6 +4196,8 @@ export class MatrixController {
     this.detachClientListeners();
     for (const { request, onChange } of this.incomingVerificationRequests.values()) request.off(VerificationRequestEvent.Change, onChange);
     this.incomingVerificationRequests.clear();
+    this.verificationRecovery?.stop();
+    this.verificationRecovery = undefined;
     client?.stopClient();
     this.client = undefined;
     this.activeSession = undefined;

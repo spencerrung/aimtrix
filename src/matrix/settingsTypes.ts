@@ -44,6 +44,7 @@ export interface DeviceVerificationChallenge {
 }
 
 export interface IncomingVerificationSummary {
+  recovery?: 'checking' | 'waiting' | 'retry' | 'failed';
   id: string;
   userId: string;
   deviceId?: string;

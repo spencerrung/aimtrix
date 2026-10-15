@@ -6,6 +6,8 @@ The [polish and modern-comforts roadmap](docs/polish-plan.md) provides the order
 
 The [first-use encryption confidence pass](docs/first-use-encryption.md) implements the onboarding and recovery/verification UI for #160 and #161. The first-use direct-chat path now opens the newly created encrypted conversation; disposable Synapse checks its room state, first encrypted send and peer decryption alongside password-account and standard SSO fresh-device backup restore and incoming Aimtrix-to-Aimtrix SAS. [PR #218](https://github.com/spencerrung/aimtrix/pull/218) verified Element Web emoji SAS and [PR #219](https://github.com/spencerrung/aimtrix/pull/219) verified Element-to-Aimtrix QR scanning. Provider-specific SSO/UIA, reverse-direction QR, independently generated withheld-key and secret-sharing interoperability remain open.
 
+[Fresh-device verification recovery](docs/verification-recovery.md) provides explicit cancel/resend guidance for self-device requests discarded before signed keys arrive (#291). Transparent replay of the original transaction remains an SDK boundary; the recovery does not complete broader #161.
+
 The [browser acceptance pass](docs/browser-acceptance.md) adds Firefox/WebKit CI smoke projects and keyboard/Axe evidence for #162. Spoken screen-reader and physical-device acceptance remains open.
 The [daily-client acceptance record](docs/daily-client-acceptance.md) joins the nine roadmap journeys to browser/live checks and keeps unverified core and target-specific gates visible for #164.
 
