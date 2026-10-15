@@ -73,6 +73,26 @@ vi.mock('./features/workspace/Workspace', () => ({ Workspace: ({ workspace, prof
 </main> }));
 import App from './App';
 
+it('recovers an already waiting worker when its announcement preceded React subscription', async () => {
+  const previous = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
+  const waiting = { state: 'installed', postMessage: vi.fn() };
+  Object.defineProperty(navigator, 'serviceWorker', { configurable: true, value: {
+    controller: { state: 'activated' }, getRegistration: vi.fn().mockResolvedValue({ waiting }),
+    addEventListener: vi.fn(), removeEventListener: vi.fn(),
+  } });
+  try {
+    window.dispatchEvent(new CustomEvent('aimtrix-update-ready', { detail: waiting }));
+    render(<App />);
+    await waitFor(() => expect(screen.getByText('Aimtrix update ready')).toBeVisible());
+    expect(waiting.postMessage).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Later' }));
+    expect(screen.queryByText('Aimtrix update ready')).not.toBeInTheDocument();
+  } finally {
+    if (previous) Object.defineProperty(navigator, 'serviceWorker', previous);
+    else Reflect.deleteProperty(navigator, 'serviceWorker');
+  }
+});
+
 const ready = (userId = '@one:example.test'): MatrixControllerSnapshot => ({ status: 'ready', workspace: { ...demoWorkspace, mode: 'matrix', user: { ...demoWorkspace.user, id: userId } } });
 function publish(snapshot: MatrixControllerSnapshot) { harness.snapshot = snapshot; harness.listeners.forEach((listener) => listener()); }
 beforeEach(() => {

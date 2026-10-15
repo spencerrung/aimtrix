@@ -1,4 +1,6 @@
-import { expect, test } from '@playwright/test';
+import { expect } from '@playwright/test';
+import { test } from './pwa/diagnostics';
+import { serveBuildPair } from './pwa/buildPair';
 
 for (const httpCache of ['retained', 'cleared'] as const) test(`fresh production shell starts on its first offline reload with HTTP cache ${httpCache}`, async ({ page, context, browserName, isMobile }, testInfo) => {
   test.skip(!process.env.PLAYWRIGHT_PREVIEW, 'Real worker lifecycle requires the production build.');
@@ -46,12 +48,13 @@ for (const httpCache of ['retained', 'cleared'] as const) test(`fresh production
   }
 });
 
-for (const install of ['fresh', 'update'] as const) test(`a failed required asset rejects ${install} shell installation and preserves working caches`, async ({ page, context, browserName, isMobile }) => {
+for (const install of ['fresh', 'update'] as const) test(`a failed required asset rejects ${install} shell installation and preserves working caches`, async ({ page, context, browserName, isMobile, diagnostics }) => {
   test.skip(isMobile, 'One actual asset-failure gate per installation state.');
   test.setTimeout(120000);
   test.skip(!process.env.PLAYWRIGHT_PREVIEW, 'Real worker lifecycle requires the production build.');
   test.skip(browserName !== 'chromium', 'This gate exercises Chromium service-worker lifecycle.');
   const builds = await productionBuildPair();
+  diagnostics.track(builds);
   try {
     await page.goto(`${builds.origin}/cache-seed`);
     await page.evaluate(async () => {
@@ -107,6 +110,7 @@ for (const install of ['fresh', 'update'] as const) test(`a failed required asse
       await expect(page.locator('aside[role="status"]')).toContainText('You’re offline');
     }
   } finally {
+    await diagnostics.checkpoint();
     try { await context.setOffline(false); if (!page.isClosed()) await page.goto('about:blank'); }
     finally { await builds.close(); }
   }
@@ -115,14 +119,12 @@ for (const install of ['fresh', 'update'] as const) test(`a failed required asse
 async function productionBuildPair() {
   // Build two real outputs. A changed document title is an actual HTML input
   // change, not a hand-edited worker revision or fake worker.
-  const { createServer } = await import('node:http');
   const { readFile, mkdtemp, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { build } = await import('vite');
-  const { resolve, extname } = await import('node:path');
+  const { resolve } = await import('node:path');
   const directory = await mkdtemp(resolve(tmpdir(), 'aimtrix-pwa-builds-'));
   const first = resolve(directory, 'first'), second = resolve(directory, 'second');
-  let requiredEntry: string;
   try {
     await build({ logLevel: 'silent', build: { outDir: first, emptyOutDir: true } });
     await build({ logLevel: 'silent', build: { outDir: second, emptyOutDir: true }, plugins: [{
@@ -130,52 +132,24 @@ async function productionBuildPair() {
       transformIndexHtml: { order: 'pre', handler: (html) => html.replace('<title>Aimtrix</title>', '<title>Aimtrix updated build</title>') },
     }] });
     expect(await readFile(resolve(first, 'sw.js'), 'utf8')).not.toBe(await readFile(resolve(second, 'sw.js'), 'utf8'));
-    const html = await readFile(resolve(second, 'index.html'), 'utf8');
-    const entry = html.match(/<script[^>]+src="([^"]+)"/);
-    if (!entry) throw new Error('Production entry script is missing');
-    requiredEntry = entry[1];
   } catch (error) { await rm(directory, { recursive: true, force: true }); throw error; }
-  let root = first;
-  let rejectEntry = false;
-  let failedRequests = 0;
-  const types: Record<string, string> = { '.html': 'text/html', '.js': 'application/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png', '.webmanifest': 'application/manifest+json', '.wasm': 'application/wasm' };
-  const server = createServer((request, response) => {
-    void (async () => {
-      const pathname = new URL(request.url ?? '/', 'http://localhost').pathname;
-      if (pathname === '/cache-seed') { response.writeHead(200, { 'Content-Type': 'text/html' }).end('<title>Cache setup</title>'); return; }
-      if (rejectEntry && pathname === requiredEntry) { failedRequests++; response.writeHead(503).end(); return; }
-      const file = resolve(root, `.${pathname === '/' ? '/index.html' : pathname}`);
-      if (!file.startsWith(`${root}/`)) { response.writeHead(403).end(); return; }
-      try {
-        const body = await readFile(file);
-        response.writeHead(200, { 'Content-Type': types[extname(file)] ?? 'application/octet-stream', 'Cache-Control': 'no-store' });
-        response.end(body);
-      } catch { response.writeHead(404).end(); }
-    })();
-  });
-  await new Promise<void>((resolve, reject) => {
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === 'string') throw new Error('Missing lifecycle server address');
+  const server = await serveBuildPair(first, second);
   return {
-    origin: `http://127.0.0.1:${address.port}`,
-    useSecond: (reject = false) => { root = second; rejectEntry = reject; },
-    failedRequests: () => failedRequests,
+    ...server,
     close: async () => {
-      await new Promise<void>((resolve, reject) => { server.close((error) => error ? reject(error) : resolve()); server.closeAllConnections(); });
-      await rm(directory, { recursive: true, force: true });
+      try { await server.close(); }
+      finally { await rm(directory, { recursive: true, force: true }); }
     },
   };
 }
 
-test('a changed production build waits for draft confirmation before activation', async ({ page, context, browserName, isMobile }) => {
+test('a changed production build waits for draft confirmation before activation', async ({ page, context, browserName, isMobile, diagnostics }) => {
   test.skip(isMobile, 'One actual two-build lifecycle gate; mobile notice layout is covered separately.');
   test.setTimeout(120000);
   test.skip(!process.env.PLAYWRIGHT_PREVIEW, 'Real worker lifecycle requires the production build.');
   test.skip(browserName !== 'chromium', 'This gate exercises Chromium service-worker lifecycle.');
   const builds = await productionBuildPair();
+  diagnostics.track(builds);
   try {
     await page.setViewportSize({ width: 1280, height: 800 });
     const { origin } = builds;
@@ -220,9 +194,40 @@ test('a changed production build waits for draft confirmation before activation'
     await expect(composer).toBeVisible();
     await expect(page).toHaveTitle('Aimtrix updated build');
   } finally {
+    await diagnostics.checkpoint();
     try { await context.setOffline(false); if (!page.isClosed()) await page.goto('about:blank'); }
     finally {
       await builds.close();
     }
   }
+});
+
+
+test('a newly opened controlled page announces an already waiting production worker', async ({ page, context, browserName, isMobile, diagnostics }, testInfo) => {
+  test.skip(!process.env.PLAYWRIGHT_PREVIEW, 'Real worker lifecycle requires the production build.');
+  test.skip(browserName !== 'chromium', 'This gate exercises Chromium service-worker lifecycle.');
+  test.setTimeout(120_000);
+  const builds = await productionBuildPair();
+  diagnostics.track(builds);
+  try {
+    await page.goto(`${builds.origin}/?demo=1`);
+    await expect(page.getByRole('button', { name: 'Open settings' })).toBeVisible();
+    await expect.poll(() => page.evaluate(() => navigator.serviceWorker.controller?.state)).toBe('activated');
+    builds.useSecond();
+    await page.evaluate(async () => { await (await navigator.serviceWorker.getRegistration())!.update(); });
+    await expect(page.getByRole('status').filter({ hasText: 'Aimtrix update ready' })).toBeVisible();
+    const newcomer = await context.newPage();
+    try {
+      // This tab must recover the browser's retained waiting state even when
+      // register() announces it before the new React tree subscribes.
+      await newcomer.goto(`${builds.origin}/?demo=1`);
+      await expect(newcomer.getByRole('button', { name: 'Open settings' })).toBeVisible();
+      await expect(newcomer.getByRole('status').filter({ hasText: 'Aimtrix update ready' })).toBeVisible();
+      expect(await newcomer.evaluate(async () => (await navigator.serviceWorker.getRegistration())?.waiting?.state)).toBe('installed');
+      if (isMobile) await newcomer.getByRole('button', { name: /Welcome Lounge/ }).click();
+      await expect(newcomer.getByRole('textbox', { name: /Message Welcome Lounge/ })).toBeVisible();
+      await newcomer.screenshot({ path: testInfo.outputPath('waiting-worker-new-page.png') });
+      await diagnostics.checkpoint();
+    } finally { await newcomer.close(); }
+  } finally { await diagnostics.checkpoint(); await builds.close(); }
 });

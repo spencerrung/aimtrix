@@ -555,11 +555,19 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    let subscribed = true;
     const handleUpdate = (event: Event) => {
       setUpdateWorker((event as CustomEvent<ServiceWorker>).detail);
     };
     window.addEventListener('aimtrix-update-ready', handleUpdate);
-    return () => window.removeEventListener('aimtrix-update-ready', handleUpdate);
+    // Registration may finish before React commits this effect. Recover the
+    // browser's retained waiting worker after subscribing to future updates.
+    if ('serviceWorker' in navigator) {
+      void navigator.serviceWorker.getRegistration().then((registration) => {
+        if (subscribed && navigator.serviceWorker.controller && registration?.waiting) setUpdateWorker(registration.waiting);
+      }).catch(() => undefined);
+    }
+    return () => { subscribed = false; window.removeEventListener('aimtrix-update-ready', handleUpdate); };
   }, []);
 
   return (
