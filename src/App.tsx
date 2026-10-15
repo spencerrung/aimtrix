@@ -311,6 +311,11 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
   if (snapshot.status === 'restoring' || snapshot.status === 'connecting') {
     return <StartupScreen message={snapshot.message} />;
   }
+  if (snapshot.status === 'syncing' || snapshot.status === 'sync-paused') {
+    return <StartupScreen syncing={snapshot.status === 'syncing'} paused={snapshot.status === 'sync-paused'}
+      issue={snapshot.status === 'syncing' ? snapshot.issue : undefined}
+      onRetry={() => controller.retry()} onCancel={() => controller.cancelInitialSync()} />;
+  }
 
   if (snapshot.status === 'crypto-in-use' || snapshot.status === 'crypto-unavailable') {
     return <CryptoOwnershipScreen unavailable={snapshot.status === 'crypto-unavailable'}

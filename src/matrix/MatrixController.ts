@@ -15,6 +15,7 @@ import { EventStatus } from 'matrix-js-sdk/lib/models/event-status.js';
 import { ReceiptType } from 'matrix-js-sdk/lib/@types/read_receipts.js';
 import { MARKED_UNREAD_EVENT, UNREAD_RETURN_POINT, parseMarkedUnread, validUnreadEventId } from './unreadState';
 import { HttpApiEvent } from 'matrix-js-sdk/lib/http-api/interface.js';
+import { initialSyncFetch } from './initialSyncFetch';
 import type { ISyncStateData } from 'matrix-js-sdk/lib/sync.js';
 import { connectionIssue, connectionIssueMessage, isSessionRejected, type ConnectionIssue, type SessionRecovery } from './sessionRecovery';
 export type { ConnectionIssue, SessionRecovery } from './sessionRecovery';
@@ -133,6 +134,8 @@ export type MatrixControllerSnapshot =
   | { status: 'authenticating'; message: string; recovery?: SessionRecovery }
   | { status: 'signed-out'; error?: string; recovery?: SessionRecovery }
   | { status: 'connecting'; message: string; error?: string }
+  | { status: 'syncing'; issue?: ConnectionIssue }
+  | { status: 'sync-paused' }
   | { status: 'ready'; workspace: WorkspaceSnapshot; issue?: ConnectionIssue; incomingVerification?: IncomingVerificationSummary[] }
   | { status: 'error'; error: string; canRetry: boolean; issue?: ConnectionIssue }
   | { status: 'crypto-in-use'; canTakeover: boolean; error?: string }
@@ -291,6 +294,7 @@ export class MatrixController {
   }
   private publishFrame?: number;
   private connection: ConnectionState = 'connecting';
+  private initialSyncComplete = false;
   private readonly threadListenerRooms = new Map<string, Room>();
   /** Server-side thread feature support level (0 = None, 1 = Stable, etc.) */
   private threadSupport = 0;
@@ -892,7 +896,7 @@ export class MatrixController {
       return this.endSession(false);
     }
     if (this.recoverySession) return this.reauthenticate();
-    if (this.client && this.snapshot.status === 'ready') {
+    if (this.client && (this.snapshot.status === 'ready' || this.snapshot.status === 'syncing')) {
       this.client.retryImmediately();
       return;
     }
@@ -914,6 +918,19 @@ export class MatrixController {
       if (revision !== this.lifecycleRevision) return;
       if (isSessionRejected(error)) this.expireSession(error);
       else this.showConnectionError(error);
+    }
+  }
+
+  /** Stop startup without revoking the credential or deleting encryption keys. */
+  public async cancelInitialSync(): Promise<void> {
+    if (this.snapshot.status !== 'syncing') return;
+    const revision = ++this.lifecycleRevision;
+    try {
+      await this.stopCurrentClient();
+      if (revision === this.lifecycleRevision) this.setSnapshot({ status: 'sync-paused' });
+    } catch {
+      if (revision === this.lifecycleRevision) this.setSnapshot({ status: 'error', issue: 'storage', canRetry: true,
+        error: 'Aimtrix could not finish closing encrypted storage. Close other Aimtrix windows, then retry. Your saved sign-in and keys have not been deleted.' });
     }
   }
 
@@ -4014,6 +4031,7 @@ export class MatrixController {
       if (revision !== this.lifecycleRevision) return;
       const client = sdk.createClient({
         baseUrl: session.baseUrl,
+        fetchFn: initialSyncFetch(session.baseUrl),
         accessToken: session.accessToken,
         userId: session.userId,
         deviceId: session.deviceId,
@@ -4095,6 +4113,7 @@ export class MatrixController {
           if (this.client !== client || revision !== this.lifecycleRevision) return;
           client.on(CryptoEvent.VerificationRequestReceived, this.handleIncomingVerification);
           for (const request of client.getCrypto?.()?.getVerificationRequestsToDeviceInProgress(session.userId) ?? []) this.handleIncomingVerification(request);
+          this.setSnapshot({ status: 'syncing' });
           await client.startClient({ initialSyncLimit: 30, lazyLoadMembers: true,
             pendingEventOrdering: sdk.PendingEventOrdering.Chronological, threadSupport: true });
         })();
@@ -4191,7 +4210,11 @@ export class MatrixController {
     for (const { request, onChange } of this.incomingVerificationRequests.values()) request.off(VerificationRequestEvent.Change, onChange);
     this.incomingVerificationRequests.clear();
     client?.stopClient();
+    // startClient can still be awaiting versions/capabilities before it has a
+    // sync loop for stopClient to abort. Cancel those public HTTP operations too.
+    if (startup) client?.http?.abort();
     this.client = undefined;
+    this.initialSyncComplete = false;
     this.activeSession = undefined;
     this.inMemoryRecoveryKey = undefined;
     this.liveEncryptedMessages.clear();
@@ -4199,7 +4222,7 @@ export class MatrixController {
     this.snapshotCache.messages.clear();
     this.snapshotCache.members.clear();
     this.clearMediaCache();
-    if (startup) { await startup.catch(() => undefined); client?.stopClient(); }
+    if (startup) { await startup.catch(() => undefined); client?.stopClient(); client?.http?.abort(); }
     if (groupCallLeaving) await groupCallLeaving;
     if (client) clearRtcMembershipPolicy(client);
     await Promise.allSettled(privateWrites);
@@ -4304,6 +4327,7 @@ export class MatrixController {
     if (isSessionRejected(data?.error)) { this.expireSession(data?.error); return; }
     switch (syncState) {
       case 'PREPARED':
+        this.initialSyncComplete = true;
         this.roomHistory.syncCompleted();
         this.migrateLegacyRootSpaceOrder();
         this.connection = 'online';
@@ -4315,6 +4339,7 @@ export class MatrixController {
         this.scheduleWorkspacePublish();
         break;
       case 'SYNCING':
+        this.initialSyncComplete = true;
         this.roomHistory.syncCompleted();
         this.connection = 'online';
         this.currentIssue = undefined;
@@ -4326,14 +4351,25 @@ export class MatrixController {
         break;
       case 'CATCHUP':
       case 'RECONNECTING':
+        if (data?.error) this.currentIssue = connectionIssue(data.error);
         this.connection = 'catching-up';
         this.scheduleWorkspacePublish();
         break;
       case 'ERROR':
-      case 'STOPPED':
         this.currentIssue = connectionIssue(data?.error);
         this.connection = 'offline';
         this.scheduleWorkspacePublish();
+        break;
+      case 'STOPPED':
+        if (!this.initialSyncComplete) {
+          // A stopped SDK loop will not retry automatically. Resume starts a
+          // new client after orderly cleanup while keeping the stored session.
+          void this.cancelInitialSync();
+        } else {
+          this.currentIssue = connectionIssue(data?.error);
+          this.connection = 'offline';
+          this.scheduleWorkspacePublish();
+        }
         break;
     }
   };
@@ -4797,9 +4833,18 @@ export class MatrixController {
 
   private scheduleWorkspacePublish(): void {
     if (!this.client || this.publishFrame !== undefined) return;
+    if (!this.initialSyncComplete) {
+      // Room/account-data events can arrive while the first response is being
+      // processed. A timeout or a partial room list is not account readiness.
+      if (this.snapshot.status === 'syncing' && this.snapshot.issue !== this.currentIssue) {
+        this.setSnapshot({ status: 'syncing', issue: this.currentIssue });
+      }
+      return;
+    }
+    const client = this.client;
     this.publishFrame = requestAnimationFrame(() => {
+      if (this.client !== client || !this.initialSyncComplete) return;
       this.publishFrame = undefined;
-      if (!this.client) return;
       try {
         const workspace = buildWorkspaceSnapshot(
           this.client,

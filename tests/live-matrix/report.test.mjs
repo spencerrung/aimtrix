@@ -352,3 +352,12 @@ test('poll visibility failures identify the client without retaining poll conten
     assert.equal(JSON.stringify(result).includes(privateValue), false);
   }
 });
+
+test('startup request phases retain only nonnegative numeric measurements', () => {
+  const names = ['largeAccountFirstSyncRequestMs', 'largeAccountInitialSyncRequests', 'largeAccountInitialSyncFilterVariants', 'largeAccountFirstSyncRequestToHeadersMs', 'largeAccountFirstSyncBodyToShellMs'];
+  const metrics = Object.fromEntries(names.map((name, index) => [name, index]));
+  assert.deepEqual(makeReport({ ...base, metrics: { ...metrics, initialFilter: 'private-room-canary', syncUrl: 'private-room-canary' } }).metrics, metrics);
+  for (const invalid of [-1, NaN, Infinity, 'private-room-canary', {}]) {
+    assert.deepEqual(makeReport({ ...base, metrics: Object.fromEntries(names.map((name) => [name, invalid])) }).metrics, {});
+  }
+});
