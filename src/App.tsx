@@ -394,7 +394,7 @@ function ConfiguredApp({ result, pushRoute, onClearPushRoute, onDraftStateChange
         onForgetAccount={forgetDormantAccount}
         accountCleanupError={accountCleanupError}
         incomingVerification={snapshot.incomingVerification}
-        incomingVerificationActions={{ accept: (id, signal) => controller.acceptIncomingVerification(id, signal), decline: (id) => controller.declineIncomingVerification(id), showQr: (id, signal) => controller.showIncomingVerificationQr(id, signal), scanQr: (id, bytes, signal) => controller.scanIncomingVerificationQr(id, bytes, signal), confirmQr: (id) => controller.confirmIncomingVerificationQr(id) }}
+        incomingVerificationActions={{ checkDevice: (id) => controller.checkVerificationDevice(id), dismissRecovery: (id) => controller.dismissVerificationRecovery(id), accept: (id, signal) => controller.acceptIncomingVerification(id, signal), decline: (id) => controller.declineIncomingVerification(id), showQr: (id, signal) => controller.showIncomingVerificationQr(id, signal), scanQr: (id, bytes, signal) => controller.scanIncomingVerificationQr(id, bytes, signal), confirmQr: (id) => controller.confirmIncomingVerificationQr(id) }}
           threadAttentionActions={threadAttentionActions}
           activityActions={{ refresh: () => controller.activity.refresh(), loadOlder: () => controller.activity.loadOlder(), loadMoreThreads: () => controller.activity.loadMoreThreads(), setThreadFollow: (roomId, rootId, following) => controller.activity.setThreadFollow(roomId, rootId, following) }}
         install={platform.install}

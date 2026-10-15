@@ -8,7 +8,7 @@ vi.mock('@zxing/browser', () => ({ BrowserQRCodeReader: class { decodeFromVideoD
 
 const request: IncomingVerificationSummary = { id: 'req', userId: '@self:example.test', deviceId: 'PHONE', selfVerification: true, timeoutMs: 60000, sasAvailable: true, qrShowAvailable: false, qrScanAvailable: false, qrConfirmAvailable: false };
 function actions(overrides: Partial<IncomingVerificationActions> = {}): IncomingVerificationActions {
-  return { accept: vi.fn(), decline: vi.fn().mockResolvedValue(undefined), showQr: vi.fn(), scanQr: vi.fn().mockResolvedValue(undefined), confirmQr: vi.fn(), ...overrides };
+  return { checkDevice: vi.fn(), dismissRecovery: vi.fn(), accept: vi.fn(), decline: vi.fn().mockResolvedValue(undefined), showQr: vi.fn(), scanQr: vi.fn().mockResolvedValue(undefined), confirmQr: vi.fn(), ...overrides };
 }
 
 describe('incoming verification controls', () => {
@@ -59,4 +59,19 @@ describe('incoming verification controls', () => {
     if (mediaDevices) Object.defineProperty(navigator, 'mediaDevices', mediaDevices);
     else Reflect.deleteProperty(navigator, 'mediaDevices');
   });
+});
+
+it('gives an explicit recovery path without verification or protocol decline controls', async () => {
+  const api = actions({ checkDevice: vi.fn().mockResolvedValue(undefined) });
+  const { rerender } = render(<IncomingVerification requests={[{ ...request, recovery: 'waiting' }]} actions={api} />);
+  expect(screen.getByRole('status')).toHaveTextContent('Device keys are not available yet');
+  expect(screen.queryByRole('button', { name: 'Compare emoji' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Decline' })).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Check device again' }));
+  expect(api.checkDevice).toHaveBeenCalledWith('req');
+  rerender(<IncomingVerification requests={[{ ...request, recovery: 'retry' }]} actions={api} />);
+  expect(screen.getByRole('status')).toHaveTextContent('Cancel the pending attempt on the other device, then request verification again there');
+  fireEvent.click(screen.getByRole('button', { name: 'Dismiss notice' }));
+  expect(api.dismissRecovery).toHaveBeenCalledWith('req');
+  expect(api.accept).not.toHaveBeenCalled(); expect(api.decline).not.toHaveBeenCalled();
 });

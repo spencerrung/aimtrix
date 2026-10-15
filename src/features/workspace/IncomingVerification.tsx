@@ -3,6 +3,8 @@ import { Dialog } from '../../components/Dialog';
 import type { DeviceVerificationChallenge, IncomingVerificationSummary } from '../../matrix/settingsTypes';
 
 export interface IncomingVerificationActions {
+  checkDevice: (id: string) => Promise<void>;
+  dismissRecovery: (id: string) => void;
   accept: (id: string, signal?: AbortSignal) => Promise<DeviceVerificationChallenge>;
   decline: (id: string) => Promise<void>;
   showQr: (id: string, signal?: AbortSignal) => Promise<Uint8ClampedArray>;
@@ -101,6 +103,16 @@ export function IncomingVerification({ requests, actions }: { requests: Incoming
   return <aside className="incoming-verification" aria-label="Incoming device verification">
     <strong>Verify a device</strong>
     {requests.map((request) => <div key={request.id} className="incoming-verification__request">
+      {request.recovery ? <>
+        <p>Verification could not start for a request naming device {request.deviceId}. This attempt did not verify the device.</p>
+        <p role="status">{request.recovery === 'checking' ? 'Checking whether this device’s keys have arrived…'
+          : request.recovery === 'retry' ? 'Device keys are available. Cancel the pending attempt on the other device, then request verification again there.'
+            : request.recovery === 'failed' ? 'Device keys could not be checked. Check your connection and try again.'
+              : 'Device keys are not available yet. Wait for sync, then check again.'}</p>
+        <div><button className="aqua-button" type="button" disabled={request.recovery === 'checking'} onClick={() => void actions.checkDevice(request.id)}>Check device again</button>
+          <button className="aqua-button" type="button" onClick={() => actions.dismissRecovery(request.id)}>Dismiss notice</button></div>
+        <small>Dismissing this notice does not cancel the request on the other device. You can also restore with your recovery key in Settings.</small>
+      </> : <>
       <p>{request.selfVerification ? 'Another session on your account' : request.userId} {request.deviceId ? `(${request.deviceId})` : ''} wants to verify. Compare emoji or scan a QR code before trusting it.</p>
       {request.timeoutMs !== undefined ? <small>Expires in about {Math.max(0, Math.ceil(request.timeoutMs / 1000))} seconds.</small> : null}
       <div>
@@ -110,6 +122,7 @@ export function IncomingVerification({ requests, actions }: { requests: Incoming
         <button type="button" disabled={Boolean(busyId)} onClick={() => void start(request, async () => { await actions.decline(request.id); })}>Decline</button>
       </div>
       {!request.sasAvailable && !request.qrShowAvailable && !request.qrScanAvailable ? <p>This request has no verification method available here. Ask for a new request or use another Matrix client.</p> : null}
+      </>}
     </div>)}
     {error ? <p role="alert">{error}</p> : null}
     {challenge ? <Dialog className="verification-challenge" aria-label="Compare incoming verification emoji" onClose={cancel} busy={confirming}>
