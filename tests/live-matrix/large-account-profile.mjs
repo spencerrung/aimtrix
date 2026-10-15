@@ -76,6 +76,22 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
     let syncResponses = 0;
     let loginStarted;
     let firstSyncObserved = false;
+    const requestStarts = new WeakMap();
+    const initialFilters = new Set();
+    page.on('request', (request) => {
+      if (closing || loginStarted === undefined || request.method() !== 'GET') return;
+      const url = new URL(request.url());
+      if (!url.pathname.endsWith('/sync')) return;
+      const elapsed = Date.now() - loginStarted;
+      requestStarts.set(request, elapsed);
+      if (url.searchParams.has('since')) return;
+      metrics.largeAccountFirstSyncRequestMs ??= elapsed;
+      metrics.largeAccountInitialSyncRequests = (metrics.largeAccountInitialSyncRequests ?? 0) + 1;
+      // Keep raw filters in memory only; artifacts retain their count, not IDs,
+      // URLs, definitions, credentials or account data.
+      initialFilters.add(url.searchParams.get('filter'));
+      metrics.largeAccountInitialSyncFilterVariants = initialFilters.size;
+    });
     page.on('requestfailed', (request) => {
       // Ignore intentional teardown and record no URL, payload or failure text.
       if (closing || loginStarted === undefined || request.method() !== 'GET' || !new URL(request.url()).pathname.endsWith('/sync')) return;
@@ -89,6 +105,8 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       if (loginStarted === undefined || firstSyncObserved || response.request().method() !== 'GET') return;
       firstSyncObserved = true;
       metrics.largeAccountFirstSyncHeadersMs = Date.now() - loginStarted;
+      const requestStarted = requestStarts.get(response.request());
+      if (requestStarted !== undefined) metrics.largeAccountFirstSyncRequestToHeadersMs = metrics.largeAccountFirstSyncHeadersMs - requestStarted;
       // Wait for transfer completion without reading, copying or parsing its body.
       // A closed/failed response leaves completion absent instead of inventing a time.
       void response.finished().then((failure) => {
@@ -104,6 +122,9 @@ export async function runLargeAccountProfile({ browser, stack, check, metrics })
       await page.getByRole('button', { name: 'Sign On', exact: true }).click();
       await page.getByRole('button', { name: 'Join or create room' }).waitFor({ timeout: readinessLimitMs });
       metrics.largeAccountShellReadyMs = Date.now() - started;
+      if (metrics.largeAccountFirstSyncBodyCompleteMs !== undefined) {
+        metrics.largeAccountFirstSyncBodyToShellMs = metrics.largeAccountShellReadyMs - metrics.largeAccountFirstSyncBodyCompleteMs;
+      }
       const search = page.getByRole('searchbox', { name: 'Search conversations' });
       await search.fill(roomName(roomCount - 1));
       const lastRoom = page.locator('.buddy-row').filter({ hasText: roomName(roomCount - 1) });

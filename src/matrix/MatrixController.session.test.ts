@@ -36,12 +36,16 @@ function fakeClient() {
     removeListener: vi.fn((name: string, callback: (...args: any[]) => void) => listeners.get(name)?.delete(callback)),
     emit: (name: string, ...args: unknown[]) => [...(listeners.get(name) ?? [])].forEach((callback) => callback(...args)),
     getRooms: () => [],
+    getVisibleRooms: () => [],
+    getSafeUserId: () => session.userId,
+    getUser: () => undefined,
     getAccountData: () => undefined,
     getAccessToken: () => session.accessToken,
     mxcUrlToHttp: () => 'https://matrix.example.test/_matrix/client/v1/media/download/example.test/synthetic',
     initRustCrypto: vi.fn<(options: { useIndexedDB: boolean; cryptoDatabasePrefix: string }) => Promise<void>>().mockResolvedValue(undefined),
     startClient: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
     stopClient: vi.fn(),
+    http: { abort: vi.fn() },
     clearStores: vi.fn(),
     retryImmediately: vi.fn(),
     doesServerSupportThread: vi.fn().mockResolvedValue({ threads: 0 }),
@@ -98,6 +102,136 @@ afterEach(() => {
 });
 
 describe('MatrixController session lifecycle', () => {
+  it.each(['RECONNECTING', 'CATCHUP', 'ERROR'] as const)('never publishes an empty ready workspace on initial %s', async (state) => {
+    const client = fakeClient(); createClient.mockReturnValue(client);
+    const { controller, internals } = controllerFixture();
+    const seen: string[] = [];
+    controller.subscribe(() => seen.push(controller.getSnapshot().status));
+    await controller.initialize();
+    client.emit('sync', state, null, { error: new Error('private initial-sync diagnostic') });
+    // Other early publications must not bypass the sync barrier.
+    internals.scheduleWorkspacePublish();
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(controller.getSnapshot()).toMatchObject({ status: 'syncing' });
+    expect(seen).not.toContain('ready');
+    expect(JSON.stringify(controller.getSnapshot())).not.toContain('private initial-sync diagnostic');
+    client.emit('sync', 'PREPARED', state);
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', workspace: { rooms: [], connection: 'online' } });
+  });
+
+  it('offers resume when the initial sync loop stops instead of promising an automatic retry', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const { controller, credentials } = controllerFixture();
+    await controller.initialize();
+    first.emit('sync', 'STOPPED');
+    await vi.waitFor(() => expect(controller.getSnapshot()).toEqual({ status: 'sync-paused' }));
+    await controller.retry();
+    expect(controller.getSnapshot()).toEqual({ status: 'syncing' });
+    expect(second.startClient).toHaveBeenCalledOnce();
+    expect(credentials.clear).not.toHaveBeenCalled();
+  });
+
+  it('retries initial sync on the same client and preserves an established offline workspace', async () => {
+    const client = fakeClient(); createClient.mockReturnValue(client);
+    const { controller, credentials } = controllerFixture();
+    await controller.initialize();
+    client.emit('sync', 'RECONNECTING', null, { error: new Error('synthetic timeout') });
+    await controller.retry();
+    expect(controller.getSnapshot()).toEqual({ status: 'syncing', issue: 'offline' });
+    expect(client.retryImmediately).toHaveBeenCalledOnce();
+    expect(client.initRustCrypto).toHaveBeenCalledOnce();
+    expect(client.startClient).toHaveBeenCalledOnce();
+    expect(client.stopClient).not.toHaveBeenCalled();
+    client.emit('sync', 'PREPARED', 'RECONNECTING');
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    client.emit('sync', 'ERROR', 'SYNCING', { error: new Error('synthetic offline') });
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', issue: 'offline', workspace: { connection: 'offline' } });
+    expect(credentials.save).not.toHaveBeenCalled();
+    expect(credentials.clear).not.toHaveBeenCalled();
+  });
+
+  it('cancels initial sync, retains keys and credentials, ignores late events and resumes with a fresh barrier', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const { controller, credentials } = controllerFixture();
+    await controller.initialize();
+    const stale = [...first.listeners.get('sync')!][0];
+    await controller.cancelInitialSync();
+    expect(controller.getSnapshot()).toEqual({ status: 'sync-paused' });
+    expect(first.stopClient).toHaveBeenCalledOnce();
+    expect([...first.listeners.values()].every((listeners) => !listeners.size)).toBe(true);
+    expect(first.clearStores).not.toHaveBeenCalled();
+    expect(credentials.clear).not.toHaveBeenCalled();
+    expect(credentials.save).not.toHaveBeenCalled();
+    stale('PREPARED');
+    expect(controller.getSnapshot()).toEqual({ status: 'sync-paused' });
+    await controller.retry();
+    expect(createClient.mock.calls[1][0].fetchFn).not.toBe(createClient.mock.calls[0][0].fetchFn);
+    stale('PREPARED');
+    second.emit('sync', 'RECONNECTING', null, { error: new Error('synthetic timeout') });
+    expect(controller.getSnapshot()).toEqual({ status: 'syncing', issue: 'offline' });
+    second.emit('sync', 'PREPARED');
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    expect(controller.getSnapshot().status).toBe('ready');
+    await controller.cancelInitialSync(); // A stale startup button cannot stop a ready account.
+    expect(second.stopClient).not.toHaveBeenCalled();
+  });
+
+  it('reports failed startup cleanup without claiming pause completed or exposing diagnostics', async () => {
+    const client = fakeClient(); createClient.mockReturnValue(client);
+    const { controller, credentials } = controllerFixture();
+    await controller.initialize();
+    client.stopClient.mockImplementationOnce(() => { throw new Error('private synthetic cleanup diagnostic'); });
+    await expect(controller.cancelInitialSync()).resolves.toBeUndefined();
+    expect(controller.getSnapshot()).toMatchObject({ status: 'error', issue: 'storage', canRetry: true });
+    expect(JSON.stringify(controller.getSnapshot())).not.toContain('private synthetic');
+    expect(credentials.clear).not.toHaveBeenCalled();
+  });
+
+  it('aborts pending SDK startup requests and waits for cleanup before confirming pause', async () => {
+    const client = fakeClient(); createClient.mockReturnValue(client);
+    const starting = deferred<void>(); client.startClient.mockReturnValue(starting.promise);
+    const { controller } = controllerFixture();
+    const initializing = controller.initialize();
+    await vi.waitFor(() => expect(client.startClient).toHaveBeenCalledOnce());
+    const cancelling = controller.cancelInitialSync();
+    expect(client.http.abort).toHaveBeenCalledOnce();
+    expect(controller.getSnapshot().status).not.toBe('sync-paused');
+    starting.resolve();
+    await Promise.all([initializing, cancelling]);
+    expect(client.stopClient).toHaveBeenCalledTimes(2);
+    expect(client.http.abort).toHaveBeenCalledTimes(2);
+    expect(controller.getSnapshot()).toEqual({ status: 'sync-paused' });
+  });
+
+  it('blocks early account-data/consent publications and stale ready frames after replacement', async () => {
+    const first = fakeClient(); const second = fakeClient();
+    createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);
+    const { controller, internals } = controllerFixture();
+    const frames: FrameRequestCallback[] = [];
+    vi.spyOn(window, 'requestAnimationFrame').mockImplementation((callback) => frames.push(callback));
+    await controller.initialize();
+    first.emit('accountData', { getType: () => 'synthetic.unknown' });
+    first.emit('no_consent', 'private detail', 'https://private.example.test');
+    expect(controller.getSnapshot()).toEqual({ status: 'syncing', issue: 'consent' });
+    expect(frames).toHaveLength(0);
+    first.emit('sync', 'PREPARED');
+    expect(frames).toHaveLength(1);
+    // Cancel before the queued ready frame commits.
+    await controller.cancelInitialSync();
+    await controller.retry();
+    frames[0](0);
+    expect(controller.getSnapshot()).toEqual({ status: 'syncing' });
+    internals.scheduleWorkspacePublish();
+    expect(frames).toHaveLength(1);
+    second.emit('sync', 'PREPARED');
+    frames[1](0);
+    expect(controller.getSnapshot()).toMatchObject({ status: 'ready', issue: undefined });
+  });
+
   it('refuses concurrent restoration of the same persistent crypto store', async () => {
     const first = fakeClient(); const second = fakeClient();
     createClient.mockReturnValueOnce(first).mockReturnValueOnce(second);

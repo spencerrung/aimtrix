@@ -27,6 +27,7 @@ const harness = vi.hoisted(() => ({
   registerPush: vi.fn<() => Promise<void>>(),
   forgetDormant: vi.fn<(id: string) => Promise<{ cleaned: boolean }>>(),
   retry: vi.fn<(takeover?: boolean) => Promise<void>>(),
+  cancelInitialSync: vi.fn<() => Promise<void>>(),
 }));
 vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   constructor() { return new Proxy(this, { get: (target, key) => Reflect.get(target, key) ?? (() => undefined) }); }
@@ -47,6 +48,7 @@ vi.mock('./matrix/MatrixController', () => ({ MatrixController: class {
   registerPushNotifications = () => harness.registerPush();
   forgetDormantAccount = (id: string) => harness.forgetDormant(id);
   retry = (takeover?: boolean) => harness.retry(takeover);
+  cancelInitialSync = () => harness.cancelInitialSync();
 } }));
 vi.mock('./config/runtimeConfig', async (original) => {
   const actual = await original<typeof import('./config/runtimeConfig')>();
@@ -84,6 +86,7 @@ beforeEach(() => {
   harness.registerPush.mockReset().mockResolvedValue(undefined);
   harness.forgetDormant.mockReset().mockResolvedValue({ cleaned: true });
   harness.retry.mockReset().mockResolvedValue(undefined);
+  harness.cancelInitialSync.mockReset().mockResolvedValue(undefined);
   harness.favorite.mockReset().mockResolvedValue(undefined);
   harness.resolveNavigation.mockReset().mockResolvedValue({ roomId: '!lounge:test', eventId: '$event' });
   window.history.replaceState({}, '', '/');
@@ -94,6 +97,24 @@ beforeEach(() => {
 afterEach(() => { vi.restoreAllMocks(); });
 
 describe('App account privacy', () => {
+  it('keeps initial-sync retry/cancel and resume reachable without showing a workspace or deleting drafts', async () => {
+    harness.scope = { userId: '@one:example.test', homeserver: 'https://one.test' };
+    const key = draftStorageKey(harness.scope);
+    localStorage.setItem(key, 'synthetic stored draft');
+    harness.snapshot = { status: 'syncing', issue: 'offline' };
+    render(<App />);
+    expect(await screen.findByRole('heading', { name: 'Loading your conversations' })).toBeVisible();
+    expect(screen.queryByTestId('profile-bio')).not.toBeInTheDocument();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Retry now' })));
+    expect(harness.retry).toHaveBeenCalledOnce();
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Cancel loading' })));
+    expect(harness.cancelInitialSync).toHaveBeenCalledOnce();
+    await act(async () => publish({ status: 'sync-paused' }));
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'Resume loading' })));
+    expect(harness.retry).toHaveBeenCalledTimes(2);
+    expect(localStorage.getItem(key)).toBe('synthetic stored draft');
+    expect(harness.forget).not.toHaveBeenCalled();
+  });
   it('hides account content on ownership loss, preserves shared drafts and offers safe takeover', async () => {
     harness.scope = { userId: '@one:example.test', homeserver: 'https://one.test' };
     const key = draftStorageKey(harness.scope);
